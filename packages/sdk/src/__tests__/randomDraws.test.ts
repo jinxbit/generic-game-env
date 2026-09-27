@@ -98,8 +98,21 @@ describe('redaction of random draws', () => {
     const forBob = redactStateForPlayer(state, 'p2')
     expect(forBob.actionHistory[0].action.type).toBe('HIDDEN_ACTION')
     expect('random' in forBob.actionHistory[0]).toBe(false)
-    // The actor still sees their own entry in full.
-    expect(redactStateForPlayer(state, 'p1').actionHistory[0].random).toEqual(state.actionHistory[0].random)
+  })
+
+  it('withholds the numbers from every redacted viewer, even on an entry they may see — they could recompute what redaction hides', () => {
+    const state = move({ ...chanceGenesis(), hiddenInformationEnabled: true }, 'p1', 3)
+    const forAlice = redactStateForPlayer(state, 'p1')
+    expect(forAlice.actionHistory[0].action).toEqual(state.actionHistory[0].action)
+    expect('random' in forAlice.actionHistory[0]).toBe(false)
+  })
+})
+
+describe('redaction of setup draws', () => {
+  it("never sends a redacted viewer the numbers setup drew — setup may deal secrets", () => {
+    const genesis = { ...chanceGenesis(), hiddenInformationEnabled: true }
+    expect(genesis.setupRandom?.length).toBeGreaterThan(0)
+    expect('setupRandom' in redactStateForPlayer(genesis, 'p1')).toBe(false)
   })
 })
 

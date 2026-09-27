@@ -27,8 +27,7 @@ import {
   jsonResponse,
   loadGameContext,
   loadRandomSeed,
-  redactedResponseState,
-  respondWithState,
+  respondToWrite,
   requiresOwnerOverride,
   serviceRoleClient,
   writeGameStateCAS,
@@ -48,6 +47,8 @@ interface ApplyActionRequest {
   protocol?: number
   /** Why the caller could not use a delta, when it could not — see StateFallbackReason (../_shared/gameEnforcement.ts). */
   fallbackReason?: string
+  /** Protocol 3: the caller's `sinceActionIndex` is a cursor into a view-log state — see respondWithViewLog (../_shared/gameEnforcement.ts). */
+  viewLog?: boolean
 }
 
 Deno.serve(async (req) => {
@@ -62,7 +63,7 @@ Deno.serve(async (req) => {
   } catch {
     return jsonResponse(400, { ok: false, error: 'Invalid JSON body.' })
   }
-  const { gameId, action, sinceActionIndex, protocol, fallbackReason } = body
+  const { gameId, action, sinceActionIndex, protocol, fallbackReason, viewLog } = body
   if (!gameId || !action || typeof action.type !== 'string') {
     return jsonResponse(400, { ok: false, error: 'Request body must be { gameId, action }.' })
   }
@@ -107,7 +108,7 @@ Deno.serve(async (req) => {
   }
 
   const randomSeed = await loadRandomSeed(supabase, gameId)
-  const result = applyActionEnforced(ctx.gameState.state, action, randomSeed)
+  const result = applyActionEnforced(ctx.gameState.state, action, randomSeed, ctx)
   if (!result.ok) return jsonResponse(400, { ok: false, error: result.error })
 
   const newVersion = await writeGameStateCAS(supabase, gameId, result.state, ctx.gameState.version)
@@ -117,5 +118,5 @@ Deno.serve(async (req) => {
 
   // The response is redacted the same way get-game-state's read is — the CAS
   // write above always persists the real, unredacted result.state.
-  return respondWithState('apply-action', result.state, redactedResponseState(ctx, callerUserId, result.state), newVersion, { sinceActionIndex, protocol, fallbackReason })
+  return respondToWrite('apply-action', ctx, callerUserId, result.state, newVersion, { sinceActionIndex, protocol, fallbackReason, viewLog })
 })

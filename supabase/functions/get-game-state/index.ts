@@ -29,7 +29,7 @@
 // ../_shared/gameEnforcement.ts). Anything inconsistent just costs one full
 // response rather than a wrong splice.
 import { redactStateForPlayer, revealedGameStateView } from '@game-platform/sdk'
-import { canReadGameState, corsHeaders, getCallerUserId, jsonResponse, loadGameContext, respondWithState, serviceRoleClient } from '../_shared/gameEnforcement.ts'
+import { buildGenesisState, canReadGameState, corsHeaders, getCallerUserId, jsonResponse, loadFullGameAndPlayers, loadGameContext, respondWithState, respondWithViewLog, serviceRoleClient } from '../_shared/gameEnforcement.ts'
 
 interface GetGameStateRequest {
   gameId: string
@@ -50,6 +50,14 @@ interface GetGameStateRequest {
   protocol?: number
   /** Why the caller could not use a delta, when it could not — see StateFallbackReason (../_shared/gameEnforcement.ts). */
   fallbackReason?: string
+  /**
+   * Protocol 3 (a redacted viewer of a game with a view log,
+   * packages/sdk/src/viewLog.ts): `viewLog` says `sinceActionIndex` is a
+   * cursor into the caller's view-log state; `history` asks for the viewer's
+   * view of genesis plus every entry's patch, for history review.
+   */
+  viewLog?: boolean
+  history?: boolean
 }
 
 Deno.serve(async (req) => {
@@ -64,7 +72,7 @@ Deno.serve(async (req) => {
   } catch {
     return jsonResponse(400, { ok: false, error: 'Invalid JSON body.' })
   }
-  const { gameId, sinceActionIndex, protocol, fallbackReason } = body
+  const { gameId, sinceActionIndex, protocol, fallbackReason, viewLog, history } = body
   if (!gameId) return jsonResponse(400, { ok: false, error: 'Request body must be { gameId }.' })
 
   const supabase = serviceRoleClient()
@@ -92,6 +100,17 @@ Deno.serve(async (req) => {
   }
 
   const callerPlayerId = ctx.players.find((p) => p.user_id === callerUserId)?.id ?? null
+
+  // Protocol 3: the view log, when this game has one. Only a history request
+  // needs genesis, and only it pays the extra read for the full rows.
+  let genesis
+  if (history && (protocol ?? 1) >= 3) {
+    const rows = await loadFullGameAndPlayers(supabase, gameId)
+    if (rows) genesis = buildGenesisState(rows.game, rows.players, ctx.gameState.state.setupRandom)
+  }
+  const viewLogResponse = respondWithViewLog('get-game-state', ctx.gameState.state, callerPlayerId, ctx.gameState.version, { sinceActionIndex, protocol, fallbackReason, viewLog, history }, genesis)
+  if (viewLogResponse) return viewLogResponse
+
   const state = redactStateForPlayer(ctx.gameState.state, callerPlayerId)
   return respondWithState('get-game-state', ctx.gameState.state, state, ctx.gameState.version, { sinceActionIndex, protocol, fallbackReason })
 })

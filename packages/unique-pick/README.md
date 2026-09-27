@@ -62,10 +62,17 @@ owns `game`, and keeps these envelope fields accurate:
 - `nextForcedAction(state)` — a move with exactly one legal option, or null.
   The framework folds these into the triggering action's single log entry.
 - `redactGame(state, viewerId)` / `isActionSecret(entry, state, viewerId)` —
-  what's hidden from whom *right now*. They must agree, or the log leaks what
-  the state hides.
+  what's hidden from whom *right now*. `redactGame` masks the state (a
+  player's view of it is all their client ever gets); `isActionSecret` says
+  when a log entry's action or narration would reveal something to a viewer,
+  and must cover every secret the entry touches, including cards it drew.
+  They must agree, or the log leaks what the state hides.
 - `describeAction(action, before, after)` — log narration (`{player}` is
-  replaced with the actor's name); give secret actions a `redactedMessage`.
+  replaced with the actor's name); give secret actions a `redactedMessage`
+  that still says what's public ("played 7 and drew a card"). For a
+  hidden-information game the server narrates each entry when it writes it,
+  so every player's log is complete; `redactedMessage` is what a player sees
+  while the entry is secret from them.
 - `describePhase(phase)` — label for listing screens and notifications.
 
 Every game action must carry `playerId: string`; the framework reserves the
@@ -123,14 +130,13 @@ game, a seed that never leaves the server, keyed by the move's position, so
 undoing a move and making it again draws the same numbers. Two things follow
 for a game:
 
-- **What setup decides is public.** Every client carries `setupRandom` to
-  rebuild genesis. Pick a first player or a board layout there, but don't
-  shuffle a secret deck in `setup` — deal each secret card when it's dealt,
-  with `random.pick` from what's left.
-- **A secret draw needs a secret entry.** The numbers recorded on an entry
-  reveal what was drawn, so when a draw decides something some player mustn't
-  know yet (the card dealt into a hand), `isActionSecret` must say that entry
-  is secret from them. Redaction then withholds the numbers with the action.
+- **Setup may deal secrets.** A hidden-information game's players receive
+  genesis as their own view, never the numbers setup drew, so shuffling a
+  deck or dealing hands in `setup` is fine as long as `redactGame` masks them.
+- **Mask what a draw decides.** Recorded numbers never reach a redacted
+  player, so a draw leaks only through what your hooks expose: mask the drawn
+  card in `redactGame`, and mark its entry secret in `isActionSecret` while
+  its narration or action would give it away.
 
 A room can also lock a move against undo once it has revealed something —
 including random numbers a player has seen (see the platform README's "Undo

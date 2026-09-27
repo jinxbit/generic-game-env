@@ -32,6 +32,10 @@ the rules never exist in two copies.
   entry (or, for `setup`, on the state), and replay feeds those numbers back
   (`src/random.ts`). Fresh numbers come from the caller — the server's secret
   per-game seed for a rule-enforced game. Rules never call `Math.random()`.
+- Hidden information keeps the whole log cheap: for a hidden-information
+  game the server records each entry's change to every viewer's view, plus
+  its narration (`src/viewLog.ts`, patches in `src/statePatch.ts`). A
+  redacted client folds those patches instead of replaying the rules.
 - An opt-in lock (`lockRevealedInformationEnabled`, `isUndoLockedByReveal` in
   `src/undoRedo.ts`) refuses undoing a move that revealed hidden or random
   information, short of the owner's admin-mode override.

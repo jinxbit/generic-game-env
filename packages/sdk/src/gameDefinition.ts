@@ -64,9 +64,10 @@ export interface GameDefinition<TData = unknown, TOptions = unknown, TAction ext
    * `game`, `turn`, `phase`, `activePlayerId` and `pendingPlayerIds` set for
    * the first move.
    *
-   * Anything drawn from `random` here is recorded on the state for every
-   * client to replay (`GameState.setupRandom`), so it's public: decide turn
-   * order or a board layout here, but deal a secret when it's dealt.
+   * Anything drawn from `random` here is recorded on the state
+   * (`GameState.setupRandom`) so genesis can be rebuilt. A redacted viewer
+   * never receives those numbers — they get genesis as a view — so setup may
+   * deal secrets, as long as `redactGame` masks them.
    */
   setup(lobby: LobbyState<TOptions>, random: Random): GameState<TData, TOptions>
 
@@ -110,12 +111,20 @@ export interface GameDefinition<TData = unknown, TOptions = unknown, TAction ext
 
   /**
    * Whether this log entry would reveal something still secret from
-   * `viewerId` right now. Must agree with `redactGame`: anything masked there
-   * must also be masked here, or the log leaks it straight back out.
+   * `viewerId` right now — through its action or its narration. While true,
+   * the viewer gets a HIDDEN_ACTION placeholder and the `redactedMessage`
+   * narration instead (./viewLog.ts). Must agree with `redactGame`: anything
+   * masked there must also be masked here, or the log leaks it straight back
+   * out.
    */
   isActionSecret(entry: LoggedAction, state: GameState<TData, TOptions>, viewerId: string | null): boolean
 
-  /** Narration for one game action, given the state just before and after it. */
+  /**
+   * Narration for one game action, given the (true) state just before and
+   * after it. For a hidden-information game the server calls this when it
+   * writes the entry and stores both wordings (./viewLog.ts); `redactedMessage`
+   * is what a viewer reads while the entry is secret from them.
+   */
   describeAction(action: TAction, before: GameState<TData, TOptions>, after: GameState<TData, TOptions>): ActionDescription
 
   /** Short human-readable label for a phase (GameState.phase), e.g. "Picking". */

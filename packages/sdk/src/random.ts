@@ -20,13 +20,12 @@
 //   - a client-trusted game: the client itself (src/lib/randomSource.ts),
 //     which that path has to trust anyway.
 //
-// A client replaying a game can see every number already drawn in the log
-// entries it is allowed to see — that is, what has happened. It cannot see
-// what will be drawn next: that needs the seed. A game with hidden
-// information marks an entry whose draws are still secret with
-// `isActionSecret`, and redaction (./redaction.ts) withholds the numbers with
-// the entry. Setup draws are on every copy of the state, so anything decided
-// in `setup` is public; draw a secret (a card into a hand) when it's dealt.
+// No player can see what will be drawn next: that needs the seed. In a game
+// with hidden information a redacted viewer never receives recorded numbers
+// either — not on entries, not for setup (./redaction.ts) — since they could
+// recompute what redaction hides; their client follows the game through its
+// view log instead (./viewLog.ts). What a draw decides reaches them only
+// through what the game's redactGame and isActionSecret let through.
 
 /** A deterministic random stream. Stateful: each call advances it. */
 export interface Random {

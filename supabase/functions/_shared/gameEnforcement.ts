@@ -13,7 +13,7 @@
 // time, not in CI.
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import './games.ts'
-import { applyAction, gameplayPosition, redoableTail, seededSource, type Uint32Source, redactStateForPlayer, revealedGameStateView, toClientGameState, unredactedPrefix, buildInFlightOverlay, needsInFlightOverlay, type Action, type LoggedAction, type RedactedGameState, type RedactedGameStateDelta, type ActionResult, type GameState } from '@game-platform/sdk'
+import { applyActionWithSteps, flippedSince, gameplayPosition, hasViewLog, recordEntryViews, redoableTail, seededSource, viewerEntry, viewOf, type Uint32Source, redactStateForPlayer, revealedGameStateView, toClientGameState, unredactedPrefix, buildInFlightOverlay, needsInFlightOverlay, type Action, type LoggedAction, type RedactedGameState, type RedactedGameStateDelta, type ActionResult, type GameState } from '@game-platform/sdk'
 import { hashGameStateView } from '../../../src/lib/gameStateHash.ts'
 import { buildGenesisState } from '../../../src/lib/gameGenesis.ts'
 import type { GameRow as FullGameRow, PlayerRow as FullPlayerRow } from '../../../src/lib/dbTypes.ts'
@@ -193,8 +193,31 @@ function actionPlayerId(action: Action): string | null {
  * Any random numbers the rules draw come from the game's secret seed
  * (moveRandomSource) and are recorded on the new entry.
  */
-export function applyActionEnforced(state: GameState, action: Action, randomSeed: string): ActionResult {
-  return applyAction(state, action, { random: moveRandomSource(randomSeed, state, action) })
+export function applyActionEnforced(state: GameState, action: Action, randomSeed: string, ctx: Pick<GameContext, 'game'>): ActionResult {
+  const result = applyActionWithSteps(state, action, { random: moveRandomSource(randomSeed, state, action) })
+  if (!result.ok) return result
+  return { ok: true, state: withViewLog(ctx, state, result.state, result.steps) }
+}
+
+/**
+ * Whether this game keeps a per-viewer view log (packages/sdk/src/viewLog.ts)
+ * — exactly the games whose reads are redacted: hidden information on, and
+ * not hotseat (see redactedResponseState).
+ */
+export function keepsViewLog(ctx: Pick<GameContext, 'game'>, state: GameState): boolean {
+  return state.hiddenInformationEnabled && ctx.game.play_mode !== 'hotseat'
+}
+
+/**
+ * `after` with its newest entry's per-viewer views and narration recorded
+ * (recordEntryViews), for a game that keeps a view log; unchanged otherwise.
+ * Every write path calls this with the states it already holds, and the
+ * result goes out in the same compare-and-swap write — the view log costs no
+ * database round trip, which is what sank the earlier state-patch attempt
+ * (issue #648).
+ */
+export function withViewLog(ctx: Pick<GameContext, 'game'>, before: GameState, after: GameState, steps?: Parameters<typeof recordEntryViews>[2]): GameState {
+  return keepsViewLog(ctx, after) ? recordEntryViews(before, after, steps) : after
 }
 
 /**
@@ -317,6 +340,76 @@ export interface StateResponseRequest {
   sinceActionIndex?: number
   protocol?: number
   fallbackReason?: string
+  /** Protocol 3: the caller's cached state is a view-log state, so `sinceActionIndex` is a cursor into *that*. */
+  viewLog?: boolean
+  /** Protocol 3, get-game-state only: send the viewer's view of genesis and every entry's patch, for history review. */
+  history?: boolean
+}
+
+/**
+ * Protocol 3: a redacted viewer's response built from the view log
+ * (packages/sdk/src/viewLog.ts) rather than a replay. Three shapes:
+ *
+ *   - a delta, when the caller holds a view-log state up to `sinceActionIndex`:
+ *     each newer entry in their form with its patch, `revised` for earlier
+ *     entries whose secrecy for them has since flipped, and a hash of the view
+ *     the patches should land on;
+ *   - a cold read otherwise: their current view and every entry, no patches;
+ *   - `history`: their view of genesis and every entry with its patch, which
+ *     is all history review needs. `genesis` must be passed for it.
+ *
+ * Returns null when the log isn't a complete view log (a game started before
+ * it existed): the caller answers with respondWithState's older shapes, which
+ * every client still understands.
+ */
+export function respondWithViewLog(
+  fn: string,
+  trueState: GameState,
+  viewerId: string | null,
+  version: number,
+  request: StateResponseRequest,
+  genesis?: GameState,
+): Response | null {
+  if ((request.protocol ?? 1) < 3 || !hasViewLog(trueState.actionHistory)) return null
+  const history = trueState.actionHistory
+  const view = viewOf(trueState, viewerId)
+  const stateHash = hashGameStateView({ ...view, actionHistory: history })
+  const tagged = (shape: string, body: Record<string, unknown>, extra: Record<string, unknown> = {}) => {
+    logStateResponse({ fn, shape, reason: 'view-log', protocol: 3, ...extra })
+    return jsonResponse(200, { ok: true, viewLog: true, ...body, version }, { 'x-state-shape': shape, 'x-state-reason': 'view-log' })
+  }
+
+  if (request.history && genesis) {
+    return tagged('view-history', { genesisView: viewOf(genesis, viewerId), entries: history.map((entry) => viewerEntry(entry, trueState, viewerId)), stateHash })
+  }
+
+  const from = request.sinceActionIndex
+  if (request.viewLog && typeof from === 'number' && Number.isInteger(from) && from >= 0 && from <= history.length) {
+    const entries = history.slice(from).map((entry) => viewerEntry(entry, trueState, viewerId))
+    const revised = flippedSince(history, from, viewerId).map((index) => {
+      const { action, lines } = viewerEntry(history[index], trueState, viewerId, false)
+      return { index, action, lines }
+    })
+    return tagged('view-delta', { from, entries, ...(revised.length > 0 ? { revised } : {}), stateHash }, { append: entries.length, revised: revised.length })
+  }
+
+  return tagged('view-full', { view, entries: history.map((entry) => viewerEntry(entry, trueState, viewerId, false)), stateHash })
+}
+
+/** Who a response is for: the caller's seat when their view is redacted, or null when they see the true state (admin, hotseat, no hidden information). */
+export function redactedViewer(ctx: GameContext, callerUserId: string, state: GameState): { viewerId: string | null } | null {
+  if (ctx.isAdmin || !keepsViewLog(ctx, state)) return null
+  return { viewerId: ctx.players.find((p) => p.user_id === callerUserId)?.id ?? null }
+}
+
+/**
+ * The one response for every write endpoint: the view-log shape for a
+ * redacted caller that asked for it, otherwise respondWithState's.
+ */
+export function respondToWrite(fn: string, ctx: GameContext, callerUserId: string, state: GameState, version: number, request: StateResponseRequest): Response {
+  const viewer = redactedViewer(ctx, callerUserId, state)
+  const viewLogResponse = viewer ? respondWithViewLog(fn, state, viewer.viewerId, version, request) : null
+  return viewLogResponse ?? respondWithState(fn, state, redactedResponseState(ctx, callerUserId, state), version, request)
 }
 
 /**

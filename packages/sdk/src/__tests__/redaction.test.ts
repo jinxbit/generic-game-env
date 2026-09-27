@@ -31,7 +31,7 @@ describe('redactStateForPlayer', () => {
     const { state } = midRound()
     const view = redactStateForPlayer(state, 'p1')
 
-    expect(view.actionHistory[0]).toBe(state.actionHistory[0])
+    expect(view.actionHistory[0]).toEqual(state.actionHistory[0])
     expect(view.actionHistory[1]).toEqual({ ...state.actionHistory[1], action: hidden('p2') })
   })
 

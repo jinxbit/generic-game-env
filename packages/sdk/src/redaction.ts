@@ -42,8 +42,31 @@ export type RedactedGameState = Omit<GameState, 'actionHistory'> & {
  */
 export function redactStateForPlayer(state: GameState, viewerId: string | null): RedactedGameState {
   const game = definitionFor(state)
-  const actionHistory: RedactedLoggedAction[] = state.actionHistory.map((entry) => (game.isActionSecret(entry, state, viewerId) ? hiddenEntry(entry) : entry))
-  return { ...state, game: game.redactGame(state, viewerId), actionHistory }
+  const actionHistory: RedactedLoggedAction[] = state.actionHistory.map((entry) => (game.isActionSecret(entry, state, viewerId) ? hiddenEntry(entry) : publicEntry(entry)))
+  // Never the numbers setup drew: setup may deal secrets, and a view-log
+  // client receives genesis as a view instead (./viewLog.ts). A replaying
+  // client of a game whose setup drew anything can't rebuild genesis without
+  // them, so it falls back to full reads — slower, never a leak.
+  const { setupRandom, ...rest } = state
+  void setupRandom
+  return { ...rest, game: game.redactGame(state, viewerId), actionHistory }
+}
+
+/**
+ * A non-secret entry as a viewer receives it: the entry without its
+ * server-side fields — other viewers' patches and unredacted narration
+ * (`views`, `lines`, ./viewLog.ts) — and without the random numbers it drew.
+ * Those numbers would let a client recompute what redaction hides (a card
+ * drawn from a deck the viewer can't see), even when the move itself is
+ * public; a view-log client never needs them, and a replaying client falls
+ * back to a full fetch for an entry it can't replay without them.
+ */
+function publicEntry(entry: LoggedAction): LoggedAction {
+  const { views, lines, random, ...rest } = entry
+  void views
+  void lines
+  void random
+  return rest
 }
 
 /**

@@ -21,8 +21,8 @@ import {
   jsonResponse,
   loadFullGameAndPlayers,
   loadGameContext,
-  redactedResponseState,
-  respondWithState,
+  respondToWrite,
+  withViewLog,
   serviceRoleClient,
   writeGameStateCAS,
 } from '../_shared/gameEnforcement.ts'
@@ -39,6 +39,8 @@ interface RedoActionRequest {
   protocol?: number
   /** Why the caller could not use a delta, when it could not — see StateFallbackReason (../_shared/gameEnforcement.ts). */
   fallbackReason?: string
+  /** Protocol 3: the caller's `sinceActionIndex` is a cursor into a view-log state — see respondWithViewLog (../_shared/gameEnforcement.ts). */
+  viewLog?: boolean
 }
 
 Deno.serve(async (req) => {
@@ -53,7 +55,7 @@ Deno.serve(async (req) => {
   } catch {
     return jsonResponse(400, { ok: false, error: 'Invalid JSON body.' })
   }
-  const { gameId, sinceActionIndex, protocol, fallbackReason } = body
+  const { gameId, sinceActionIndex, protocol, fallbackReason, viewLog } = body
   if (!gameId) return jsonResponse(400, { ok: false, error: 'Request body must be { gameId }.' })
 
   const supabase = serviceRoleClient()
@@ -73,12 +75,13 @@ Deno.serve(async (req) => {
 
   const result = applyRedoAction(genesis, ctx.gameState.state, callerPlayerId)
   if (!result.ok) return jsonResponse(400, { ok: false, error: result.error })
+  const written = withViewLog(ctx, ctx.gameState.state, result.state)
 
-  const newVersion = await writeGameStateCAS(supabase, gameId, result.state, ctx.gameState.version)
+  const newVersion = await writeGameStateCAS(supabase, gameId, written, ctx.gameState.version)
   if (newVersion === null) {
     return jsonResponse(409, { ok: false, error: 'Game state changed concurrently — refetch and retry.' })
   }
 
   // Same write-side redaction as apply-action — see redactedResponseState.
-  return respondWithState('redo-action', result.state, redactedResponseState(ctx, callerUserId, result.state), newVersion, { sinceActionIndex, protocol, fallbackReason })
+  return respondToWrite('redo-action', ctx, callerUserId, written, newVersion, { sinceActionIndex, protocol, fallbackReason, viewLog })
 })

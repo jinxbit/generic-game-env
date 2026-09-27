@@ -22,6 +22,7 @@ import { resolveChatNotificationsEnabled } from './chatNotificationPreference'
 import { applyRedactedGameStateDelta, getGameDefinition, toClientGameState, type GameState as EngineGameState, type GameStatus, type PlayMode, type Action, type RedactedGameState, type RedactedGameStateDelta, type RedactedLoggedAction, type InFlightOverlay } from '@game-platform/sdk'
 import type { DeltaReplayContext } from './deltaReplayContext'
 import { applyReplayDelta, deriveBaseFromView, type ReplayDeltaFailure, type ReplayDeltaResponse } from './replayDelta'
+import { applyViewLogResponse, isViewLogState, type ViewLogFailure, type ViewLogHistory, type ViewLogResponse } from './viewLogClient'
 
 /**
  * Reads a user's Discord webhook URL (`profiles.discord_webhook_url`, see
@@ -935,6 +936,35 @@ export async function getGameState(gameId: string): Promise<GameStateSnapshot | 
 }
 
 /**
+ * The cursor a read or write sends. Protocol 3 (the server answers a redacted
+ * viewer of a game with a view log in that shape, and everyone else in the
+ * replay protocol's), with `viewLog` when the cached state came from the view
+ * log, or the replay protocol's own cursor when a replay context exists to
+ * rebuild with; the history-only protocol 1 when neither does.
+ */
+function cursorFor(previous: EngineGameState | null | undefined, replay: DeltaReplayContext | undefined): Record<string, unknown> {
+  if (previous && isViewLogState(previous)) return { protocol: 3, sinceActionIndex: previous.actionHistory.length, viewLog: true }
+  if (previous && replay) return { protocol: 3, sinceActionIndex: previous.actionHistory.length }
+  // No replay context to rebuild with: the old history-only delta (protocol 1).
+  if (previous) return { sinceActionIndex: previous.actionHistory.length }
+  return { protocol: 3 }
+}
+
+/**
+ * History review for a view-log game: the viewer's view of genesis plus every
+ * entry's patch (see viewLogClient.ts's viewLogReviewState). Fetched only
+ * when a player opens review, since ordinary reads never need it. Null when
+ * the game has no view log (review then replays, as for any other game).
+ */
+export async function getViewLogHistory(gameId: string): Promise<ViewLogHistory | null> {
+  const { data, error } = await supabase.functions.invoke('get-game-state', { body: { gameId, protocol: 3, history: true } })
+  if (error) return null
+  const result = data as ({ ok: true } & ViewLogResponse) | { ok: boolean }
+  if (!('viewLog' in result) || !('genesisView' in result)) return null
+  return { genesisView: result.genesisView, entries: result.entries }
+}
+
+/**
  * The redacted read path for hidden-information games: reads via the
  * `get-game-state` Edge Function instead of the raw `game_state` row, so a
  * still-secret pick never reaches this browser's network stack in the first
@@ -962,25 +992,26 @@ export async function getGameStateRedacted(
   gameId: string,
   previous?: EngineGameState | null,
   replay?: DeltaReplayContext,
-  fallbackReason?: ReplayDeltaFailure,
+  fallbackReason?: ReplayDeltaFailure | ViewLogFailure,
 ): Promise<GameStateSnapshot | null> {
-  const sinceActionIndex = previous ? previous.actionHistory.length : undefined
-  const protocol = replay ? 2 : undefined
   const { data, error } = await supabase.functions.invoke('get-game-state', {
-    body: {
-      gameId,
-      ...(sinceActionIndex === undefined ? {} : { sinceActionIndex }),
-      ...(protocol ? { protocol } : {}),
-      ...(fallbackReason ? { fallbackReason } : {}),
-    },
+    body: { gameId, ...cursorFor(previous, replay), ...(fallbackReason ? { fallbackReason } : {}) },
   })
   if (error) return null
   const result = data as
+    | ({ ok: true } & ViewLogResponse)
     | { ok: true; state: RedactedGameState; stateHash?: string; version: number }
     | ({ ok: true; version: number } & RedactedGameStateDelta)
     | { ok: true; version: number; actionHistoryFrom: number; actionHistoryAppend: RedactedLoggedAction[]; actionHistoryLength: number; overlay?: InFlightOverlay; stateHash: string }
     | { ok: false; error: string }
   if (!result.ok) return null
+
+  // Protocol 3, the view log: this viewer's own view, patched forward.
+  if ('viewLog' in result) {
+    const applied = applyViewLogResponse(previous, result)
+    if (!applied.ok) return fallbackReason ? null : getGameStateRedacted(gameId, null, replay, applied.reason)
+    return { state: applied.state, base: applied.state, version: result.version }
+  }
 
   // Protocol 2: no materialised state on the wire at all. Rebuild
   // it from the actions and verify — any failure is a cache miss, answered by
@@ -1057,9 +1088,7 @@ async function invokeGameFunction(
   // for the player actually playing that is the most frequent read there is.
   // Same protocol-2 contract as the read path (respondWithState builds both).
   const useDelta = Boolean(previous && replay)
-  const { data, error } = await supabase.functions.invoke(name, {
-    body: useDelta ? { ...body, sinceActionIndex: previous!.actionHistory.length, protocol: 2 } : body,
-  })
+  const { data, error } = await supabase.functions.invoke(name, { body: { ...body, ...cursorFor(previous, replay) } })
   if (error) {
     const context = (error as { context?: Response }).context
     if (context) {
@@ -1073,10 +1102,20 @@ async function invokeGameFunction(
     return { ok: false, error: error.message }
   }
   const result = data as
+    | ({ ok: true } & ViewLogResponse)
     | { ok: true; state: RedactedGameState; stateHash?: string; version: number }
     | ({ ok: true } & ReplayDeltaResponse)
     | { ok: false; error: string }
   if (!result.ok) return result
+
+  // Protocol 3, the view log — see getGameStateRedacted.
+  if ('viewLog' in result) {
+    const applied = applyViewLogResponse(previous, result)
+    if (applied.ok) return { ok: true, state: applied.state, base: applied.state, version: result.version }
+    const fresh = await getGameStateRedacted(body.gameId as string, null, replay, applied.reason)
+    if (!fresh) return { ok: false, error: 'The move was applied, but its result could not be read back. Refresh to continue.' }
+    return { ok: true, state: fresh.state, base: fresh.base, version: fresh.version }
+  }
 
   if (useDelta && 'stateHash' in result && 'actionHistoryAppend' in result) {
     const rebuilt = applyReplayDelta(previous!, replay!, result)

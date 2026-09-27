@@ -1,3 +1,6 @@
+import type { LogLine } from './gameLog.ts'
+import type { EntryViews } from './viewLog.ts'
+
 /**
  * The shape every game-defined action shares. A game's own action union
  * (e.g. `{ type: 'PICK_NUMBER'; playerId: string; value: number }`) is
@@ -89,7 +92,15 @@ export interface LoggedAction {
    * Every random number the game drew while applying this entry (the action
    * and its folded follow-ups), in order — fed back instead of rolling again
    * whenever the entry is replayed (./random.ts). Absent when nothing was
-   * drawn. Stripped along with the action when the entry is redacted.
+   * drawn. Never sent to a viewer whose state is redacted (./redaction.ts).
    */
   random?: number[]
+  /**
+   * Hidden-information games only, written by the server: how each viewer's
+   * view changed with this entry (./viewLog.ts). Server-side only —
+   * redaction strips it.
+   */
+  views?: EntryViews
+  /** Hidden-information games only: this entry's narration, full and redacted wording (./viewLog.ts). Server-side only. */
+  lines?: LogLine[]
 }

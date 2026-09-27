@@ -185,13 +185,25 @@ needs both the old and new status).
 `get-game-state` Edge Function, and the write functions redact their
 responses the same way (`redactedResponseState`). What's secret is the
 game's call (`GameDefinition.redactGame`/`isActionSecret`); the framework
-(`packages/sdk/src/redaction.ts`) masks the state, replaces secret log entries
-with `HIDDEN_ACTION` placeholders, and the client keeps only the log prefix
-before the first one (`unredactedPrefix`). The delta read protocol
-(`respondWithState` in `supabase/functions/_shared/gameEnforcement.ts`,
-`src/lib/replayDelta.ts`) has the client replay new log entries itself, lay
-an in-flight overlay (`packages/sdk/src/inFlightOverlay.ts`) over the result, and
-verify it against a server hash.
+(`packages/sdk/src/redaction.ts`) masks the state and replaces secret log
+entries with `HIDDEN_ACTION` placeholders. A redacted viewer's client never
+runs the rules: it reads through the **view log**
+(`packages/sdk/src/viewLog.ts`, protocol 3). Every write to such a game records
+on the new entry, from states the server already holds and in the same row
+write:
+- each viewer's patch of their own view;
+- earlier entries whose secrecy flipped;
+- the entry's narration.
+
+A read is then a slice of stored entries in that viewer's form, which the
+client folds onto its view (`src/lib/viewLogClient.ts`) and checks against a
+server hash, with the whole log and undo/redo intact. History review fetches
+the viewer's genesis view plus patches on demand. `respondWithViewLog` /
+`respondToWrite` in `supabase/functions/_shared/gameEnforcement.ts` build
+these responses. Everyone else (admins, games whose log predates the view
+log, old bundles) keeps the replay protocol (`respondWithState`,
+`src/lib/replayDelta.ts`, the in-flight overlay). Never add a DB round trip to
+a write for this: the reverted #648 attempt doubled latency that way.
 
 ## Supabase / Edge Function gotchas
 

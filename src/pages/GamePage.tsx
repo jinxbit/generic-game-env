@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { ChatPanel } from '../components/ChatPanel'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { GameLogPanel } from '../components/GameLogPanel'
-import { applyAction, buildGameLog, findGameDefinition, redactGameLog, replayActions, currentActorId, applyRedoAction, applyUndoAction, isUndoLockedByReveal, resolveHistory, type Action, type ActionResult, type GameState as EngineGameState } from '@game-platform/sdk'
+import { applyAction, buildGameLog, findGameDefinition, redactGameLog, replayActions, currentActorId, applyRedoAction, applyUndoAction, buildGameLogFromViewerEntries, isUndoLockedByReveal, resolveHistory, type ViewerLogEntry, type Action, type ActionResult, type GameState as EngineGameState } from '@game-platform/sdk'
 import { gameUiFor } from '../games/ui'
 import { useAuth } from '../hooks/useAuth'
 import { useIsAdmin } from '../hooks/useIsAdmin'
@@ -15,6 +15,7 @@ import { buildDeltaReplayContextFromState } from '../lib/deltaReplayContext'
 import { simpleError, toAppError, type AppError } from '../lib/errors'
 import { buildGenesisState } from '../lib/gameGenesis'
 import { cryptoRandomSource } from '../lib/randomSource'
+import { isViewLogState, viewLogReviewState, type ViewLogHistory } from '../lib/viewLogClient'
 import {
   applyActionEnforced,
   cancelGame,
@@ -24,6 +25,7 @@ import {
   getGameByRoomCode,
   getGameState,
   getGameStateRedacted,
+  getViewLogHistory,
   listMyGames,
   listPlayers,
   redoActionEnforced,
@@ -422,26 +424,56 @@ export function GamePage() {
   const isReviewingHistory = reviewIndex !== null
   const reviewMaxIndex = gameState?.actionHistory.length ?? 0
 
-  /** The state to render — live, or replayed up to `reviewIndex`. */
+  /**
+   * Whether `gameState` came from the view log (a redacted viewer of a
+   * hidden-information game, viewLogClient.ts): its log is complete but
+   * can't be replayed — secret entries are placeholders — so the log and
+   * history review read what the server recorded instead.
+   */
+  const viewLog = isViewLogState(gameState)
+  /**
+   * History review for a view-log game: this viewer's view of genesis and
+   * every entry's patch, fetched when review opens (reads never need it) and
+   * again whenever the log has grown past what was fetched.
+   */
+  const [viewLogHistory, setViewLogHistory] = useState<ViewLogHistory | null>(null)
+  useEffect(() => {
+    if (!viewLog || reviewIndex === null || !game || !gameState) return
+    if (viewLogHistory && viewLogHistory.entries.length >= gameState.actionHistory.length) return
+    let cancelled = false
+    void getViewLogHistory(game.id).then((history) => {
+      if (!cancelled && history) setViewLogHistory(history)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [viewLog, reviewIndex, game, gameState, viewLogHistory])
+
+  /** The state to render — live, or replayed (or, for a view-log game, patched forward) up to `reviewIndex`. */
   const reviewState = useMemo(() => {
-    if (reviewIndex === null || !genesis || !gameState) return null
+    if (reviewIndex === null || !gameState) return null
+    if (viewLog) return viewLogHistory && viewLogHistory.entries.length >= reviewIndex ? viewLogReviewState(viewLogHistory, gameState, reviewIndex) : null
+    if (!genesis) return null
     try {
       return replayActions(genesis, gameState.actionHistory.slice(0, reviewIndex))
     } catch {
       return null
     }
-  }, [reviewIndex, genesis, gameState])
+  }, [reviewIndex, genesis, gameState, viewLog, viewLogHistory])
   const displayState = isReviewingHistory ? reviewState : gameState
 
   /** The narration log for whatever's on screen (@game-platform/sdk's gameLog.ts), masked for this viewer (redactGameLog). */
   const visibleGameLog = useMemo(() => {
+    // A view-log game's entries carry their narration, already worded for
+    // this viewer by the server.
+    if (viewLog && displayState) return buildGameLogFromViewerEntries(displayState.actionHistory as unknown as ViewerLogEntry[])
     if (!genesis || !displayState) return []
     try {
       return redactGameLog(buildGameLog(genesis, displayState.actionHistory), displayState, me?.id ?? null)
     } catch {
       return []
     }
-  }, [genesis, displayState, me?.id])
+  }, [genesis, displayState, me?.id, viewLog])
 
   /** The most recently updated other game that's waiting on one of this user's seats. */
   const nextGameNeedingInput = useMemo(() => {

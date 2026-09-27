@@ -82,9 +82,24 @@ export interface ProductionGameFixture {
   describePlayer(playerId: string): string
 }
 
-/** applyAction() stamps wall-clock time, so two independently-produced states never match byte-for-byte there even when every game-logic field does. */
+/**
+ * What two independently-produced states legitimately differ in, removed:
+ * applyAction() stamps wall-clock time, so they never match byte-for-byte
+ * there even when every game-logic field does; and the server records a
+ * hidden-information game's per-viewer views and narration on each entry
+ * (`views`, `lines` — packages/sdk/src/viewLog.ts), which a local replay
+ * never has.
+ */
 export function stripTimestamps(state: GameState): GameState {
-  return { ...state, actionHistory: state.actionHistory.map((entry) => ({ ...entry, timestamp: '' })) }
+  return {
+    ...state,
+    actionHistory: state.actionHistory.map((entry) => {
+      const { views, lines, ...rest } = entry
+      void views
+      void lines
+      return { ...rest, timestamp: '' }
+    }),
+  }
 }
 
 /**

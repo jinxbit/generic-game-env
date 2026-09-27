@@ -11,11 +11,18 @@ import type { GameEvent, GameState } from './types.ts'
  */
 export const PLAYER_PLACEHOLDER = '{player}'
 
-interface DraftEvent {
+/**
+ * One narration line before it's placed in the log. Also what a
+ * hidden-information game's log entries store (`LoggedAction.lines`,
+ * ./viewLog.ts): written by the server at write time, when it holds the
+ * before/after states, so a client can show the whole log without replaying.
+ */
+export interface LogLine {
   playerId: string | null
   message: string
   redactedMessage?: string
 }
+type DraftEvent = LogLine
 
 function describeStep(action: Action, before: GameState, after: GameState): DraftEvent[] {
   if (!isFrameworkAction(action)) {
@@ -41,6 +48,17 @@ function describeOutcome(before: GameState, after: GameState): DraftEvent[] {
   if (before.status === 'completed' || after.status !== 'completed') return []
   const names = after.winnerPlayerIds.map((id) => after.players.find((p) => p.id === id)?.displayName ?? id)
   return [{ playerId: null, message: names.length ? `Game over — ${names.join(' & ')} ${names.length > 1 ? 'win' : 'wins'}.` : 'Game over.' }]
+}
+
+/**
+ * The narration lines for one log entry, given the states around it — the
+ * same lines buildGameLogFrom derives by replay. `steps` (applyActionWithSteps)
+ * narrates each forced follow-up folded into the entry; without them only the
+ * submitted action is narrated (right for undo/redo, which aren't a step).
+ */
+export function narrateEntry(entry: LoggedAction, before: GameState, after: GameState, steps?: { action: Action; before: GameState; after: GameState }[]): LogLine[] {
+  const lines = steps ? steps.flatMap((step) => describeStep(step.action, step.before, step.after)) : describeStep(entry.action, before, after)
+  return [...lines, ...describeOutcome(before, after)]
 }
 
 /**

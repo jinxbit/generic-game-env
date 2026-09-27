@@ -741,7 +741,12 @@ A game is either *client-trusted* or *rule-enforced*, fixed at creation by
 enforcement: reads go through `get-game-state`, which hands each viewer a
 copy with whatever the game keeps secret masked (the game decides what's
 secret — `GameDefinition.redactGame`/`isActionSecret`), and the write
-functions redact their responses the same way. The create-game screen turns
+functions redact their responses the same way. Each player's client keeps the
+whole game log, undo/redo and history review from a per-player **view log**:
+the server records each move's change to every player's view when it writes
+the move, and a read sends only the new entries in that player's form
+(`packages/sdk/src/viewLog.ts`). Long-lived secrets such as cards in a hand
+cost no more on the wire than short ones. The create-game screen turns
 it on for every non-hotseat game; hotseat never gets it, since one shared
 login across every local seat makes per-seat masking actively wrong there
 (`src/lib/hiddenInformationEligibility.ts`).

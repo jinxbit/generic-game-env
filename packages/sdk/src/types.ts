@@ -115,7 +115,8 @@ export interface GameState<TData = unknown, TOptions = unknown> {
    * rebuilding genesis feeds back to `setup` instead of rolling again, so
    * every client can rebuild it without the server's seed. Set once at
    * genesis and carried unchanged on every later state. Absent when setup
-   * drew nothing. Public, like everything setup decides.
+   * drew nothing. Never sent to a redacted viewer (./redaction.ts), so setup
+   * may deal secrets.
    */
   setupRandom?: number[]
   /**

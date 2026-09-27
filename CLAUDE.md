@@ -116,8 +116,11 @@ break replay, the Edge Functions, or both:
    Undo/redo are themselves logged actions folded in by `resolveHistory`
    (`packages/sdk/src/historyFold.ts`) — not a client-local stack. Anything that
    makes replay non-deterministic (randomness, clock reads, ambient state) is
-   a bug; randomness must be rolled before genesis and stored in
-   `games.settings`. A game always replays under the `rulesVersion` it
+   a bug; randomness comes only from the game's seed, rolled at room
+   creation into `games.settings.randomSeed` (`src/lib/randomSeed.ts`),
+   copied onto `GameState.randomSeed` at genesis, and drawn through the SDK's
+   `gameRandom` (`packages/sdk/src/random.ts`). The seed is readable by every
+   player, so it is not for secret randomness. A game always replays under the `rulesVersion` it
    started with (pinned in `games.settings.rulesVersion` and on the state), so
    a replay-incompatible rules change ships as a new version registered
    alongside the old one.
@@ -316,6 +319,7 @@ verify it against a server hash.
 - Branch, commit, and push as instructed; don't open a PR unless asked.
 - Keep changes minimal and in the style of the surrounding code.
 - Settings that matter to a running game are copied onto `GameState` at
-  genesis (`gameType`, `rulesVersion`, `options`, `hiddenInformationEnabled`)
+  genesis (`gameType`, `rulesVersion`, `options`, `hiddenInformationEnabled`,
+  `randomSeed`)
   so a running game and its export stay self-contained; read them from
   `GameState`, not the `games` row.

@@ -13,9 +13,9 @@
 // that isn't ruleEnforcementEnabled, so there's only ever one code path
 // responsible for a given game's Start.
 //
-// A game that needs randomness at setup must roll it here (and in
-// startGameFromLobby), persist it into `games.settings`, and only then build
-// genesis — buildGenesisState must stay a deterministic function of the row.
+// Randomness needs nothing here: the room's seed was rolled when it was
+// created (src/lib/randomSeed.ts) and is already on the row, so
+// buildGenesisState stays a deterministic function of it.
 //
 // Request body: `{ gameId: string }`. Idempotent past the point a
 // `game_state` row exists: a retry after a prior call inserted genesis but

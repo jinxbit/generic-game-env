@@ -78,6 +78,10 @@ describe('importGameExportAsHotseat', () => {
     expect(importedGame.game_type).toBe(sourceGame.game_type)
     expect(importedGame.settings.rulesVersion).toBe(sourceSnapshot.state.rulesVersion)
     expect(importedGame.settings.gameOptions).toEqual(sourceSnapshot.state.options)
+    // createGame rolled the source room a seed; the copy keeps it, so genesis rebuilds identically.
+    expect(sourceGame.settings.randomSeed).toMatch(/^[0-9a-f]{32}$/)
+    expect(sourceSnapshot.state.randomSeed).toBe(sourceGame.settings.randomSeed)
+    expect(importedGame.settings.randomSeed).toBe(sourceGame.settings.randomSeed)
 
     const importedPlayers = stack.db
       .table<{ id: string; game_id: string; user_id: string }>('players')

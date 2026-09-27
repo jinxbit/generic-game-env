@@ -7,9 +7,10 @@
 // redo (which replay the history against it — @game-platform/sdk's undoRedo.ts), and by
 // the delta read path (./deltaReplayContext.ts).
 //
-// A game that needs randomness at setup (a shuffled deck, a random first
-// player) must resolve it once, before genesis, and persist the result into
-// `games.settings` — then read it from there here, so genesis stays a pure
+// Randomness (a shuffled deck, a random first player) comes from the seed
+// createGame() rolled into `games.settings.randomSeed` (./randomSeed.ts):
+// it is passed through here onto `GameState.randomSeed`, and the game draws
+// from it with @game-platform/sdk's `gameRandom`, so genesis stays a pure
 // function of the row.
 //
 // Which game's rules build it comes from the row too: `game_type`, at the
@@ -49,5 +50,6 @@ export function buildGenesisState(game: GameRow, players: readonly GenesisPlayer
     })),
     hiddenInformationEnabled: game.settings.hiddenInformationEnabled,
     options: game.settings.gameOptions,
+    randomSeed: game.settings.randomSeed,
   })
 }

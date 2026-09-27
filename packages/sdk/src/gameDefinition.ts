@@ -27,7 +27,9 @@ export interface ActionDescription {
  * and I/O: the same definition runs in the browser and in the Supabase Edge
  * Functions, and the whole game is replayed from genesis on every undo,
  * every server-side submission and in every client. Randomness a game needs
- * must be resolved before genesis and stored in `games.settings`.
+ * comes from the game's own seed through `gameRandom` (./random.ts) — rolled
+ * before genesis and stored in `games.settings.randomSeed` — never from
+ * `Math.random()`.
  */
 export interface GameDefinition<TData = unknown, TOptions = unknown, TAction extends GameActionBase = GameActionBase> {
   /** Stable id, stored on every room (`games.game_type`) and game state. Never change it once games exist. */

@@ -50,6 +50,15 @@ export interface GameSettings {
    * registered version.
    */
   rulesVersion?: number
+  /**
+   * The game's random seed (./randomSeed.ts), rolled once by createGame() and
+   * copied onto `GameState.randomSeed` at genesis — the only randomness a
+   * game's rules may use (@game-platform/sdk's `gameRandom`). Never changed
+   * after creation: changing it would change genesis. Readable by everyone
+   * who can read the room, so it is not a secret. Absent for a room created
+   * before seeds existed.
+   */
+  randomSeed?: string
 }
 
 /**

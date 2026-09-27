@@ -27,6 +27,10 @@ the rules never exist in two copies.
   (event sourcing), undo/redo as logged actions, concede, room admin mode,
   folding forced follow-up moves into one log entry, and per-viewer redaction
   of whatever the game keeps secret.
+- Randomness is seeded: each game carries a seed rolled when its room was
+  created (`GameState.randomSeed`), and `gameRandom(state, ...keys)`
+  (`src/random.ts`) turns it into a deterministic stream, so replay rolls the
+  same numbers every time. Rules never call `Math.random()`.
 
 Every relative import inside this package carries an explicit `.ts` extension
 because the Supabase Edge Runtime (Deno) doesn't resolve extensionless

@@ -110,6 +110,15 @@ export interface GameState<TData = unknown, TOptions = unknown> {
    * its export stay self-contained. Read these, not the `games` row.
    */
   options: TOptions
+  /**
+   * The game's random seed (games.settings.randomSeed), rolled once when the
+   * room was created — carried here, like `options`, so a running game and
+   * its export stay self-contained. Rules draw from it only through
+   * `gameRandom` (./random.ts), never `Math.random()`. Absent for a game
+   * created before seeds existed; `gameRandom` treats that as a fixed seed.
+   * Not secret: every player can read it.
+   */
+  randomSeed?: string
   /** The game-specific state — owned entirely by the game package. */
   game: TData
   /**

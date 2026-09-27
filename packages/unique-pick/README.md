@@ -82,9 +82,9 @@ rejection.
 1. **Deterministic.** Every hook is a pure function of its inputs: no
    `Math.random()`, no `Date.now()`, no module-level mutable state. The whole
    game is replayed from genesis on undo, on every server submission, when a
-   client rebuilds state from a delta, and in tests. Randomness a game needs
-   must be rolled before genesis and stored in `games.settings` (see the
-   platform's `src/lib/gameGenesis.ts` and `start-game` Edge Function).
+   client rebuilds state from a delta, and in tests. For randomness, draw
+   from the game's own seed with `gameRandom` from `@game-platform/sdk` —
+   see "Randomness" below.
 2. **Server-safe rules.** Everything reachable from the `rules` entry runs in
    Supabase Edge Functions (Deno): no React, no JSON imports without
    `with { type: 'json' }`, and **every relative import carries an explicit
@@ -93,6 +93,38 @@ rejection.
    undo, review and the log.
 4. **One submitted action, one log entry.** Use `nextForcedAction` for
    follow-ups nobody needs to be asked about.
+
+## Randomness
+
+Every game gets a random seed, rolled once when its room is created
+(`games.settings.randomSeed`) and carried on the state as
+`state.randomSeed` (on the `lobby` passed to `setup` too). `gameRandom(state,
+...keys)` returns a deterministic stream (`next()`, `int(min, max)`,
+`pick(items)`, `shuffle(items)`) for that seed and the keys you give it, so
+every replay rolls exactly the same numbers:
+
+```ts
+import { gameRandom } from '@game-platform/sdk'
+
+setup(lobby) {
+  const deck = gameRandom(lobby, 'deck').shuffle(FULL_DECK)
+  const firstPlayerId = gameRandom(lobby, 'first-player').pick(lobby.turnOrder)
+  // ...
+}
+
+applyAction(state, action) {
+  const roll = gameRandom(state, 'roll', state.turn, action.playerId).int(1, 6)
+  // ...
+}
+```
+
+Give each random event its own keys: a stream is fixed by its keys, so
+undoing a move and making it again rolls the same result (no rerolling by
+undo). The seed is **not secret** — every player can read it and compute a
+roll in advance — so use it for randomness that's public the moment it
+happens (turn order, board layout, dice), not to hide information. A game
+created before seeds existed has no `randomSeed`; `gameRandom` then uses a
+fixed stand-in, so it still replays the same way.
 
 ## Changing the rules
 

@@ -6,6 +6,7 @@ import { canStartGame } from './roomReadiness'
 import { nextSeatIndex } from './seatIndex'
 import { remapGameStatePlayerIds } from './duplicateGameState'
 import { decodeGameStateExport } from './gameStateExport'
+import { generateRandomSeed } from './randomSeed'
 import type {
   GameRow,
   GameSettings,
@@ -189,6 +190,7 @@ export async function createGame(params: {
     ruleEnforcementEnabled: params.ruleEnforcementEnabled ?? false,
     hiddenInformationEnabled: params.hiddenInformationEnabled ?? false,
     rulesVersion: definition.rulesVersion,
+    randomSeed: generateRandomSeed(),
     ...(params.gameOptions !== undefined ? { gameOptions: params.gameOptions } : {}),
   }
 
@@ -662,9 +664,8 @@ export async function duplicateGameAsHotseat(params: {
  * The new room's settings are seeded with defaults — enforcement and hidden
  * information both off, which hotseat requires anyway and which this plain
  * client insert needs to be allowed by RLS at all — except the game type,
- * rules version and options, recovered from the export's own `GameState`,
- * which
- * buildGenesisState (gameGenesis.ts) needs to rebuild the exact genesis the
+ * rules version, options and random seed, recovered from the export's own
+ * `GameState`, which buildGenesisState (gameGenesis.ts) needs to rebuild the exact genesis the
  * export's actionHistory was recorded against.
  */
 export async function importGameExportAsHotseat(params: { exportText: string; hostUserId: string }): Promise<GameRow> {
@@ -681,6 +682,7 @@ export async function importGameExportAsHotseat(params: { exportText: string; ho
     hiddenInformationEnabled: false,
     rulesVersion: sourceState.rulesVersion,
     gameOptions: sourceState.options,
+    ...(sourceState.randomSeed !== undefined ? { randomSeed: sourceState.randomSeed } : {}),
   }
 
   const { data: game, error: gameError } = await supabase

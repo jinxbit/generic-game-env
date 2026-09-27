@@ -45,6 +45,15 @@ describe('createNewGame', () => {
     })
   })
 
+  it("carries the room's random seed onto the lobby and genesis, and adds no key for a seedless game", () => {
+    const setup = vi.spyOn(game, 'setup')
+    const genesis = createNewGame({ gameId: 'g1', gameType: 'unique-pick', playMode: 'live', players: seeds, randomSeed: 'abc123' })
+    expect(setup.mock.calls[0][0].randomSeed).toBe('abc123')
+    expect(genesis.randomSeed).toBe('abc123')
+
+    expect('randomSeed' in createNewGame({ gameId: 'g1', gameType: 'unique-pick', playMode: 'live', players: seeds })).toBe(false)
+  })
+
   it("returns whatever the game's setup returns — active, with options and game data", () => {
     const genesis = createNewGame({ gameId: 'g1', gameType: 'unique-pick', playMode: 'live', players: seeds, hiddenInformationEnabled: true })
 

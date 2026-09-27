@@ -67,7 +67,7 @@ Deno.serve(async (req) => {
 
   const genesisInputs = await loadFullGameAndPlayers(supabase, gameId)
   if (!genesisInputs) return jsonResponse(404, { ok: false, error: 'Game not found.' })
-  const genesis = buildGenesisState(genesisInputs.game, genesisInputs.players)
+  const genesis = buildGenesisState(genesisInputs.game, genesisInputs.players, ctx.gameState.state.setupRandom)
 
   const callerPlayerId = ctx.players.find((p) => p.user_id === callerUserId)?.id ?? null
 

@@ -6,6 +6,7 @@ import { canStartGame } from './roomReadiness'
 import { nextSeatIndex } from './seatIndex'
 import { remapGameStatePlayerIds } from './duplicateGameState'
 import { decodeGameStateExport } from './gameStateExport'
+import { cryptoRandomSource } from './randomSource'
 import type {
   GameRow,
   GameSettings,
@@ -174,6 +175,8 @@ export async function createGame(params: {
   ruleEnforcementEnabled?: boolean
   /** Opt in to the redacted read path (see GameSettings.hiddenInformationEnabled) — only meaningful alongside ruleEnforcementEnabled. Defaults to false when omitted; CreateGamePage.tsx passes `hiddenInformationAvailable` (src/lib/hiddenInformationEligibility.ts). */
   hiddenInformationEnabled?: boolean
+  /** Lock moves that revealed hidden or random information against undo, short of the owner/admin override (see GameSettings.lockRevealedInformationEnabled). Defaults to false when omitted; CreateGamePage.tsx's checkbox defaults to checked for every non-hotseat game. */
+  lockRevealedInformationEnabled?: boolean
   /** Whether the room is listed on the Public Rooms screen. Defaults to 'private' when omitted; CreateGamePage.tsx's checkbox defaults to checked ('public'). */
   visibility?: GameRow['visibility']
 }): Promise<{ game: GameRow; player: PlayerRow }> {
@@ -188,6 +191,7 @@ export async function createGame(params: {
     skipHotseatPassGate: params.skipHotseatPassGate ?? false,
     ruleEnforcementEnabled: params.ruleEnforcementEnabled ?? false,
     hiddenInformationEnabled: params.hiddenInformationEnabled ?? false,
+    ...(params.lockRevealedInformationEnabled ? { lockRevealedInformationEnabled: true } : {}),
     rulesVersion: definition.rulesVersion,
     ...(params.gameOptions !== undefined ? { gameOptions: params.gameOptions } : {}),
   }
@@ -663,8 +667,7 @@ export async function duplicateGameAsHotseat(params: {
  * information both off, which hotseat requires anyway and which this plain
  * client insert needs to be allowed by RLS at all — except the game type,
  * rules version and options, recovered from the export's own `GameState`,
- * which
- * buildGenesisState (gameGenesis.ts) needs to rebuild the exact genesis the
+ * which buildGenesisState (gameGenesis.ts) needs to rebuild the exact genesis the
  * export's actionHistory was recorded against.
  */
 export async function importGameExportAsHotseat(params: { exportText: string; hostUserId: string }): Promise<GameRow> {
@@ -914,7 +917,7 @@ export async function startGameFromLobby(game: GameRow): Promise<void> {
       throw new Error('This room changed since you loaded it — refresh and try again.')
     }
 
-    await insertGameState(game.id, buildGenesisState(game, players))
+    await insertGameState(game.id, buildGenesisState(game, players, cryptoRandomSource))
   }
   // The `games` row's own status stays the coarse lobby/active/canceled
   // (see dbTypes.ts) — whether the game has finished lives only in the

@@ -1,5 +1,5 @@
 import { isFrameworkAction, type Action, type LoggedAction } from './actions.ts'
-import { applyActionWithSteps } from './applyAction.ts'
+import { applyLoggedAction } from './applyAction.ts'
 import { definitionFor } from './registry.ts'
 import { replayActions } from './replay.ts'
 import type { GameEvent, GameState } from './types.ts'
@@ -78,7 +78,7 @@ export function buildGameLogFrom(genesis: GameState, actionHistory: LoggedAction
       after = before
       drafts = [{ playerId, message: playerId ? `${PLAYER_PLACEHOLDER} made a move.` : 'A move was made.' }]
     } else {
-      const result = applyActionWithSteps(before, logged.action)
+      const result = applyLoggedAction(before, logged)
       if (!result.ok) return { state, events, ok: false }
       after = result.state
       drafts = result.steps.flatMap((step) => describeStep(step.action, step.before, step.after))

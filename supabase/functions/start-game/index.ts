@@ -13,18 +13,20 @@
 // that isn't ruleEnforcementEnabled, so there's only ever one code path
 // responsible for a given game's Start.
 //
-// A game that needs randomness at setup must roll it here (and in
-// startGameFromLobby), persist it into `games.settings`, and only then build
-// genesis — buildGenesisState must stay a deterministic function of the row.
+// Randomness in the game's setup comes from the game's secret seed
+// (loadRandomSeed, created here on first Start): buildGenesisState records
+// whatever setup draws on the genesis state (`setupRandom`), so every later
+// rebuild — here or in any client — replays those numbers instead of needing
+// the seed.
 //
 // Request body: `{ gameId: string }`. Idempotent past the point a
 // `game_state` row exists: a retry after a prior call inserted genesis but
 // failed before flipping `games.status` just (re)flips status.
-import { findGameDefinition } from '@game-platform/sdk'
+import { findGameDefinition, seededSource } from '@game-platform/sdk'
 import { canStartGame } from '../../../src/lib/roomReadiness.ts'
 import { compressGameStateForStorage } from '../../../src/lib/gameStateCompression.ts'
 import type { GameRow, PlayerRow } from '../../../src/lib/dbTypes.ts'
-import { buildGenesisState, corsHeaders, getCallerUserId, jsonResponse, serviceRoleClient } from '../_shared/gameEnforcement.ts'
+import { buildGenesisState, corsHeaders, getCallerUserId, jsonResponse, loadRandomSeed, serviceRoleClient } from '../_shared/gameEnforcement.ts'
 
 interface StartGameRequest {
   gameId: string
@@ -101,7 +103,8 @@ async function handleStartGame(req: Request): Promise<Response> {
       return jsonResponse(409, { ok: false, error: 'This room changed since you loaded it — refresh and try again.' })
     }
 
-    const genesis = buildGenesisState(gameRow, players)
+    const randomSeed = await loadRandomSeed(supabase, gameId)
+    const genesis = buildGenesisState(gameRow, players, seededSource(randomSeed, 'setup'))
     const compressed = await compressGameStateForStorage(genesis)
     const { error: insertError } = await supabase
       .from('game_state')

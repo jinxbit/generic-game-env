@@ -27,6 +27,14 @@ the rules never exist in two copies.
   (event sourcing), undo/redo as logged actions, concede, room admin mode,
   folding forced follow-up moves into one log entry, and per-viewer redaction
   of whatever the game keeps secret.
+- Randomness is recorded, not re-rolled: the game's hooks draw from a
+  `Random` the framework hands them, every number drawn is stored on the log
+  entry (or, for `setup`, on the state), and replay feeds those numbers back
+  (`src/random.ts`). Fresh numbers come from the caller — the server's secret
+  per-game seed for a rule-enforced game. Rules never call `Math.random()`.
+- An opt-in lock (`lockRevealedInformationEnabled`, `isUndoLockedByReveal` in
+  `src/undoRedo.ts`) refuses undoing a move that revealed hidden or random
+  information, short of the owner's admin-mode override.
 
 Every relative import inside this package carries an explicit `.ts` extension
 because the Supabase Edge Runtime (Deno) doesn't resolve extensionless

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { applyAction, registerGame, replayActions, type GameDefinition } from '@game-platform/sdk'
+import { applyAction, registerGame, replayActions, seededSource, type GameDefinition } from '@game-platform/sdk'
 import { DEFAULT_GAME_OPTIONS, gameDefinition, PICK_PHASE, type GameState, type PickNumberAction } from '@game-platform/unique-pick/rules'
 import { buildGenesisState } from '../gameGenesis'
+import { CHANCE_GAME_TYPE, registerChanceGame } from '../../../packages/sdk/src/__tests__/chanceGame'
 import type { GameRow, GameSettings, PlayerRow } from '../dbTypes'
 
 function makeGame(overrides: Partial<GameRow> = {}, settingsOverrides: Partial<GameSettings> = {}): GameRow {
@@ -122,6 +123,23 @@ describe('buildGenesisState', () => {
 
     expect(buildGenesisState(game, makePlayers()).rulesVersion).toBe(1)
     expect(buildGenesisState(makeGame({ game_type: 'test-genesis-versions' }), makePlayers()).rulesVersion).toBe(2)
+  })
+
+  it('draws setup randomness from the source on the first build, and rebuilds from the recorded numbers after', () => {
+    registerChanceGame()
+    const players = Array.from({ length: 6 }, (_, i) => ({ ...makePlayers()[0], id: `p${i}`, seat_index: i }))
+    const row = makeGame({ game_type: CHANCE_GAME_TYPE })
+
+    const genesis = buildGenesisState(row, players, seededSource('secret', 'setup'))
+    expect(genesis.setupRandom?.length).toBeGreaterThan(0)
+    expect(buildGenesisState(row, players, genesis.setupRandom)).toEqual(genesis)
+    // Nothing recorded to replay, and no source: setup can't draw.
+    expect(() => buildGenesisState(row, players)).toThrow()
+  })
+
+  it("carries settings.lockRevealedInformationEnabled onto the state", () => {
+    expect(buildGenesisState(makeGame({}, { lockRevealedInformationEnabled: true }), makePlayers()).lockRevealedInformationEnabled).toBe(true)
+    expect(buildGenesisState(makeGame(), makePlayers()).lockRevealedInformationEnabled).toBeUndefined()
   })
 
   it('throws for a game type this deployment has not registered', () => {

@@ -82,9 +82,9 @@ rejection.
 1. **Deterministic.** Every hook is a pure function of its inputs: no
    `Math.random()`, no `Date.now()`, no module-level mutable state. The whole
    game is replayed from genesis on undo, on every server submission, when a
-   client rebuilds state from a delta, and in tests. Randomness a game needs
-   must be rolled before genesis and stored in `games.settings` (see the
-   platform's `src/lib/gameGenesis.ts` and `start-game` Edge Function).
+   client rebuilds state from a delta, and in tests. For randomness, draw
+   from the game's own seed with `gameRandom` from `@game-platform/sdk` —
+   see "Randomness" below.
 2. **Server-safe rules.** Everything reachable from the `rules` entry runs in
    Supabase Edge Functions (Deno): no React, no JSON imports without
    `with { type: 'json' }`, and **every relative import carries an explicit
@@ -93,6 +93,49 @@ rejection.
    undo, review and the log.
 4. **One submitted action, one log entry.** Use `nextForcedAction` for
    follow-ups nobody needs to be asked about.
+
+## Randomness
+
+`setup`, `applyAction` and `onPlayerEliminated` receive a `random` argument
+(`Random` from `@game-platform/sdk`: `next()`, `int(min, max)`,
+`pick(items)`, `shuffle(items)`). It's the only randomness a rule may use:
+
+```ts
+setup(lobby, random) {
+  const firstPlayerId = random.pick(lobby.turnOrder)
+  // ...
+}
+
+applyAction(state, action, random) {
+  const roll = random.int(1, 6)
+  // ...
+}
+```
+
+Every number a hook draws is recorded — on the move's log entry
+(`LoggedAction.random`), or for `setup` on the state (`setupRandom`) — and
+replay feeds the recorded numbers back instead of rolling again. So a replay
+never needs the seed, and the rules must draw exactly the same numbers in the
+same order every time they're given the same state and action.
+
+Where fresh numbers come from is the platform's business: for a rule-enforced
+game, a seed that never leaves the server, keyed by the move's position, so
+undoing a move and making it again draws the same numbers. Two things follow
+for a game:
+
+- **What setup decides is public.** Every client carries `setupRandom` to
+  rebuild genesis. Pick a first player or a board layout there, but don't
+  shuffle a secret deck in `setup` — deal each secret card when it's dealt,
+  with `random.pick` from what's left.
+- **A secret draw needs a secret entry.** The numbers recorded on an entry
+  reveal what was drawn, so when a draw decides something some player mustn't
+  know yet (the card dealt into a hand), `isActionSecret` must say that entry
+  is secret from them. Redaction then withholds the numbers with the action.
+
+A room can also lock a move against undo once it has revealed something —
+including random numbers a player has seen (see the platform README's "Undo
+in a shared game"). That's judged with your `isActionSecret`, so keeping it
+accurate matters here too.
 
 ## Changing the rules
 

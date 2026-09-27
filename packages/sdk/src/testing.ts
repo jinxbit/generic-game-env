@@ -2,7 +2,7 @@
 // point. Not imported by any runtime code.
 
 import type { Action } from './actions.ts'
-import { applyAction } from './applyAction.ts'
+import { applyAction, type ApplyActionOptions } from './applyAction.ts'
 import type { PlayerSeed } from './createGame.ts'
 import type { GameState } from './types.ts'
 
@@ -20,8 +20,8 @@ export function seatPlayers(count: number): PlayerSeed[] {
 }
 
 /** applyAction, throwing on rejection so a test fails loudly at the step that went wrong. Keeps the caller's own state type. */
-export function act<S extends GameState<unknown, unknown>, A extends Action>(state: S, action: A): S {
-  const result = applyAction(state, action)
+export function act<S extends GameState<unknown, unknown>, A extends Action>(state: S, action: A, options: ApplyActionOptions = {}): S {
+  const result = applyAction(state, action, options)
   if (!result.ok) throw new Error(`${action.type} rejected: ${result.error}`)
   return result.state as S
 }

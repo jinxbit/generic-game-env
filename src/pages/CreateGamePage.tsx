@@ -7,7 +7,7 @@ import { gameUiFor } from '../games/ui'
 import { useAuth } from '../hooks/useAuth'
 import { useDisplayName } from '../hooks/useDisplayName'
 import { createGame, MAX_PLAYERS } from '../lib/gameApi'
-import { hiddenInformationAvailable as computeHiddenInformationAvailable } from '../lib/hiddenInformationEligibility'
+import { hiddenInformationAvailable as computeHiddenInformationAvailable, lockRevealedInformationAvailable as computeLockRevealedInformationAvailable } from '../lib/hiddenInformationEligibility'
 import { randomRoomName } from '../lib/randomRoomName'
 import { toAppError, type AppError } from '../lib/errors'
 // Rule enforcement and hidden information are both on for every game
@@ -26,6 +26,7 @@ export function CreateGamePage() {
   const [name, setName] = useState(() => randomRoomName())
   const [playMode, setPlayMode] = useState<PlayMode>('async')
   const [skipHotseatPassGate, setSkipHotseatPassGate] = useState(true)
+  const [lockRevealedInformation, setLockRevealedInformation] = useState(true)
   // The deployment's registered games (src/games/registry.ts). With one, the
   // picker below isn't shown at all — a single-game site.
   const games = listGames()
@@ -67,6 +68,7 @@ export function CreateGamePage() {
   // Rule enforcement is always on (see RULE_ENFORCEMENT_ENABLED above), so
   // this is unavailable only for hotseat (src/lib/hiddenInformationEligibility.ts).
   const hiddenInformationAvailable = computeHiddenInformationAvailable(playMode, RULE_ENFORCEMENT_ENABLED)
+  const lockRevealedInformationAvailable = computeLockRevealedInformationAvailable(playMode)
 
   if (loading) {
     return <div className="p-8 text-neutral-400">Loading…</div>
@@ -101,6 +103,7 @@ export function CreateGamePage() {
         skipHotseatPassGate,
         ruleEnforcementEnabled: RULE_ENFORCEMENT_ENABLED,
         hiddenInformationEnabled: hiddenInformationAvailable,
+        lockRevealedInformationEnabled: lockRevealedInformationAvailable && lockRevealedInformation,
         minPlayers,
         maxPlayers,
         visibility,
@@ -146,6 +149,17 @@ export function CreateGamePage() {
               className="h-4 w-4 rounded border-neutral-700 bg-neutral-900"
             />
             Don&apos;t show a &quot;pass the device&quot; message every turn
+          </label>
+        )}
+        {lockRevealedInformationAvailable && (
+          <label className="flex items-center gap-2 text-sm text-neutral-400">
+            <input
+              type="checkbox"
+              checked={lockRevealedInformation}
+              onChange={(e) => setLockRevealedInformation(e.target.checked)}
+              className="h-4 w-4 rounded border-neutral-700 bg-neutral-900"
+            />
+            Don&apos;t allow undoing a move once it has revealed hidden or random information (the room owner or a site admin still can, with admin mode on)
           </label>
         )}
         {games.length > 1 && (

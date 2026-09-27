@@ -9,3 +9,16 @@ import type { PlayMode } from '@game-platform/sdk'
 export function hiddenInformationAvailable(playMode: PlayMode, ruleEnforcementEnabled: boolean): boolean {
   return ruleEnforcementEnabled && playMode !== 'hotseat'
 }
+
+/**
+ * GameSettings.lockRevealedInformationEnabled only means something where
+ * there's more than one person at the table to hide a reveal from — not
+ * hotseat, where one device plays every seat and the override is waived
+ * anyway (the undo-action Edge Function's hotseat exemption). It covers
+ * random draws as well as hidden information, so unlike
+ * hiddenInformationAvailable it doesn't need rule enforcement: a
+ * client-trusted game gets the same check, from GamePage.tsx alone.
+ */
+export function lockRevealedInformationAvailable(playMode: PlayMode): boolean {
+  return playMode !== 'hotseat'
+}

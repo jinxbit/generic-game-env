@@ -7,16 +7,18 @@
 // redo (which replay the history against it — @game-platform/sdk's undoRedo.ts), and by
 // the delta read path (./deltaReplayContext.ts).
 //
-// A game that needs randomness at setup (a shuffled deck, a random first
-// player) must resolve it once, before genesis, and persist the result into
-// `games.settings` — then read it from there here, so genesis stays a pure
-// function of the row.
+// Randomness in the game's `setup` (a random first player, a board layout) is
+// the one input that isn't on the row: the first build draws fresh numbers
+// (`setupRandom` as a source — the server's secret seed for an enforced game,
+// see ./randomSource.ts) and records them on the state as `setupRandom`; every
+// rebuild after passes that recorded array back, so genesis stays a pure
+// function of the row, the roster and numbers every copy of the state carries.
 //
 // Which game's rules build it comes from the row too: `game_type`, at the
 // `settings.rulesVersion` pinned when the room was created. The game must be
 // registered (src/games/registry.ts) in whatever process calls this.
 
-import { createNewGame, type GameState } from '@game-platform/sdk'
+import { createNewGame, type GameState, type Uint32Source } from '@game-platform/sdk'
 import type { GameRow } from './dbTypes.ts'
 
 /**
@@ -35,7 +37,12 @@ export type GenesisPlayerInput = {
   color: string
 }
 
-export function buildGenesisState(game: GameRow, players: readonly GenesisPlayerInput[]): GameState {
+/**
+ * `setupRandom`: a source on the very first build (starting the game), and
+ * the game's own recorded `GameState.setupRandom` on every rebuild after —
+ * omitting it on a rebuild only works for a game whose setup drew nothing.
+ */
+export function buildGenesisState(game: GameRow, players: readonly GenesisPlayerInput[], setupRandom?: Uint32Source | readonly number[]): GameState {
   return createNewGame({
     gameId: game.id,
     gameType: game.game_type,
@@ -49,5 +56,7 @@ export function buildGenesisState(game: GameRow, players: readonly GenesisPlayer
     })),
     hiddenInformationEnabled: game.settings.hiddenInformationEnabled,
     options: game.settings.gameOptions,
+    lockRevealedInformationEnabled: game.settings.lockRevealedInformationEnabled,
+    setupRandom,
   })
 }

@@ -110,6 +110,22 @@ export interface GameState<TData = unknown, TOptions = unknown> {
    * its export stay self-contained. Read these, not the `games` row.
    */
   options: TOptions
+  /**
+   * The random numbers the game's `setup` drew, in order (./random.ts) — what
+   * rebuilding genesis feeds back to `setup` instead of rolling again, so
+   * every client can rebuild it without the server's seed. Set once at
+   * genesis and carried unchanged on every later state. Absent when setup
+   * drew nothing. Public, like everything setup decides.
+   */
+  setupRandom?: number[]
+  /**
+   * Whether undoing a move that revealed hidden or random information needs
+   * the room owner or an admin with room admin mode on (see
+   * isUndoLockedByReveal, ./undoRedo.ts) — a creation-time choice
+   * (games.settings.lockRevealedInformationEnabled), immutable for the whole
+   * game. Absent is equivalent to false.
+   */
+  lockRevealedInformationEnabled?: boolean
   /** The game-specific state — owned entirely by the game package. */
   game: TData
   /**

@@ -50,6 +50,15 @@ export interface GameSettings {
    * registered version.
    */
   rulesVersion?: number
+  /**
+   * Whether undoing a move that revealed hidden or random information needs
+   * the room owner or an admin with room admin mode on
+   * (@game-platform/sdk's isUndoLockedByReveal). Copied onto
+   * `GameState.lockRevealedInformationEnabled` at genesis; never changed
+   * after creation. Meaningless for hotseat, where one device plays every
+   * seat. Absent = false; CreateGamePage.tsx checks it by default.
+   */
+  lockRevealedInformationEnabled?: boolean
 }
 
 /**

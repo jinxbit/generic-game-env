@@ -42,10 +42,22 @@ export type RedactedGameState = Omit<GameState, 'actionHistory'> & {
  */
 export function redactStateForPlayer(state: GameState, viewerId: string | null): RedactedGameState {
   const game = definitionFor(state)
-  const actionHistory: RedactedLoggedAction[] = state.actionHistory.map((entry) =>
-    game.isActionSecret(entry, state, viewerId) ? { ...entry, action: { type: 'HIDDEN_ACTION', playerId: actionPlayerId(entry.action) } } : entry,
-  )
+  const actionHistory: RedactedLoggedAction[] = state.actionHistory.map((entry) => (game.isActionSecret(entry, state, viewerId) ? hiddenEntry(entry) : entry))
   return { ...state, game: game.redactGame(state, viewerId), actionHistory }
+}
+
+/**
+ * A secret entry as a viewer receives it: who acted, when — but neither the
+ * action nor the random numbers drawn applying it (`LoggedAction.random`),
+ * which would reveal just as much.
+ */
+function hiddenEntry(entry: LoggedAction): RedactedLoggedAction {
+  return {
+    action: { type: 'HIDDEN_ACTION', playerId: actionPlayerId(entry.action) },
+    turn: entry.turn,
+    timestamp: entry.timestamp,
+    ...(entry.viaAdminMode ? { viaAdminMode: true } : {}),
+  }
 }
 
 function actionPlayerId(action: Action): string | null {

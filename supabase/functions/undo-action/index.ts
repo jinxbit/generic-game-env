@@ -9,11 +9,15 @@
 // Allowed for any seated player (or the room owner/an admin), at any time:
 // moving the pointer is non-destructive. Discarding the undone tail only
 // happens when a *new* action is submitted behind the tip — that's gated in
-// apply-action, not here.
+// apply-action, not here. The one exception: in a game created with
+// `lockRevealedInformationEnabled`, undoing a move that revealed hidden or
+// random information (isUndoLockedByReveal, packages/sdk/src/undoRedo.ts)
+// takes the room owner or an admin with room admin mode on — the same
+// override, and the same hotseat exemption, as apply-action's check.
 //
 // Request body: `{ gameId: string }` — no action payload, by design. The
 // response's `state` is redacted the same way apply-action's is.
-import { applyUndoAction } from '@game-platform/sdk'
+import { applyUndoAction, isUndoLockedByReveal } from '@game-platform/sdk'
 import {
   buildGenesisState,
   corsHeaders,
@@ -67,7 +71,15 @@ Deno.serve(async (req) => {
 
   const genesisInputs = await loadFullGameAndPlayers(supabase, gameId)
   if (!genesisInputs) return jsonResponse(404, { ok: false, error: 'Game not found.' })
-  const genesis = buildGenesisState(genesisInputs.game, genesisInputs.players)
+  const genesis = buildGenesisState(genesisInputs.game, genesisInputs.players, ctx.gameState.state.setupRandom)
+
+  const ownerOverrideAvailable = ctx.isOwnerOrAdmin && Boolean(ctx.gameState.state.adminModeActive)
+  if (ctx.game.play_mode !== 'hotseat' && !ownerOverrideAvailable && isUndoLockedByReveal(genesis, ctx.gameState.state)) {
+    return jsonResponse(403, {
+      ok: false,
+      error: 'That move revealed information to the players, so undoing it takes the room owner or an admin, with room admin mode on.',
+    })
+  }
 
   // Narration-only (never checked for legality) — the caller's own seat if
   // they have one, otherwise null (e.g. an owner/admin undoing without

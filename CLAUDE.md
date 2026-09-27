@@ -116,8 +116,14 @@ break replay, the Edge Functions, or both:
    Undo/redo are themselves logged actions folded in by `resolveHistory`
    (`packages/sdk/src/historyFold.ts`) — not a client-local stack. Anything that
    makes replay non-deterministic (randomness, clock reads, ambient state) is
-   a bug; randomness must be rolled before genesis and stored in
-   `games.settings`. A game always replays under the `rulesVersion` it
+   a bug; a game's hooks draw only from the `Random` the framework passes
+   them, and every number drawn is recorded (`LoggedAction.random`, or
+   `GameState.setupRandom` for setup) and fed back on replay
+   (`packages/sdk/src/random.ts`). Fresh numbers for a rule-enforced game come
+   from a per-game seed in `game_secrets`, which only the Edge Functions can
+   read (`loadRandomSeed`, `supabase/functions/_shared/gameEnforcement.ts`);
+   a client-trusted game's client rolls its own (`src/lib/randomSource.ts`).
+   Never put the seed anywhere a client can read. A game always replays under the `rulesVersion` it
    started with (pinned in `games.settings.rulesVersion` and on the state), so
    a replay-incompatible rules change ships as a new version registered
    alongside the old one.
@@ -222,12 +228,15 @@ verify it against a server hash.
   why the topology is this way round, and §4 for the environments.
 - Migrations are numbered `NNNN_name.sql` and applied in lexicographic order.
   The history was squashed into `0001_baseline.sql` when this platform was
-  extracted from its first game; add new migrations after it, never edit it
+  extracted from its first game; later ones follow it (`0002_game_secrets.sql`).
+  Add new migrations after them, and never edit one
   once a project has applied it. `audit-and-fix-migrations.yml` verifies each
   migration's actual effect against a real schema dump — read its header
   comment before touching it.
 - Tables: `games`, `players`, `game_state`, `game_state_meta`, `profiles`,
-  `push_subscriptions`, `app_config`, `chat_messages`, `chat_read_status`.
+  `push_subscriptions`, `app_config`, `chat_messages`, `chat_read_status`,
+  and `game_secrets` (0002 — server-only: RLS on, no policies; the random
+  seed of each rule-enforced game).
   Per-game config lives in the `games.settings` jsonb column rather than new
   columns — add pregame toggles there (`GameSettings` in `dbTypes.ts`), and
   game-specific options under `settings.gameOptions` (opaque to the platform;
@@ -316,6 +325,7 @@ verify it against a server hash.
 - Branch, commit, and push as instructed; don't open a PR unless asked.
 - Keep changes minimal and in the style of the surrounding code.
 - Settings that matter to a running game are copied onto `GameState` at
-  genesis (`gameType`, `rulesVersion`, `options`, `hiddenInformationEnabled`)
+  genesis (`gameType`, `rulesVersion`, `options`, `hiddenInformationEnabled`,
+  `lockRevealedInformationEnabled`)
   so a running game and its export stay self-contained; read them from
   `GameState`, not the `games` row.

@@ -6,7 +6,8 @@ name: Audit and Fix Supabase Migrations
 # "applied" without ever having run, and nothing noticed until PostgREST
 # answered PGRST205 "Could not find the table ... in the schema cache".)
 #
-# The migration set is a single baseline, 0001_baseline.sql. This workflow
+# The migration set is a baseline, 0001_baseline.sql, plus later migrations
+# (0002_game_secrets.sql). This workflow
 # dumps the live public schema and greps for one solid marker per key object
 # the baseline creates (a table, a uniquely-named constraint/index/trigger/
 # function, a column, or a policy name), one row per section of the
@@ -99,7 +100,7 @@ jobs:
           {
             echo "## Supabase migration audit"
             echo
-            echo "| Section | What 0001_baseline.sql should have created | Found? |"
+            echo "| Section | What the migrations should have created | Found? |"
             echo "|---|---|---|"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -144,6 +145,7 @@ jobs:
           chat|chat_messages_rate_limit_trigger|chat_messages_rate_limit_trigger|present|0001
           chat|table public.chat_read_status|"public"."chat_read_status"|present|0001
           chat|chat_sender_display_names function|"chat_sender_display_names"|present|0001
+          game secrets|table public.game_secrets (0002)|"public"."game_secrets"|present|0002
           pre-squash leftover|table public.map_pool absent|"public"."map_pool"|absent|-
           pre-squash leftover|table public.observers absent|"public"."observers"|absent|-
           pre-squash leftover|game_state_meta.round_phase column absent (renamed phase)|"round_phase"|absent|-

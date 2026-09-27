@@ -751,7 +751,22 @@ agrees on them. Undoing is always allowed for a seated player; submitting a
 *new* action behind the tip discards the undone tail, and if that tail
 contains another player's action, only the room owner or a site admin with
 **admin mode** switched on (a logged action, so the room keeps a record) may
-do it.
+do it. A room created with **"Don't allow undoing a move once it has revealed
+hidden or random information"** (`settings.lockRevealedInformationEnabled`,
+checked by default on the create-game screen for every non-hotseat game)
+also needs that override to undo a move that revealed something: the last
+pick of a round that showed everyone's picks, or a move whose dice a player
+has seen (`isUndoLockedByReveal`, `packages/sdk/src/undoRedo.ts`). The
+`undo-action` Edge Function enforces it; the Undo button is disabled to
+match, and is the only check for a client-trusted game.
+
+**Randomness.** A game's rules draw random numbers from what the framework
+hands them, and every number drawn is recorded in the log, so replay never
+rolls again (`packages/sdk/src/random.ts`). A rule-enforced game's numbers
+come from a per-game seed only the Edge Functions can read — the
+`game_secrets` table (`supabase/migrations/0002_game_secrets.sql`), with RLS
+on and no policies — so players can see every roll that has happened but not
+predict the next one. A client-trusted game's client rolls its own.
 
 ## Games, sites and branding
 

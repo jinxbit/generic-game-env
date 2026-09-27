@@ -1,183 +1,11 @@
-import type { Coordinate } from './types.ts'
-
-// PLACE_TILE / PLACE_UNIT (see ./boardSetup.ts) are the only actions valid
-// during `status: 'boardSetup'` — the one-time setup phase before round 1
-// (seed the starting water tiles, players place the rest tier by tier,
-// then place their three starting units) — every other action below
-// requires `status: 'active'`, matching the round sequence in ./round.ts:
-// CHOOSE_CARD (phase 1, simultaneous), RESOLVE_UNIT_ACTION / PASS_ACTIONS
-// (phase 2, turn order — movement is just another unit-kind action
-// resolved here, like create/transform/convert; see applyMove in
-// ./unitActions.ts. RESOLVE_UNIT_ACTION resolves one unit immediately and
-// can be submitted any number of times for the same player's turn;
-// PASS_ACTIONS is the one action that actually ends that turn — see both
-// in ./applyAction.ts), MOVE_TO_DECLINE (phase 3, simultaneous, only
-// reachable when triggered), PURCHASE_CARD / PASS_PURCHASE (phase 4,
-// simultaneous — issue #553). Recycle-check and round-end are automatic
-// engine bookkeeping, not player actions. CONCEDE is the one exception to all of the above: any
-// player may submit it at any point once the game is active, regardless of
-// round phase or whose turn it is.
+import type { GameAction } from '../game/types.ts'
 
 /**
- * Places one tile of the current tier (src/engine/boardGenerationContent.ts's
- * BoardGenerationContent.tiers[0] of whatever's left in GameState.
- * boardSetup.tileTierQueue) — `anchor` is the shape's own {0,0} cell's
- * target board coordinate, `rotationSteps` (0-5) rotates the shape 60°
- * per step before placement. The click/rotate/confirm interaction that
- * arrives at these two values is a client-side concern (the client can
- * preview locally with placedShapeCells()/isLegalTilePlacement() from
- * ./boardGeneration.ts, both pure) — the engine only ever sees the final
- * choice, submitted once, on confirm.
- */
-export interface PlaceTileAction {
-  type: 'PLACE_TILE'
-  playerId: string
-  anchor: Coordinate
-  rotationSteps: number
-}
-
-/** Places one of the player's three starting units (kind: 'city' | 'nomad' | 'ship') at `coord`, during boardSetup's unit-placement sub-phase. */
-export interface PlaceUnitAction {
-  type: 'PLACE_UNIT'
-  playerId: string
-  unitKind: string
-  coord: Coordinate
-}
-
-export interface ChooseCardAction {
-  type: 'CHOOSE_CARD'
-  playerId: string
-  cardId: string
-}
-
-/**
- * Retracts the caller's own already-made `selectCards` pick while at least
- * one other player is still pending (RULE_ENFORCEMENT_PLAN.md §4.4's
- * refinement) — the "undo" a player reaches for mid-phase instead of the
- * shared `historyPointer` rewind, since a plain pointer move would also
- * undo whichever other players' entries happen to sit after theirs in
- * `actionHistory`. Legal while `roundPhase === 'selectCards'` and the caller
- * has a non-null `chosenCardIdByPlayerId` entry.
- *
- * Issue #547 extends this past the phase resolving: if some *other* player's
- * pick was the one that emptied `pendingPlayerIds` and moved `roundPhase` to
- * `'actions'`, the caller can still retract their own already-revealed pick
- * — reopening `selectCards` for just them — as long as nothing has happened
- * in `actions` yet and the game doesn't lock revealed information
- * (`GameState.lockRevealedInformationEnabled`, issue #529). See
- * `canRetractChoiceAfterReveal` (./applyAction.ts) for the exact condition.
- * Puts the caller back in `pendingPlayerIds`; redo is just choosing again,
- * no separate endpoint. No `cardId` payload — there's only ever one thing to
- * retract, the caller's own current pick.
- */
-export interface RetractChoiceAction {
-  type: 'RETRACT_CHOICE'
-  playerId: string
-}
-
-/** One acting unit's chosen action (an id from content/units.json's actions[] for the played card's kind) and, if that action needs one, its target hex. */
-export interface UnitActionAssignment {
-  unitId: string
-  actionId: string
-  target?: Coordinate
-}
-
-export interface ResolveUnitActionAction {
-  type: 'RESOLVE_UNIT_ACTION'
-  playerId: string
-  /**
-   * Ordered per-unit action assignments — resolved one at a time, in this
-   * exact order, each against the state as it stands after every earlier
-   * one in the list (not batched by action id). This is what lets one
-   * unit's effect be visible to a later unit's action in the same
-   * submission — e.g. a Nomad producing a resource, then a second Nomad
-   * spending it to convert. The UI only ever submits one assignment at a
-   * time (resolved immediately as the player picks it — see RoundView.tsx
-   * — rather than staged behind a batch submit), so in practice that
-   * ordering guarantee mostly matters across *separate* RESOLVE_UNIT_ACTION
-   * calls now, which is naturally preserved simply by dispatching them in
-   * the order the player made each choice. A unit already in
-   * `GameState.resolvedUnitIdsThisTurn`, or given an id that isn't one of
-   * the kind's actions, is skipped — same "does nothing" outcome as a unit
-   * never assigned at all. Doesn't end the player's turn — see
-   * PassActionsAction below.
-   */
-  unitActions: UnitActionAssignment[]
-}
-
-/**
- * Round step 2's turn-ending action: whatever units the player already
- * resolved via RESOLVE_UNIT_ACTION stand as chosen; every other acting
- * unit of the played card's kind simply does nothing this round (already
- * the default outcome for any unit not resolved — Pass doesn't need to
- * enumerate them). Moves the chosen card hand -> currentlyPlayed ->
- * discard and advances `pendingPlayerIds` to the next player — the one
- * action in this phase that can end it and move on to decline/purchase.
- */
-export interface PassActionsAction {
-  type: 'PASS_ACTIONS'
-  playerId: string
-}
-
-export interface MoveToDeclineAction {
-  type: 'MOVE_TO_DECLINE'
-  playerId: string
-  cardId: string
-}
-
-/**
- * Retracts the caller's own cards moved to decline earlier in the
- * still-open decline phase — decline's counterpart to RetractChoiceAction
- * above (RULE_ENFORCEMENT_PLAN.md §10's "RETRACT_DECLINE"). Unlike a
- * `selectCards` pick, a player may owe (and so have already moved) more
- * than one card this phase (see beginDeclinePhase, ./round.ts).
- *
- * `cardId` omitted (issue #505) retracts *every* one of the caller's own
- * still-open additions from this phase at once, as a single actionHistory
- * entry — this is what GamePage.tsx's Undo button actually dispatches,
- * mirroring RetractChoiceAction's no-payload shape: regardless of how many
- * cards are involved, one Undo click is one compensating action, not one
- * per card (CLAUDE.md invariant 4). Given explicitly, `cardId` retracts
- * just that one card instead, leaving any other still-open addition from
- * this phase untouched — not gated on having caught up on every card still
- * owed (retracting one/some doesn't require having nothing else left to
- * decide).
- *
- * Either way, each retracted card goes back wherever it actually came from
- * — hand or discard, per GameState.declineSourceZoneByCardId, which
- * MOVE_TO_DECLINE populates for exactly this purpose — and the caller is
- * added back to `pendingPlayerIds` once per card retracted. Legal only
- * while `roundPhase === 'decline'` and (for an explicit `cardId`) it's one
- * of the caller's own additions still standing from *this* phase; an
- * already-public prior round's decline card (never bought back) has no
- * `declineSourceZoneByCardId` entry and so isn't retractable.
- */
-export interface RetractDeclineAction {
-  type: 'RETRACT_DECLINE'
-  playerId: string
-  cardId?: string
-}
-
-export interface PurchaseCardAction {
-  type: 'PURCHASE_CARD'
-  playerId: string
-  cardId: string
-}
-
-export interface PassPurchaseAction {
-  type: 'PASS_PURCHASE'
-  playerId: string
-}
-
-/**
- * A player voluntarily gives up, at any point once the game is active —
- * unlike every other action above, not tied to any particular round phase
- * or to it being this player's turn. Treated identically to an automatic
- * no-card elimination (see eliminatePlayer in ./elimination.ts): removed
- * from the board and turn order for the rest of the game, excluded from
- * winning, resources returned to the bank. See applyConcede in
- * ./applyAction.ts for how this chains into whatever phase transition the
- * conceding player's own pending turn would otherwise have blocked.
+ * A player gives up, at any point once the game is active — not tied to any
+ * phase or to it being their turn. The framework flags them eliminated and
+ * removes them from turn order, then hands off to the game's
+ * `onPlayerEliminated` hook to advance whatever their pending move was
+ * blocking (see applyConcede in ./applyAction.ts).
  */
 export interface ConcedeAction {
   type: 'CONCEDE'
@@ -185,59 +13,35 @@ export interface ConcedeAction {
 }
 
 /**
- * Rolls the game back by one already-logged action (design change, issue
- * #412: undo/redo used to work by truncating `actionHistory` client-side and
- * stashing what got popped in a client-local, unpersisted `redoStack` —
- * meaning a page reload, a different device, or another player's client
- * could never see or continue a pending redo, and the "undone" action was
- * gone from the log for good). Appended to `actionHistory` like any other
- * action instead — nothing is ever removed from the log, so every client
- * sees the same undo/redo state, and reloading mid-review changes nothing.
- * See ./undoRedo.ts for how the log's actually-in-effect prefix (and thus
- * `GameState` itself) is derived from a history that now may contain these.
+ * Rolls the game back by one logged action. Appended to `actionHistory` like
+ * any other action — nothing is ever removed from the log, so every client
+ * sees the same undo/redo state and reloading changes nothing. See
+ * ./historyFold.ts for how the in-effect prefix is derived.
  *
- * Like CONCEDE, submittable at any point once the game exists — not tied to
- * any particular round phase or turn order, and (per GamePage.tsx's
- * handleUndo doc comment) not even to a specific seated player: `playerId`
- * is null when nobody in particular is "acting" (e.g. clicked after the game
- * has ended, when no seat is the active one), and otherwise is purely for
- * narration ("Alice undid the last action") — never checked for legality.
+ * `playerId` is null when nobody in particular is acting (e.g. after the
+ * game ended) and otherwise is purely for narration — never checked for
+ * legality. Who may undo is decided by the caller (GamePage.tsx client-side,
+ * the undo-action Edge Function server-side).
  */
 export interface UndoAction {
   type: 'UNDO_ACTION'
   playerId: string | null
 }
 
-/** Re-applies the most recently undone action — see UndoAction above. No payload: there's only ever one thing to redo, whatever undo/branch history currently points at. */
+/** Re-applies the most recently undone action — see UndoAction above. */
 export interface RedoAction {
   type: 'REDO_ACTION'
   playerId: string | null
 }
 
 /**
- * Toggles `GameState.adminModeActive` on or off (issue #464) — the room
- * owner and site admins used to get an unconditional carve-out (§4.5) to
- * discard another player's undone action via a branching submission; this
- * makes that privilege something they have to deliberately switch on (and
- * remember to switch back off) rather than something they always silently
- * have, and — the point of it being a real logged action rather than a
- * client-local toggle — gives the room a permanent, shared record of when
- * admin mode was on. Like Undo/Redo, `playerId` is purely for narration
- * ("Alice turned admin mode on") and is never checked for legality — WHO
- * may submit this is an authorization question the engine itself can't
- * answer (it has no notion of `games.created_by`/`profiles.is_admin`), so
- * it's checked by the caller instead: GamePage.tsx client-side, and the
- * `apply-action` Edge Function server-side, both gating this on the same
- * owner-or-admin check `canAdminOverride`/`ctx.isOwnerOrAdmin` already use
- * elsewhere. See LoggedAction.viaAdminMode below for how every OTHER action
- * taken while this is on gets marked.
- *
- * Unlike every other action here, this one is deliberately kept out of
- * resolveHistory's undo/redo pointer walk (issue #545, ./historyFold.ts) —
- * it never sits in the substantive list Undo steps back through, so a bare
- * Undo can never revert it, even when it's the most recently logged entry
- * (the common case: switch it on, then immediately Undo to reach for the
- * override it was meant to unlock).
+ * Toggles `GameState.adminModeActive`. The room owner and site admins must
+ * deliberately switch this on before they can discard another player's
+ * undone action via a branching submission, and because it's a logged
+ * action the room keeps a permanent record of when it was on. Who may
+ * submit it is checked by the caller (the engine has no notion of room
+ * ownership). Kept out of the undo/redo pointer walk (./historyFold.ts), so
+ * a bare Undo never reverts it.
  */
 export interface SetAdminModeAction {
   type: 'SET_ADMIN_MODE'
@@ -245,54 +49,28 @@ export interface SetAdminModeAction {
   enabled: boolean
 }
 
-export type Action =
-  | PlaceTileAction
-  | PlaceUnitAction
-  | ChooseCardAction
-  | RetractChoiceAction
-  | ResolveUnitActionAction
-  | PassActionsAction
-  | MoveToDeclineAction
-  | RetractDeclineAction
-  | PurchaseCardAction
-  | PassPurchaseAction
-  | ConcedeAction
-  | UndoAction
-  | RedoAction
-  | SetAdminModeAction
+/** The actions the framework itself understands, independent of the game being played. */
+export type FrameworkAction = ConcedeAction | UndoAction | RedoAction | SetAdminModeAction
+
+export type Action = GameAction | FrameworkAction
+
+export function isFrameworkAction(action: Action): action is FrameworkAction {
+  return action.type === 'CONCEDE' || action.type === 'UNDO_ACTION' || action.type === 'REDO_ACTION' || action.type === 'SET_ADMIN_MODE'
+}
 
 /**
- * One entry in `GameState.actionHistory` — event sourcing: every action
- * that was actually accepted and applied, in order, so the game's current
- * state is always reconstructable by replaying this history from genesis
- * (see replayActions in ./replay.ts). `turn` and `timestamp` are metadata
- * only — replay never depends on either, only on `action` itself and the
+ * One entry in `GameState.actionHistory`. `turn` and `timestamp` are
+ * metadata only — replay never depends on either, only on `action` and the
  * order entries appear in.
  *
- * A forced single-option follow-up (RULE_ENFORCEMENT_PLAN.md §4.2/§4.3,
- * e.g. a one-card hand's CHOOSE_CARD, or a tile placement with only one
- * legal arrangement left) never gets its own entry here — nobody "did" it,
- * so applyAction (./applyAction.ts) folds it into the SAME entry as
- * whatever triggered it instead, the same way an ordinary phase transition
- * (beginActionsPhase/finishRound/etc.) already chains forward within one
- * dispatch. gameLog.ts still narrates each folded-in step on its own line
- * (see applyActionWithSteps, ./applyAction.ts) — it's just not a separate
- * `actionHistory` entry.
+ * A forced single-option follow-up (GameDefinition.nextForcedAction) never
+ * gets its own entry: applyAction folds it into the same entry as whatever
+ * triggered it, so one submitted action always produces exactly one entry.
  */
 export interface LoggedAction {
   action: Action
   turn: number
   timestamp: string
-  /**
-   * True if `GameState.adminModeActive` was already on when this entry was
-   * submitted (issue #464) — stamped by applyActionWithSteps
-   * (./applyAction.ts) from the pre-dispatch state. Never set on a
-   * SET_ADMIN_MODE entry itself (its own narration — "turned admin mode
-   * on/off" — already says as much); every other action submitted while
-   * admin mode is on gets it. Absent (not `false`) when admin mode wasn't
-   * active, so old history predating this field and a fresh action
-   * submitted with admin mode off serialize identically. gameLog.ts
-   * surfaces it as an "(admin mode)" tag on the narrated line.
-   */
+  /** True if admin mode was already on when this entry was submitted. Absent (not false) otherwise, and never set on SET_ADMIN_MODE itself. */
   viaAdminMode?: boolean
 }

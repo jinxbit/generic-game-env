@@ -1,158 +1,52 @@
 import { describe, expect, it } from 'vitest'
-import { buildGenesisState } from '../gameGenesis'
-import { reconstructMapPoolBoardForImport, remapGameSettingsPlayerIds, remapGameStatePlayerIds } from '../duplicateGameState'
-import type { GameRow, GameSettings, PlayerRow } from '../dbTypes'
-
-function makeGame(overrides: Partial<GameRow> = {}, settingsOverrides: Partial<GameSettings> = {}): GameRow {
-  return {
-    id: 'game_1',
-    room_code: 'ABCDE',
-    name: 'Test room',
-    play_mode: 'hotseat',
-    status: 'active',
-    min_players: 2,
-    max_players: 4,
-    created_by: 'auth_1',
-    created_at: '',
-    updated_at: '',
-    settings: makeSettings(settingsOverrides),
-    config_version: 0,
-    visibility: 'private',
-    ...overrides,
-  }
-}
-
-function makeSettings(overrides: Partial<GameSettings> = {}): GameSettings {
-  return {
-    mapTemplateId: null,
-    mapPoolBoard: null,
-    mapPoolMapId: null,
-    mapPoolRandomAtStart: false,
-    soloBuildMap: false,
-    soloBuilderSelection: 'owner',
-    soloBuilderId: null,
-    soloBuilderUnitOrder: 'last',
-    soloBuilderTurnOrder: null,
-    skipHotseatPassGate: false,
-    ruleEnforcementEnabled: false,
-    hiddenInformationEnabled: false,
-    lockRevealedInformationEnabled: false,
-    activeTaleIds: [],
-    gameLength: 4,
-    ...overrides,
-  }
-}
-
-function makePlayers(): PlayerRow[] {
-  return [
-    { id: 'p1', game_id: 'game_1', user_id: 'auth_1', display_name: 'Alice', avatar_url: null, seat_index: 0, color: '#ef4444', is_active: true, joined_at: '', ready_for_version: 0 },
-    { id: 'p2', game_id: 'game_1', user_id: 'auth_2', display_name: 'Bob', avatar_url: null, seat_index: 1, color: '#3b82f6', is_active: true, joined_at: '', ready_for_version: 0 },
-  ]
-}
+import { replayActions } from '../../engine/replay'
+import { act, newGame, pick } from '../../engine/__tests__/helpers'
+import { remapGameStatePlayerIds } from '../duplicateGameState'
 
 describe('remapGameStatePlayerIds', () => {
-  it('rewrites every player-id reference onto the new roster, and sets gameId/authUserId', () => {
-    const genesis = buildGenesisState(makeGame({}, { mapTemplateId: 'classic' }), makePlayers())
-    // Genesis alone already exercises players[].id, turnOrder,
-    // pendingPlayerIds and boardSetup.unitsRemainingByPlayerId — layer on a
-    // fake chosen-card pick and a logged action so chosenCardIdByPlayerId
-    // and actionHistory get covered too, without simulating a full round.
-    const state = {
-      ...genesis,
-      chosenCardIdByPlayerId: { p1: 'card_1', p2: null },
-      actionHistory: [{ action: { type: 'CHOOSE_CARD' as const, playerId: 'p1', cardId: 'card_1' }, turn: 1, timestamp: '2026-01-01T00:00:00Z' }],
-    }
+  const playerIdMap = { p1: 'new-p1', p2: 'new-p2', p3: 'new-p3' }
 
-    const playerIdMap = { p1: 'new-p1', p2: 'new-p2' }
+  it('rewrites every player-id reference onto the new roster, and sets gameId/authUserId', () => {
+    const genesis = newGame({ players: 3 })
+    // A resolved round (rounds[].picks/pointsByPlayerId, scores), an open
+    // round with one pick in (picks, pendingPlayerIds) and a concede
+    // (turnOrder, eliminated) cover every place the game keys by player id.
+    let state = pick(pick(pick(genesis, 'p1', 1), 'p2', 2), 'p3', 2)
+    state = pick(state, 'p2', 4)
+    state = act(state, { type: 'CONCEDE', playerId: 'p3' })
+
     const remapped = remapGameStatePlayerIds(state, { newGameId: 'game_2', playerIdMap, hostUserId: 'host_1' })
 
     expect(remapped.gameId).toBe('game_2')
-    expect(remapped.players.map((p) => p.id)).toEqual(['new-p1', 'new-p2'])
+    expect(remapped.players.map((p) => p.id)).toEqual(['new-p1', 'new-p2', 'new-p3'])
     expect(remapped.players.every((p) => p.authUserId === 'host_1')).toBe(true)
-    expect(remapped.turnOrder).toEqual(state.turnOrder.map((id) => playerIdMap[id as keyof typeof playerIdMap]))
-    expect(remapped.pendingPlayerIds).toEqual(state.pendingPlayerIds.map((id) => playerIdMap[id as keyof typeof playerIdMap]))
-    expect(Object.keys(remapped.chosenCardIdByPlayerId).sort()).toEqual(['new-p1', 'new-p2'])
-    expect(remapped.chosenCardIdByPlayerId['new-p1']).toBe('card_1')
-    expect(Object.keys(remapped.boardSetup?.unitsRemainingByPlayerId ?? {}).sort()).toEqual(['new-p1', 'new-p2'])
-    expect(remapped.actionHistory[0].action.playerId).toBe('new-p1')
+    expect(remapped.turnOrder).toEqual(['new-p1', 'new-p2'])
+    expect(remapped.pendingPlayerIds).toEqual(['new-p1'])
+    expect(remapped.game.scores).toEqual({ 'new-p1': 1, 'new-p2': 0, 'new-p3': 0 })
+    expect(remapped.game.picks).toEqual({ 'new-p1': null, 'new-p2': 4 })
+    expect(Object.keys(remapped.game.rounds[0].picks).sort()).toEqual(['new-p1', 'new-p2', 'new-p3'])
+    expect(remapped.actionHistory.map((entry) => ('playerId' in entry.action ? entry.action.playerId : null))).toEqual(['new-p1', 'new-p2', 'new-p3', 'new-p2', 'new-p3'])
 
     // Source state is untouched.
-    expect(state.players.map((p) => p.id)).toEqual(['p1', 'p2'])
+    expect(state.gameId).toBe('game_1')
+    expect(state.players.map((p) => p.id)).toEqual(['p1', 'p2', 'p3'])
   })
 
-  it('remaps boardSetup.builderId for a solo-build-map game', () => {
-    const players = makePlayers()
-    const genesis = buildGenesisState(makeGame({ created_by: 'auth_1' }, { mapTemplateId: null, soloBuildMap: true, soloBuilderSelection: 'owner' }), players)
-    expect(genesis.boardSetup?.builderId).toBe('p1')
+  it('remaps winnerPlayerIds and activePlayerId', () => {
+    const state = { ...act(newGame(), { type: 'CONCEDE', playerId: 'p2' }), activePlayerId: 'p1' }
+    expect(state.winnerPlayerIds).toEqual(['p1'])
 
-    const remapped = remapGameStatePlayerIds(genesis, { newGameId: 'game_2', playerIdMap: { p1: 'new-p1', p2: 'new-p2' }, hostUserId: 'host_1' })
+    const remapped = remapGameStatePlayerIds(state, { newGameId: 'game_2', playerIdMap, hostUserId: 'host_1' })
 
-    expect(remapped.boardSetup?.builderId).toBe('new-p1')
-  })
-})
-
-describe('remapGameSettingsPlayerIds', () => {
-  it('remaps soloBuilderId and every entry of soloBuilderTurnOrder', () => {
-    const settings = makeSettings({ soloBuildMap: true, soloBuilderId: 'p1', soloBuilderTurnOrder: ['p2', 'p1'] })
-
-    const remapped = remapGameSettingsPlayerIds(settings, { p1: 'new-p1', p2: 'new-p2' })
-
-    expect(remapped.soloBuilderId).toBe('new-p1')
-    expect(remapped.soloBuilderTurnOrder).toEqual(['new-p2', 'new-p1'])
+    expect(remapped.winnerPlayerIds).toEqual(['new-p1'])
+    expect(remapped.activePlayerId).toBe('new-p1')
   })
 
-  it('leaves null soloBuilderId/soloBuilderTurnOrder as null', () => {
-    const settings = makeSettings()
+  it('stays replayable from a genesis built for the new roster', () => {
+    const state = pick(pick(newGame(), 'p1', 3), 'p2', 5)
+    const remapped = remapGameStatePlayerIds(state, { newGameId: 'game_2', playerIdMap, hostUserId: 'host_1' })
+    const newGenesis = remapGameStatePlayerIds(newGame(), { newGameId: 'game_2', playerIdMap, hostUserId: 'host_1' })
 
-    const remapped = remapGameSettingsPlayerIds(settings, { p1: 'new-p1' })
-
-    expect(remapped.soloBuilderId).toBeNull()
-    expect(remapped.soloBuilderTurnOrder).toBeNull()
-  })
-})
-
-describe('reconstructMapPoolBoardForImport', () => {
-  it('returns null for a game whose board is still being built interactively', () => {
-    const genesis = buildGenesisState(makeGame(), makePlayers())
-    expect(genesis.boardSetup?.tileTierQueue.length).toBeGreaterThan(0)
-
-    expect(reconstructMapPoolBoardForImport(genesis)).toBeNull()
-  })
-
-  it('returns null once at least one PLACE_TILE action has been logged', () => {
-    const genesis = buildGenesisState(makeGame(), makePlayers())
-    const state = {
-      ...genesis,
-      actionHistory: [{ action: { type: 'PLACE_TILE' as const, playerId: 'p1', anchor: { q: 0, r: 0 }, rotationSteps: 0 }, turn: 0, timestamp: '2026-01-01T00:00:00Z' }],
-    }
-
-    expect(reconstructMapPoolBoardForImport(state)).toBeNull()
-  })
-
-  it('reconstructs the preset board for a template-map genesis', () => {
-    const genesis = buildGenesisState(makeGame({}, { mapTemplateId: 'classic' }), makePlayers())
-    expect(genesis.boardSetup?.tileTierQueue).toEqual([])
-
-    const reconstructed = reconstructMapPoolBoardForImport(genesis)
-
-    expect(reconstructed).toEqual(genesis.board)
-
-    // Feeding it back in as mapPoolBoard rebuilds the same genesis a
-    // preset-board import needs buildGenesisState to reproduce.
-    const rebuiltGenesis = buildGenesisState(makeGame({}, { mapTemplateId: null, mapPoolBoard: reconstructed }), makePlayers())
-    expect(rebuiltGenesis.board).toEqual(genesis.board)
-    expect(rebuiltGenesis.boardSetup).toEqual(genesis.boardSetup)
-  })
-
-  it('still detects a preset board after occupantIds are stamped onto it, clearing them back out', () => {
-    const genesis = buildGenesisState(makeGame({}, { mapTemplateId: 'classic' }), makePlayers())
-    const [someCoordKey, someTile] = Object.entries(genesis.board.tiles)[0]
-    const stateWithUnit = {
-      ...genesis,
-      board: { ...genesis.board, tiles: { ...genesis.board.tiles, [someCoordKey]: { ...someTile, occupantIds: ['unit_1'] } } },
-      actionHistory: [{ action: { type: 'PLACE_UNIT' as const, playerId: 'p1', unitKind: 'city', coord: someTile.coord }, turn: 0, timestamp: '2026-01-01T00:00:00Z' }],
-    }
-
-    expect(reconstructMapPoolBoardForImport(stateWithUnit)).toEqual(genesis.board)
+    expect(replayActions(newGenesis, remapped.actionHistory)).toEqual(remapped)
   })
 })

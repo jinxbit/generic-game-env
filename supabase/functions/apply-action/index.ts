@@ -1,36 +1,22 @@
-// RULE_ENFORCEMENT_PLAN.md §8 phase 6: the first of three Edge Functions
-// (with undo-action/redo-action) that stop trusting client-submitted
-// GameState — see that document's §3 for why Edge Functions over a
-// standalone backend, and §4 for the enforcement model this implements.
-// Most of the actual logic (seat resolution, the §4.1/§4.4/§4.5
-// authorization checks, content resolution, the compare-and-swap write) is
-// shared with the other two functions — see ../_shared/gameEnforcement.ts,
-// including that file's own doc comment on this function's local-stack
-// verification and the two deploy blockers it found and fixed.
-//
-// Deliberately does NOT flip game_state's RLS to service-role-only (§6:
-// that's phase 8, landing together with gameApi.ts's rewire) — clients can
-// still write game_state directly today. This function becomes the sole
-// legitimate writer only once phase 8 rewires the client and locks RLS down;
-// until then, deploying it is additive and inert unless something actually
-// calls it.
+// Applies one action to a rule-enforced game, server-side. The shared logic
+// (seat resolution, authorization, the compare-and-swap write, response
+// redaction) lives in ../_shared/gameEnforcement.ts, shared with
+// undo-action/redo-action/get-game-state/start-game.
 //
 // Request body: `{ gameId: string, action: Action }` (see
-// src/engine/actions.ts for Action's shape). UNDO_ACTION/REDO_ACTION are
-// rejected here (same as applyAction() itself) — submit those to
-// undo-action/redo-action instead, which replay from genesis rather than
-// stepping forward. SET_ADMIN_MODE (issue #464) IS handled here — it's an
-// ordinary forward step from `state` like any other action, just with its
-// own owner-or-admin authorization instead of the usual per-seat one.
+// src/engine/actions.ts). UNDO_ACTION/REDO_ACTION are rejected here (same as
+// applyAction() itself) — submit those to undo-action/redo-action, which
+// replay from genesis rather than stepping forward. SET_ADMIN_MODE IS
+// handled here — an ordinary forward step, just with its own owner-or-admin
+// authorization instead of the usual per-seat one.
 //
-// The response's `state` is redacted the same way get-game-state's read is
-// (HIDDEN_INFORMATION_PLAN.md §8, issue #478) — the acting player's own
-// submission would otherwise be the easiest way to see every other player's
-// still-secret pick, since it hands back the very state the action just
-// produced. See redactedResponseState (../_shared/gameEnforcement.ts).
+// The response's `state` is redacted the same way get-game-state's read is —
+// the acting player's own submission would otherwise be the easiest way to
+// see what the game keeps secret, since it hands back the very state the
+// action just produced. See redactedResponseState.
 import type { Action } from '../../../src/engine/actions.ts'
 import {
-  applyActionFullyEnforced,
+  applyActionEnforced,
   corsHeaders,
   getCallerUserId,
   isAuthorizedToActAs,
@@ -50,9 +36,8 @@ interface ApplyActionRequest {
    * The caller's own cached `actionHistory` prefix length, and which delta
    * contract it speaks — both forwarded straight to `respondWithState`
    * (../_shared/gameEnforcement.ts), which is the same builder the read path
-   * uses. Issue #693: a move's own response was still sending the whole state
-   * back on every submission, which for the player actually playing is the
-   * most frequent read of all.
+   * uses — so a move's own response can be a delta rather than the whole
+   * state.
    */
   sinceActionIndex?: number
   protocol?: number
@@ -84,14 +69,10 @@ Deno.serve(async (req) => {
   const ctx = await loadGameContext(supabase, gameId, callerUserId)
   if (!ctx) return jsonResponse(404, { ok: false, error: 'Game not found, or has no state yet (still in the lobby?).' })
 
-  // SET_ADMIN_MODE (issue #464) has no seat to check `isAuthorizedToActAs`
-  // against (`playerId` is narration-only, like Undo/Redo) — who may flip it
-  // is its own, simpler question: only the room owner or a site admin, same
-  // `isOwnerOrAdmin` check §4.5's other carve-outs already use. It's also
-  // deliberately exempt from the owner-override branch-pruning check below:
-  // that check exists to gate the very privilege this action turns on, so
-  // requiring it already be on would make it unreachable the one time
-  // there's actually a pending redo to preserve.
+  // SET_ADMIN_MODE has no seat to check `isAuthorizedToActAs` against
+  // (`playerId` is narration-only, like Undo/Redo) — only the room owner or a
+  // site admin may flip it. It's also exempt from the owner-override check
+  // below: that check gates the very privilege this action turns on.
   if (action.type === 'SET_ADMIN_MODE') {
     if (!ctx.isOwnerOrAdmin) {
       return jsonResponse(403, { ok: false, error: 'Only the room owner or an admin may toggle admin mode.' })
@@ -100,38 +81,22 @@ Deno.serve(async (req) => {
     if (!isAuthorizedToActAs(ctx, callerUserId, action.playerId)) {
       return jsonResponse(403, { ok: false, error: "You may not submit an action on another player's behalf." })
     }
-    // §4.5/issue #464: the room owner/admin's override to discard another
-    // player's undone action via a branching submission now additionally
-    // requires room admin mode to be switched on (GameState.adminModeActive,
-    // toggled by SET_ADMIN_MODE above) — being the owner or an admin is no
-    // longer sufficient by itself, so this privilege is something they have
-    // to deliberately opt into rather than silently always have. Issue #529
-    // (GameState.lockRevealedInformationEnabled) puts the same override
-    // behind the same gate for discarding an already-revealed pick of one's
-    // own, when the game opts into that stricter behavior — see
-    // requiresOwnerOverride's own doc comment.
+    // Discarding another player's undone action via a branching submission
+    // takes the room owner or an admin *with* room admin mode switched on.
+    // Skipped for hotseat: one shared auth.uid() covers every seat, so
+    // undoing one seat's move and acting for another is ordinary hotseat
+    // play, not a takeover.
     const ownerOverrideAvailable = ctx.isOwnerOrAdmin && Boolean(ctx.gameState.state.adminModeActive)
-    // issue #486: this check exists to stop one human discarding another
-    // human's undone move. In hotseat, one shared auth.uid() covers every
-    // seat (same reasoning as isAuthorizedToActAs's hotseat branch above and
-    // redactedResponseState's, both keyed the same way), so there is no
-    // second human to protect from — undoing one seat's pick and then acting
-    // for another seat is ordinary hotseat play, not a takeover.
     const isHotseat = ctx.game.play_mode === 'hotseat'
-    if (
-      !isHotseat &&
-      requiresOwnerOverride(ctx.gameState.state.actionHistory, action.playerId, Boolean(ctx.gameState.state.lockRevealedInformationEnabled)) &&
-      !ownerOverrideAvailable
-    ) {
+    if (!isHotseat && requiresOwnerOverride(ctx.gameState.state.actionHistory, action.playerId) && !ownerOverrideAvailable) {
       return jsonResponse(403, {
         ok: false,
-        error:
-          "Submitting this action would discard another player's undone move, or a card pick that's already been revealed — only the room owner or an admin, with room admin mode on, may do that.",
+        error: "Submitting this action would discard another player's undone move — only the room owner or an admin, with room admin mode on, may do that.",
       })
     }
   }
 
-  const result = applyActionFullyEnforced(ctx.gameState.state, action)
+  const result = applyActionEnforced(ctx.gameState.state, action)
   if (!result.ok) return jsonResponse(400, { ok: false, error: result.error })
 
   const newVersion = await writeGameStateCAS(supabase, gameId, result.state, ctx.gameState.version)
@@ -139,8 +104,7 @@ Deno.serve(async (req) => {
     return jsonResponse(409, { ok: false, error: 'Game state changed concurrently — refetch and retry.' })
   }
 
-  // issue #478: the response is redacted the same way get-game-state's read
-  // is (redactedResponseState, ../_shared/gameEnforcement.ts) — the CAS write
-  // above always persists the real, unredacted result.state regardless.
+  // The response is redacted the same way get-game-state's read is — the CAS
+  // write above always persists the real, unredacted result.state.
   return respondWithState('apply-action', result.state, redactedResponseState(ctx, callerUserId, result.state), newVersion, { sinceActionIndex, protocol, fallbackReason })
 })

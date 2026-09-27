@@ -3,9 +3,9 @@
 // (see that function's doc comment for the full trigger/scope rationale —
 // in-game only, async games only, gated via `profiles.preferences.
 // chatNotificationsEnabled`, default on as of issue #668); deliberately a
-// near-duplicate rather than a shared import, same reason as every other
-// push/Discord pair in this repo: Deno Edge Functions can't import the
-// app's Vite-aliased TypeScript sources.
+// near-duplicate rather than a shared module, same as the other
+// push/Discord pairs in this repo: the delivery code differs and the rest is
+// small. The title comes from src/game/display.ts.
 //
 // Trigger: the *same* Supabase Database Webhook on `chat_messages` INSERT
 // that triggers notify-discord-chat can also target this function (Database
@@ -18,6 +18,7 @@
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import webpush from 'npm:web-push@3'
+import { GAME_TITLE } from '../../../src/game/display.ts'
 
 const BODY_PREVIEW_MAX = 200
 
@@ -106,7 +107,7 @@ async function handleChatMessage(supabase: SupabaseClient, message: ChatMessageR
   await Promise.allSettled(
     ((subscriptions ?? []) as (PushSubscriptionRow & { user_id: string })[]).map(async (sub) => {
       try {
-        await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, JSON.stringify({ title: 'Rise & Fall', body, url }))
+        await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, JSON.stringify({ title: GAME_TITLE, body, url }))
       } catch (err) {
         // A 404/410 means the browser dropped the subscription — clean it up, same as notify-web-push.
         const status = (err as { statusCode?: number }).statusCode

@@ -32,6 +32,7 @@
 // RLS, same as every other notify-* function.
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
+import { GAME_TITLE } from '../../../src/game/display.ts'
 
 const WEBHOOK_URL_PATTERN = /^https:\/\/(?:discord\.com|discordapp\.com)\/api\/webhooks\/\d+\/[\w-]+$/
 
@@ -127,7 +128,7 @@ async function handleChatMessage(supabase: SupabaseClient, message: ChatMessageR
 
   const senderName = sender?.display_name ?? 'Someone'
   const game_ = game as GameRow
-  const content = `**Rise & Fall** — **${senderName}** in ${roomText(game_.name, game_.room_code, gameUrlFor(game_.room_code))}: ${previewBody(message.body)}`
+  const content = `**${GAME_TITLE}** — **${senderName}** in ${roomText(game_.name, game_.room_code, gameUrlFor(game_.room_code))}: ${previewBody(message.body)}`
 
   await Promise.allSettled(
     recipients.map((player) => {

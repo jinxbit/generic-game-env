@@ -5,10 +5,10 @@ import { useDisplayName } from '../hooks/useDisplayName'
 import { useIsAdmin } from '../hooks/useIsAdmin'
 import { ChatPanel } from '../components/ChatPanel'
 import { ErrorBanner } from '../components/ErrorBanner'
-import { GameLengthSelector } from '../components/GameLengthSelector'
-import { MapModeSelector, type MapMode, type MapPoolChoice } from '../components/MapModeSelector'
-import { TaleSelector } from '../components/TaleSelector'
-import { listMapTemplates, listTales } from '../content/resolveContent'
+import { game as gameDefinition } from '../engine/game'
+import { describeGameOptions } from '../game/display'
+import { GameOptionsEditor } from '../game/GameOptionsEditor'
+import { normalizeGameOptions } from '../game/rules'
 import { formatUnreadBadge, isChatEnabled } from '../lib/chatApi'
 import { setPendingRedirect } from '../lib/pendingRedirect'
 import {
@@ -30,6 +30,9 @@ import { allPlayersReady, canStartGame, isPlayerReady } from '../lib/roomReadine
 import { toAppError, type AppError } from '../lib/errors'
 import type { GameRow, GameSettings, PlayerRow } from '../lib/dbTypes'
 
+/** Seats the game allows, capped by how many distinct player colours there are. */
+const MAX_SEATS = Math.min(gameDefinition.maxPlayers, MAX_PLAYERS)
+
 export function LobbyPage() {
   const { roomCode } = useParams<{ roomCode: string }>()
   const { session, loading: authLoading } = useAuth()
@@ -46,7 +49,7 @@ export function LobbyPage() {
   const [linkCopied, setLinkCopied] = useState(false)
 
   // Same in-game chat (CHAT_PLAN.md), the same gameId, shown a screen
-  // earlier (issue #650) — a room's chat starts the moment the room exists
+  // earlier — a room's chat starts the moment the room exists
   // rather than only once the game leaves the lobby, and keeps its history
   // once GamePage takes over after Start Game. Mirrors GamePage.tsx's own
   // chatOpen/chatUnreadCount/chatEnabled trio and header toggle button
@@ -72,7 +75,6 @@ export function LobbyPage() {
   const [draftSettings, setDraftSettings] = useState<GameSettings | null>(null)
   const [draftMinPlayersInput, setDraftMinPlayersInput] = useState('2')
   const [draftMaxPlayersInput, setDraftMaxPlayersInput] = useState('4')
-  const [draftMapMode, setDraftMapMode] = useState<MapMode>('buildAlone')
 
   const load = useCallback(async () => {
     if (!roomCode) return
@@ -113,9 +115,8 @@ export function LobbyPage() {
     // Merge onto the last known row rather than replacing it outright: an
     // UPDATE that never touches `settings` (e.g. this Start Game transition
     // itself) can omit it from Realtime's payload entirely once it's stored
-    // out-of-line (TOASTed) — a map-pool game's embedded board makes that
-    // likely — leaving `game.settings` `undefined` for this render (issue
-    // #533). `status`/`room_code` themselves are never TOASTed, so reading
+    // out-of-line (TOASTed), leaving `game.settings` `undefined` for this
+    // render. `status`/`room_code` themselves are never TOASTed, so reading
     // them straight off `updated` below stays correct either way.
     const unsubGame = subscribeToGame(gameId, (updated) => {
       setGame((prev) => (prev ? { ...prev, ...updated } : updated))
@@ -168,21 +169,18 @@ export function LobbyPage() {
   const isHotseat = game.play_mode === 'hotseat'
   const canStart = isCreator && canStartGame(game, players)
   const canAddPlayer = isHotseat && isCreator && game.status === 'lobby' && players.length < game.max_players
-  // Owner-only lifecycle actions (0008_room_lifecycle.sql's RLS is the real
-  // guard; these just decide what to render — see the room lifecycle spec's
-  // sections 3/12 for the deletable states).
-  // Admins (0017_admin_delete_any_game.sql) bypass both the ownership and
-  // status restrictions — the matching RLS policy is the real guard, same
-  // as the owner-only checks below.
+  // Owner-only lifecycle actions (RLS is the real guard; these just decide
+  // what to render). Admins bypass both the ownership and status
+  // restrictions — the matching RLS policy is the real guard here too.
   const canDelete = (isCreator && (game.status === 'lobby' || game.status === 'canceled')) || isAdmin
-  // Configuration editing (issue section 9): Owner-only, and only pre-start —
-  // 0009_config_versioning.sql's trigger rejects it once the room isn't lobby.
+  // Configuration editing: Owner-only, and only pre-start — the
+  // config-versioning trigger rejects it once the room isn't lobby.
   const canEditConfig = isCreator && game.status === 'lobby'
   // Non-host seated players can unjoin while the room hasn't started; the
   // host leaves by deleting the room instead (see canDelete below), since
   // removing their own row would orphan it.
   const canLeave = isSeated && !isCreator && game.status === 'lobby'
-  // Visibility (issue section 4): Owner-only, any time short of canceled —
+  // Visibility: Owner-only, any time short of canceled —
   // unlike settings/min-max players this isn't gameplay configuration, so
   // it's not locked once the room leaves the lobby (see setGameVisibility).
   const canEditVisibility = isCreator && game.status !== 'canceled'
@@ -193,15 +191,6 @@ export function LobbyPage() {
     setDraftSettings(game.settings)
     setDraftMinPlayersInput(String(game.min_players))
     setDraftMaxPlayersInput(String(game.max_players))
-    setDraftMapMode(
-      game.settings.mapPoolBoard
-        ? 'select'
-        : game.settings.mapPoolRandomAtStart
-          ? 'blind'
-          : game.settings.soloBuildMap
-            ? 'buildAlone'
-            : 'build',
-    )
     setConfigOpen(true)
   }
 
@@ -279,20 +268,15 @@ export function LobbyPage() {
     setBusy(true)
     try {
       // startGameFromLobby re-fetches the seated roster itself rather than
-      // trusting this component's `players` state (issue #519: that state
-      // is only as fresh as the last Realtime event this tab received, and
-      // building genesis from a stale roster silently produced a
-      // wrong-player-count game) — see its own doc comment in gameApi.ts.
+      // trusting this component's `players` state (only as fresh as the last
+      // Realtime event this tab received) — see its own doc comment in
+      // gameApi.ts.
       await startGameFromLobby(game)
       // Don't make this client depend on its own subscribeToGame Realtime
       // callback (above) to notice the status flip it just caused — this
       // client already knows the write landed, so navigate immediately
       // instead of waiting on an echo of its own change that could be
-      // missed or delayed. Most consequential for "build alone" mode, where
-      // the room creator (who alone can click Start) defaults to also being
-      // the sole builder (GameSettings.soloBuilderSelection) — if their own
-      // client never left the lobby, nobody else could make progress either
-      // (issue #516).
+      // missed or delayed.
       navigate(`/game/${game.room_code}`)
     } catch (err) {
       setError(toAppError(err, 'Failed to start game'))
@@ -364,19 +348,10 @@ export function LobbyPage() {
     }
   }
 
-  // A selected saved map is built for one exact player count, not a
-  // range (issue #166) — while one's active, it overrides the free-typed
-  // min/max fields below rather than coexisting with them.
-  const draftMapPoolLocked = draftSettings?.mapPoolBoard != null
-  const draftMapChoice: MapPoolChoice | null =
-    draftSettings?.mapPoolBoard != null
-      ? { board: draftSettings.mapPoolBoard, mapId: draftSettings.mapPoolMapId ?? '', playerCount: Number(draftMaxPlayersInput) }
-      : null
   const draftMinPlayers = Number(draftMinPlayersInput)
   const draftMaxPlayers = Number(draftMaxPlayersInput)
-  const draftMinPlayersValid = draftMapPoolLocked || (/^\d+$/.test(draftMinPlayersInput.trim()) && draftMinPlayers >= 1)
-  const draftMaxPlayersValid =
-    draftMapPoolLocked || (/^\d+$/.test(draftMaxPlayersInput.trim()) && draftMaxPlayers >= 1 && draftMaxPlayers <= MAX_PLAYERS)
+  const draftMinPlayersValid = /^\d+$/.test(draftMinPlayersInput.trim()) && draftMinPlayers >= gameDefinition.minPlayers
+  const draftMaxPlayersValid = /^\d+$/.test(draftMaxPlayersInput.trim()) && draftMaxPlayers >= 1 && draftMaxPlayers <= MAX_SEATS
   const draftConfigValid =
     draftSettings !== null &&
     draftMinPlayersValid &&
@@ -384,9 +359,9 @@ export function LobbyPage() {
     draftMaxPlayers >= draftMinPlayers &&
     draftMaxPlayers >= players.length
   const draftPlayerCountError = !draftMinPlayersValid
-    ? `Min players must be a whole number of at least 1.`
+    ? `Min players must be a whole number of at least ${gameDefinition.minPlayers}.`
     : !draftMaxPlayersValid
-      ? `Max players must be a whole number between 1 and ${MAX_PLAYERS}.`
+      ? `Max players must be a whole number between 1 and ${MAX_SEATS}.`
       : draftMaxPlayers < draftMinPlayers
         ? `Max players can't be lower than min players.`
         : draftMaxPlayers < players.length
@@ -439,25 +414,8 @@ export function LobbyPage() {
         </div>
         <div className="flex flex-col gap-1">
           <p className="text-neutral-400">
-            {game.play_mode} · {players.length}/{game.max_players} players · {game.settings.gameLength} achievements ·{' '}
-            {game.settings.mapTemplateId
-              ? (listMapTemplates().find((t) => t.id === game.settings.mapTemplateId)?.name ?? game.settings.mapTemplateId)
-              : game.settings.mapPoolBoard
-                ? 'random saved map'
-                : game.settings.mapPoolRandomAtStart
-                  ? 'random saved map (picked when the game starts)'
-                  : game.settings.soloBuildMap
-                    ? `interactive map (built alone by ${game.settings.soloBuilderSelection === 'random' ? 'a random player' : 'the host'})`
-                    : 'interactive map (built together)'}
+            {game.play_mode} · {players.length}/{game.max_players} players · {describeGameOptions(game.settings.gameOptions)}
           </p>
-          {game.settings.activeTaleIds.length > 0 && (
-            <p className="text-sm text-neutral-500">
-              Tales:{' '}
-              {game.settings.activeTaleIds
-                .map((id) => listTales().find((t) => t.id === id)?.name ?? id)
-                .join(', ')}
-            </p>
-          )}
           <p className="text-sm text-neutral-500">
             {game.visibility === 'public' ? 'Public — listed on the Public rooms screen' : 'Private — only reachable via this room’s link/code'}
             {canEditVisibility && (
@@ -501,92 +459,42 @@ export function LobbyPage() {
             <p className="text-xs text-neutral-500">Changing this will ask everyone to confirm Ready again.</p>
           </div>
 
-          {draftMapMode === 'select' ? (
-            <p className="text-xs text-neutral-500">Set by the player count picked below, under Map.</p>
-          ) : (
-            <div className="flex gap-4">
-              <label className="flex flex-1 flex-col gap-1 text-sm text-neutral-400">
-                Min players
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  value={draftMinPlayersInput}
-                  onChange={(e) => setDraftMinPlayersInput(e.target.value)}
-                  className={`rounded-md border bg-neutral-900 px-3 py-2 text-neutral-100 ${
-                    draftMinPlayersValid ? 'border-neutral-700' : 'border-red-500'
-                  }`}
-                />
-              </label>
-              <label className="flex flex-1 flex-col gap-1 text-sm text-neutral-400">
-                Max players
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  value={draftMaxPlayersInput}
-                  onChange={(e) => setDraftMaxPlayersInput(e.target.value)}
-                  className={`rounded-md border bg-neutral-900 px-3 py-2 text-neutral-100 ${
-                    draftMaxPlayersValid && draftMaxPlayers >= draftMinPlayers && draftMaxPlayers >= players.length
-                      ? 'border-neutral-700'
-                      : 'border-red-500'
-                  }`}
-                />
-              </label>
-            </div>
-          )}
-          {draftMapPoolLocked && <p className="text-xs text-neutral-500">Locked to {draftMaxPlayers} players by the selected map.</p>}
+          <div className="flex gap-4">
+            <label className="flex flex-1 flex-col gap-1 text-sm text-neutral-400">
+              Min players
+              <input
+                type="number"
+                inputMode="numeric"
+                value={draftMinPlayersInput}
+                onChange={(e) => setDraftMinPlayersInput(e.target.value)}
+                className={`rounded-md border bg-neutral-900 px-3 py-2 text-neutral-100 ${
+                  draftMinPlayersValid ? 'border-neutral-700' : 'border-red-500'
+                }`}
+              />
+            </label>
+            <label className="flex flex-1 flex-col gap-1 text-sm text-neutral-400">
+              Max players
+              <input
+                type="number"
+                inputMode="numeric"
+                value={draftMaxPlayersInput}
+                onChange={(e) => setDraftMaxPlayersInput(e.target.value)}
+                className={`rounded-md border bg-neutral-900 px-3 py-2 text-neutral-100 ${
+                  draftMaxPlayersValid && draftMaxPlayers >= draftMinPlayers && draftMaxPlayers >= players.length
+                    ? 'border-neutral-700'
+                    : 'border-red-500'
+                }`}
+              />
+            </label>
+          </div>
           {draftPlayerCountError && <p className="text-sm text-red-400">{draftPlayerCountError}</p>}
 
           <div>
-            <h3 className="mb-2 text-sm font-medium text-neutral-400">Game length</h3>
-            <GameLengthSelector
-              value={draftSettings.gameLength}
-              onChange={(gameLength) => setDraftSettings({ ...draftSettings, gameLength })}
+            <h3 className="mb-2 text-sm font-medium text-neutral-400">Game options</h3>
+            <GameOptionsEditor
+              value={normalizeGameOptions(draftSettings.gameOptions)}
+              onChange={(gameOptions) => setDraftSettings({ ...draftSettings, gameOptions })}
             />
-          </div>
-
-          <div>
-            <h3 className="mb-2 text-sm font-medium text-neutral-400">Variants</h3>
-            <div className="flex flex-col gap-3 rounded-md border border-neutral-800 p-3">
-              <MapModeSelector
-                mode={draftMapMode}
-                onModeChange={(mode) => {
-                  setDraftMapMode(mode)
-                  setDraftSettings((prev) => prev && { ...prev, mapPoolRandomAtStart: mode === 'blind', soloBuildMap: mode === 'buildAlone', mapTemplateId: null })
-                }}
-                initialPlayerCount={draftMaxPlayersValid ? draftMaxPlayers : 4}
-                mapChoice={draftMapChoice}
-                onMapChoiceChange={(choice) => {
-                  // Functional updater (not a spread of the `draftSettings`
-                  // closed over at render time): this fires asynchronously,
-                  // after pickRandomMapFromPool resolves, by which point a
-                  // sibling render (e.g. a mode switch) may have already
-                  // applied its own update — spreading a stale snapshot
-                  // here would silently revert that.
-                  setDraftSettings((prev) => prev && { ...prev, mapPoolBoard: choice?.board ?? null, mapPoolMapId: choice?.mapId ?? null })
-                  if (choice) {
-                    setDraftMinPlayersInput(String(choice.playerCount))
-                    setDraftMaxPlayersInput(String(choice.playerCount))
-                  }
-                }}
-                soloBuilderSelection={draftSettings.soloBuilderSelection}
-                onSoloBuilderSelectionChange={(soloBuilderSelection) =>
-                  setDraftSettings((prev) => prev && { ...prev, soloBuilderSelection })
-                }
-                soloBuilderUnitOrder={draftSettings.soloBuilderUnitOrder}
-                onSoloBuilderUnitOrderChange={(soloBuilderUnitOrder) =>
-                  setDraftSettings((prev) => prev && { ...prev, soloBuilderUnitOrder })
-                }
-              />
-              <details>
-                <summary className="cursor-pointer text-sm font-medium text-neutral-400">Tales</summary>
-                <div className="mt-3">
-                  <TaleSelector
-                    value={draftSettings.activeTaleIds}
-                    onChange={(activeTaleIds) => setDraftSettings({ ...draftSettings, activeTaleIds })}
-                  />
-                </div>
-              </details>
-            </div>
           </div>
 
           <div className="flex gap-2">

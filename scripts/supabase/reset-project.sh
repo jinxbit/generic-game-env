@@ -19,24 +19,17 @@
 # be the only source of truth.
 #
 # WHAT IT DESTROYS: everything in `public` — games, players, game_state,
-# profiles (including `is_admin`, which 0017_admin_delete_any_game.sql says
-# is granted by hand and is therefore NOT restored by a db push), chat,
-# push_subscriptions, map_pool. Also clears the migration history so every
-# migration re-applies.
-#
-# `map_pool` is the one table here holding work a person did by hand that
-# nothing can regenerate (src/pages/MapBuilderPage.tsx), so
-# rebuild-preproduction.yml exports it with ./map-pool.sh before calling this
-# and imports it back afterwards. This script itself makes no exception for
-# it — it drops the schema, whole.
+# profiles (including `is_admin`, which is granted by hand — see the
+# profiles section of 0001_baseline.sql — and is therefore NOT restored by a
+# db push), chat, push_subscriptions. Also clears the migration history so
+# every migration re-applies.
 #
 # WHAT IT LEAVES ALONE: the `auth` schema (accounts, identities, sessions)
 # unless WIPE_AUTH_USERS=1, `storage`, and the `supabase_realtime`
 # publication itself. Dropping the tables removes them from that publication;
 # the migrations re-add them idempotently on the way back up
-# (0001_init_schema.sql, 0025_game_state_meta.sql, 0031_chat_messages.sql all
-# guard their `alter publication` with a `not exists` check), so Realtime
-# comes back without manual help.
+# (0001_baseline.sql guards its `alter publication` with a `not exists`
+# check), so Realtime comes back without manual help.
 #
 # Required env:
 #   SUPABASE_PROJECT_ID              project ref to reset (the api subdomain)
@@ -105,7 +98,6 @@ select jsonb_build_object(
   'players',            (select count(*) from public.players),
   'game_state',         (select count(*) from public.game_state),
   'profiles',           (select count(*) from public.profiles),
-  'maps',               (select count(*) from public.map_pool),
   'admins',             (select count(*) from public.profiles where is_admin),
   'migrations_applied', (select count(*) from supabase_migrations.schema_migrations),
   'realtime_tables',    (select count(*) from pg_publication_tables where pubname = 'supabase_realtime'),
@@ -143,7 +135,7 @@ alter default privileges in schema public grant all on functions to postgres, an
 alter default privileges in schema public grant all on sequences to postgres, anon, authenticated, service_role;
 
 -- Clearing the history is what makes \`supabase db push\` re-apply everything.
--- Without it the CLI believes all 36 migrations are already applied, pushes
+-- Without it the CLI believes every migration is already applied, pushes
 -- nothing, and leaves an empty schema behind — the failure mode this whole
 -- script exists to avoid.
 delete from supabase_migrations.schema_migrations;"

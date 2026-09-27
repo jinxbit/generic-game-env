@@ -1,73 +1,40 @@
-// Closes the last out-of-scope gap in RULE_ENFORCEMENT_PLAN.md's model
-// (0026_rule_enforcement_flag.sql's INSERT comment; discussed at length on
-// issue #519, which surfaced it via a *different* bug — #524's lobby-roster
-// race — that this same gap made permanent for the affected room): for a
-// ruleEnforcementEnabled game, genesis (the game_state INSERT, and the
-// games.status flip to 'active' that follows it) was still built and
-// written entirely by whichever client clicked Start, with no server check
-// at all — unlike every action after it. This function moves that one
-// remaining direct write server-side, mirroring apply-action/undo-action/
-// redo-action's shape: it re-fetches the roster straight from the DB (never
-// a client-supplied one — a stale client-held `players` snapshot was
-// exactly #519/#524's bug), calls the same shared buildGenesisState, and
-// writes the result under a service-role client.
-// 0029_start_game_edge_function.sql blocks the matching direct client
-// writes (`game_state` INSERT, `games`' 'lobby' -> 'active' transition) for
-// an enforced game, so this function is now the only legitimate way to
-// start one — see that migration for why the restriction lives in the
-// status-transition trigger rather than a plain RLS policy.
+// Starts a rule-enforced game server-side: re-fetches the roster straight
+// from the DB (never a client-supplied one — a stale client-held `players`
+// snapshot could otherwise build genesis for the wrong roster), builds
+// genesis with the same shared buildGenesisState the client and the other
+// functions use, and writes it under a service-role client. The baseline
+// migration blocks the matching direct client writes (the `game_state`
+// INSERT, and `games`' 'lobby' -> 'active' transition in the
+// `enforce_game_status_transition` trigger) for an enforced game, so this is
+// the only legitimate way to start one.
 //
-// Non-enforced games are completely untouched: gameApi.ts's
-// startGameFromLobby() still does this exact sequence client-side for them
-// (see its own doc comment) — this function rejects a game that isn't
-// ruleEnforcementEnabled, rather than silently handling it too, so there is
-// only ever one code path responsible for a given game's Start.
+// Non-enforced games are untouched: gameApi.ts's startGameFromLobby() does
+// the same sequence client-side for them, and this function rejects a game
+// that isn't ruleEnforcementEnabled, so there's only ever one code path
+// responsible for a given game's Start.
+//
+// A game that needs randomness at setup must roll it here (and in
+// startGameFromLobby), persist it into `games.settings`, and only then build
+// genesis — buildGenesisState must stay a deterministic function of the row.
 //
 // Request body: `{ gameId: string }`. Idempotent past the point a
-// `game_state` row exists — same no-op guard startGameFromLobby's own
-// insertGameState uses — a retry after a prior call inserted genesis but
-// failed before flipping `games.status` just (re)flips status instead of
-// erroring.
+// `game_state` row exists: a retry after a prior call inserted genesis but
+// failed before flipping `games.status` just (re)flips status.
 import { canStartGame } from '../../../src/lib/roomReadiness.ts'
-import { resolveMapPoolRandomAtStart, resolveSoloBuildMap } from '../../../src/lib/gameGenesis.ts'
 import { compressGameStateForStorage } from '../../../src/lib/gameStateCompression.ts'
-import type { GameRow, GameSettings, MapPoolRow, PlayerRow } from '../../../src/lib/dbTypes.ts'
+import type { GameRow, PlayerRow } from '../../../src/lib/dbTypes.ts'
 import { buildGenesisState, corsHeaders, getCallerUserId, jsonResponse, serviceRoleClient } from '../_shared/gameEnforcement.ts'
-import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 
 interface StartGameRequest {
   gameId: string
 }
 
-/** Server-side equivalent of mapPoolApi.ts's pickRandomMapFromPool — not imported directly since that module pulls in the browser `supabase` singleton (../supabase.ts), which isn't constructible in the Edge Runtime (see gameEnforcement.ts's own doc comment on why this file's functions re-query tables directly instead of importing gameApi.ts/mapPoolApi.ts wholesale). */
-async function pickRandomMapFromPool(supabase: SupabaseClient, playerCount: number): Promise<MapPoolRow | null> {
-  const { data, error } = await supabase.from('map_pool').select().eq('player_count', playerCount)
-  if (error) throw error
-  const maps = (data ?? []) as MapPoolRow[]
-  if (maps.length === 0) return null
-  return maps[Math.floor(Math.random() * maps.length)]
-}
-
-/** Persists a resolved settings pick (map pool / solo build) the same way gameApi.ts's updateGameSettings does, and returns the game row with that pick applied so the rest of this request keeps using the up-to-date value. */
-async function persistSettings(supabase: SupabaseClient, game: GameRow, settings: GameSettings): Promise<GameRow> {
-  const { error } = await supabase.from('games').update({ settings }).eq('id', game.id)
-  if (error) throw error
-  return { ...game, settings }
-}
-
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
-  // issue #519's follow-up report: a caller who hits an unexpected server
-  // error here (a DB error, a malformed settings row, ...) got back
-  // Deno's own unhandled-rejection response instead of one of this file's
-  // `jsonResponse` calls — no `{ok:false, error}` body for gameApi.ts's
-  // `invokeStartGame` to parse, so the client fell back to supabase-js's
-  // generic "Edge Function returned a non-2xx status code" with the real
-  // reason lost. This mirrors that parsing contract for the one failure
-  // mode that wasn't going through it yet, so any future exception here is
-  // at least visible to the player (and to `context.json()`'s parser)
-  // instead of being swallowed into a message with no diagnostic value.
+  // An unexpected server error (a DB error, a malformed settings row, ...)
+  // would otherwise surface as Deno's own unhandled-rejection response, with
+  // no `{ok:false, error}` body for gameApi.ts's `invokeStartGame` to parse.
   try {
     return await handleStartGame(req)
   } catch (err) {
@@ -92,10 +59,10 @@ async function handleStartGame(req: Request): Promise<Response> {
   const { data: game, error: gameError } = await supabase.from('games').select().eq('id', gameId).maybeSingle()
   if (gameError) throw gameError
   if (!game) return jsonResponse(404, { ok: false, error: 'Game not found.' })
-  let gameRow = game as GameRow
+  const gameRow = game as GameRow
 
-  // Mirrors 0008_room_lifecycle.sql's "room owner can update their game" RLS
-  // and LobbyPage.tsx's own `isCreator` gate — starting a room is an Owner
+  // Mirrors the "room owner can update their game" RLS policy and
+  // LobbyPage.tsx's own `isCreator` gate — starting a room is an Owner
   // action, same as canceling/deleting it. No admin override: nothing else
   // in the room-lifecycle model gives an admin that privilege either.
   if (gameRow.created_by !== callerUserId) {
@@ -123,21 +90,6 @@ async function handleStartGame(req: Request): Promise<Response> {
 
     if (!canStartGame(gameRow, players)) {
       return jsonResponse(409, { ok: false, error: 'This room changed since you loaded it — refresh and try again.' })
-    }
-
-    // "Random saved map at start" (issue #166) / "Build alone" (issue #243):
-    // same resolve-then-persist reasoning as startGameFromLobby's client-side
-    // equivalent — buildGenesisState must stay a synchronous, deterministic
-    // function of the game row alone, so a random pick has to be rolled and
-    // locked in here, before it's called.
-    if (gameRow.settings.mapPoolRandomAtStart && !gameRow.settings.mapPoolBoard) {
-      const picked = await pickRandomMapFromPool(supabase, players.length)
-      const settings = resolveMapPoolRandomAtStart(gameRow.settings, picked)
-      if (settings !== gameRow.settings) gameRow = await persistSettings(supabase, gameRow, settings)
-    }
-    if (gameRow.settings.soloBuildMap) {
-      const settings = resolveSoloBuildMap(gameRow.settings, players)
-      if (settings !== gameRow.settings) gameRow = await persistSettings(supabase, gameRow, settings)
     }
 
     const genesis = buildGenesisState(gameRow, players)

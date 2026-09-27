@@ -132,7 +132,7 @@ a restructuring of work.
 | --- | --- | --- |
 | Branch | `main` | `production` |
 | GitHub Environment | `Preview` | `production` |
-| Supabase project | new, e.g. `rise-and-fall-staging` | the existing one |
+| Supabase project | new, e.g. `game-platform-staging` | the existing one |
 | Frontend | Vercel Preview env, with a stable branch domain | Vercel Production |
 | Data | disposable; seeded on demand | real games |
 | Smoke test | on every deploy | on every deploy, and nightly |

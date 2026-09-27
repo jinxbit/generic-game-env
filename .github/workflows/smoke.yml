@@ -159,7 +159,7 @@ jobs:
     # in a way that looks like a product bug. On 2026-09-13 smoke run #42 sat
     # queued for ~56 minutes waiting for a runner, started at 05:14, and
     # overlapped deploy #61 (05:13:58-05:15:15) against the same Preview
-    # project: at 05:14:55 that deploy applied 0031_chat_messages.sql, whose
+    # project: at 05:14:55 that deploy applied the chat migration, whose
     # `alter publication supabase_realtime add table` reshapes the very
     # publication the hidden-information check's subscription is listening to,
     # and then redeployed all nine Edge Functions under it. The check failed

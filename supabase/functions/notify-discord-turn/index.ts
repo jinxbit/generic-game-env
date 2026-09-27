@@ -33,7 +33,9 @@
 // a plain name in a webhook message doesn't actually notify anyone.
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
-import { type GameStateRow, justFinished, newlyPendingActorIds, phaseLabel } from '../_shared/turnNotify.ts'
+import { GAME_TITLE } from '../../../src/game/display.ts'
+import { discordUserIdFromIdentities, turnNotificationMessage } from '../../../src/lib/discordNotify.ts'
+import { type GameStateRow, justFinished, newlyPendingActorIds, phaseLabel, turnNumber } from '../_shared/turnNotify.ts'
 
 // --- Discord ---
 
@@ -55,31 +57,9 @@ function gameUrlFor(roomCode: string): string | null {
 
 const WEBHOOK_URL_PATTERN = /^https:\/\/(?:discord\.com|discordapp\.com)\/api\/webhooks\/\d+\/[\w-]+$/
 
-// Kept in sync with src/lib/discordNotify.ts's turnNotificationMessage — see
-// that file's doc comment for why this Edge Function can't just import it.
-function turnNotificationMessage(params: {
-  displayName: string
-  discordUserId: string | null
-  roomName: string
-  roomCode: string
-  phase: string
-  round: number | null
-  gameUrl: string | null
-}): string {
-  const roundText = params.round === null ? '' : ` (Round ${params.round})`
-  // With a game link, the room name itself becomes the link instead of pasting
-  // the raw URL below — without one, fall back to the room code on its own line.
-  const roomName = params.gameUrl ? `[${params.roomName}](${params.gameUrl})` : params.roomName
-  const fallback = params.gameUrl ? '' : `\nRoom \`${params.roomCode}\``
-  const mention = params.discordUserId ? `<@${params.discordUserId}>` : `**${params.displayName}**`
-  return `**Rise & Fall** — ${mention}, it's your turn to **${params.phase}** in **${roomName}**${roundText}.${fallback}`
-}
-
-// Kept in sync with src/lib/discordNotify.ts's discordUserIdFromIdentities —
-// see that file's doc comment for why this Edge Function can't just import it.
-function discordUserIdFromIdentities(identities: { provider: string; id: string }[] | null | undefined): string | null {
-  return identities?.find((identity) => identity.provider === 'discord')?.id ?? null
-}
+// The message itself (turnNotificationMessage) and the Discord-ID lookup
+// (discordUserIdFromIdentities) come from src/lib/discordNotify.ts, shared
+// with the "Send test" button, so the two can't drift apart.
 
 // --- Logging ---
 //
@@ -89,8 +69,8 @@ function discordUserIdFromIdentities(identities: { provider: string; id: string 
 // and what Discord answered. Before this the function logged nothing: a
 // skipped ping returned 200 with its reason only in the response body, which
 // the invocation list doesn't show, and a Discord rejection (429 rate limit,
-// 404 deleted webhook) was swallowed outright — so the missed action-phase
-// pings of todo.md #150 were invisible (todo.md #151). Never log a webhook
+// 404 deleted webhook) was swallowed outright — so missed pings were
+// invisible. Never log a webhook
 // URL: its token is what lets anyone post into that player's channel.
 interface SendOutcome {
   playerId?: string
@@ -103,7 +83,7 @@ interface SendOutcome {
 
 interface InvocationLog {
   gameId?: string
-  phase?: string
+  phase?: string | null
   round?: number | null
   nowPending?: string[]
   sends?: SendOutcome[]
@@ -156,7 +136,7 @@ async function handleGameFinished(supabase: SupabaseClient, gameId: string, log:
       players.map((p: { user_id: string }) => p.user_id),
     )
 
-  const message = `**Rise & Fall** — ${roomText(game.name, game.room_code, gameUrlFor(game.room_code))} has finished!`
+  const message = `**${GAME_TITLE}** — ${roomText(game.name, game.room_code, gameUrlFor(game.room_code))} has finished!`
   const webhookByUserId = new Map(((profiles ?? []) as { user_id: string; discord_webhook_url: string | null }[]).map((p) => [p.user_id, p.discord_webhook_url]))
   log.sends = await Promise.all(
     (players as { user_id: string }[]).map(async (player) => ({
@@ -227,7 +207,7 @@ async function handle(req: Request, log: InvocationLog): Promise<Response> {
 
   const gameUrl = gameUrlFor(game.room_code)
   const phase = phaseLabel(payload.record.state)
-  const round = payload.record.state.status === 'active' ? payload.record.state.turn : null
+  const round = turnNumber(payload.record.state)
   log.phase = phase
   log.round = round
 

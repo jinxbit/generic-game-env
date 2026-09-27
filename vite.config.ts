@@ -53,13 +53,12 @@ export default defineConfig({
       registerType: 'autoUpdate',
       devOptions: { enabled: false },
       manifest: {
-        // "Web" distinguishes this installed PWA from the official digital
-        // implementation the app links out to (see SupportBanner.tsx) —
-        // otherwise two installed apps both show as bare "Rise & Fall"
-        // (issue #633).
-        name: 'Rise & Fall Web',
-        short_name: 'Rise & Fall Web',
-        description: 'A turn-based strategy game of empires rising and falling.',
+        // Mirrors GAME_TITLE/GAME_TAGLINE in src/game/display.ts (not
+        // imported: that module pulls in the game's rules, which this Node
+        // config shouldn't compile) — update both when swapping the game.
+        name: 'Unique Pick',
+        short_name: 'Unique Pick',
+        description: 'Pick a number nobody else picks. A tiny example game for this platform.',
         start_url: '/',
         display: 'standalone',
         background_color: '#0a0a0a',

@@ -34,21 +34,9 @@ const OTHER = 'bob-user-id'
 
 function settings(overrides: Partial<GameSettings> = {}): GameSettings {
   return {
-    mapTemplateId: 'classic',
-    mapPoolBoard: null,
-    mapPoolMapId: null,
-    mapPoolRandomAtStart: false,
-    soloBuildMap: false,
-    soloBuilderSelection: 'owner',
-    soloBuilderId: null,
-    soloBuilderUnitOrder: 'last',
-    soloBuilderTurnOrder: null,
     skipHotseatPassGate: false,
     ruleEnforcementEnabled: false,
     hiddenInformationEnabled: false,
-    lockRevealedInformationEnabled: false,
-    activeTaleIds: [],
-    gameLength: 4,
     ...overrides,
   }
 }
@@ -98,7 +86,7 @@ function seedMeta(stack: ProductionStack, gameId: string, status: 'active' | 'co
   stack.db.seed('game_state_meta', {
     game_id: gameId,
     status,
-    round_phase: status === 'completed' ? null : 'actions',
+    phase: status === 'completed' ? null : 'pick',
     turn: 1,
     version: 1,
     pending_player_ids: [],
@@ -162,7 +150,7 @@ describe('listMyGames (issue #687)', () => {
 
     const active = entries.find((e) => e.game.id === 'active-1')!
     expect(active.stateSummary?.status).toBe('active')
-    expect(active.stateSummary?.roundPhase).toBe('actions')
+    expect(active.stateSummary?.phase).toBe('pick')
     const lobby = entries.find((e) => e.game.id === 'lobby-1')!
     expect(lobby.stateSummary).toBeNull()
     const canceled = entries.find((e) => e.game.id === 'canceled-1')!

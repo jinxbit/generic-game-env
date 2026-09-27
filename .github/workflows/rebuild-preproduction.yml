@@ -155,28 +155,6 @@ jobs:
           WIPE_AUTH_USERS: ${{ inputs.wipe_auth_users && '1' || '' }}
         run: bash scripts/supabase/reset-project.sh
 
-      # map_pool is the only table here holding something a person made by hand
-      # that nothing can regenerate (src/pages/MapBuilderPage.tsx). The drop
-      # below takes it with everything else, so it leaves first and comes back
-      # after the migrations do. Uploaded as an artifact too: if the import at
-      # the end fails for any reason, the maps are still recoverable from the
-      # run rather than gone.
-      - name: Export the saved maps before dropping anything
-        if: ${{ !inputs.dry_run }}
-        env:
-          MODE: export
-        run: |
-          bash scripts/supabase/map-pool.sh > map-pool-backup.json
-          echo "Exported $(jq 'length' map-pool-backup.json) saved map(s)."
-
-      - name: Keep the exported maps as an artifact
-        if: ${{ !inputs.dry_run }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: map-pool-backup
-          path: map-pool-backup.json
-          retention-days: 30
-
       - name: Drop the public schema and clear the migration history
         if: ${{ !inputs.dry_run }}
         env:
@@ -188,6 +166,7 @@ jobs:
         run: supabase link --project-ref "$SUPABASE_PROJECT_ID"
 
       # With the history cleared above, this re-applies every migration in
+      # supabase/migrations/ (the baseline, plus anything added since) in
       # order. If it pushes nothing, the history was not cleared and the
       # schema is empty — which the verify step below is there to catch.
       - name: Re-apply all migrations
@@ -205,17 +184,6 @@ jobs:
       # §4): chat is on in pre-production automatically, so it does not need a
       # hand-run statement after every reset — which is exactly the situation
       # this workflow creates.
-      # After db push, so the table exists again. Idempotent by
-      # unique (player_count, board_key), and a no-op that says so if
-      # wipe_auth_users left no account to own the rows — the artifact above is
-      # the recovery path in that case.
-      - name: Restore the saved maps
-        if: ${{ !inputs.dry_run }}
-        env:
-          MODE: import
-          MAPS_FILE: map-pool-backup.json
-        run: bash scripts/supabase/map-pool.sh
-
       - name: Enable chat
         if: ${{ !inputs.dry_run }}
         continue-on-error: true
@@ -260,7 +228,7 @@ jobs:
               echo
               echo "### Still to do by hand"
               echo
-              echo "- **Re-grant admin.** \`profiles.is_admin\` is wiped by the reset and 0017_admin_delete_any_game.sql grants it by hand, not by migration. In the SQL editor:"
+              echo "- **Re-grant admin.** \`profiles.is_admin\` is wiped by the reset and is granted by hand, not by migration (see the profiles section of 0001_baseline.sql). In the SQL editor:"
               echo '  ```sql'
               echo "  insert into public.profiles (user_id, is_admin)"
               echo "  values ('<your-auth-user-id>', true)"

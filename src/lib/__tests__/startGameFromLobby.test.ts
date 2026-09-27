@@ -27,6 +27,7 @@ vi.mock('../supabase', () => ({
 
 const { createGame, joinGame, markReady, removePlayer, startGameFromLobby, getGameState } = await import('../gameApi.ts')
 const { createProductionStack } = await import('../../test/supabaseStack/index.ts')
+const { game: engineGame } = await import('../../engine/game.ts')
 type ProductionStack = Awaited<ReturnType<typeof createProductionStack>>
 
 const ALICE = 'alice-user-id'
@@ -209,13 +210,13 @@ describe('startGameFromLobby (ruleEnforcementEnabled)', () => {
   // instead — no `{ok:false, error}` body for gameApi.ts's `invokeStartGame`
   // to parse, so the client fell back to supabase-js's generic "Edge
   // Function returned a non-2xx status code" with the real reason lost.
-  // Forces a genuine exception (buildGenesisState's `throw` for an unknown
-  // map template id) to check the function's top-level try/catch turns it
-  // into a parseable error instead.
+  // Forces a genuine exception (the game's own setup throwing while
+  // start-game builds genesis) to check the function's top-level try/catch
+  // turns it into a parseable error instead.
   it('turns an unexpected server-side exception into a parseable error instead of an opaque one', async () => {
     currentClient = stack.clientFor(ALICE)
     const { game } = await createGame({
-      name: 'Bad template room',
+      name: 'Broken setup room',
       playMode: 'live',
       userId: ALICE,
       displayName: 'Alice',
@@ -223,11 +224,14 @@ describe('startGameFromLobby (ruleEnforcementEnabled)', () => {
       minPlayers: 1,
       maxPlayers: 2,
       ruleEnforcementEnabled: true,
-      mapTemplateId: 'no-such-template',
     })
 
+    const setup = vi.spyOn(engineGame, 'setup').mockImplementation(() => {
+      throw new Error('Setup exploded')
+    })
     const result = await stack.startGame(ALICE, game.id)
-    expect(result).toMatchObject({ ok: false, status: 500, error: 'Unknown map template: no-such-template' })
+    setup.mockRestore()
+    expect(result).toMatchObject({ ok: false, status: 500, error: 'Setup exploded' })
     expect(await getGameState(game.id)).toBeNull()
   })
 

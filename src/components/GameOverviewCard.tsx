@@ -21,7 +21,7 @@ export interface GameOverviewCardProps {
   isJoinable?: boolean
   updatedAt: string
   action?: ReactNode
-  /** Config summary (issue #204; scores dropped as of issue #441 — see gameCardView.ts's GameCardSummary/buildGameCardSummary). Omitted entirely skips this section. */
+  /** Config summary (see gameCardView.ts's GameCardSummary/buildGameCardSummary). Omitted entirely skips this section. */
   summary?: GameCardSummary
   onOpen: () => void
 }
@@ -88,13 +88,12 @@ export function GameOverviewCard({
 
 /**
  * Renders whichever fields of `summary` apply to the game's current phase
- * (see GameCardSummary's doc comment for which fields are populated when) —
- * issue #204's per-phase config summary.
+ * (see GameCardSummary's doc comment for which fields are populated when).
  */
 function GameCardSummaryLines({ summary, isFinished }: { summary: GameCardSummary; isFinished: boolean }) {
-  const hasPregameInfo = summary.playerRange !== null || summary.mapBuildStyle !== null
+  const hasPregameInfo = summary.playerRange !== null || summary.optionsSummary !== null
 
-  if (!hasPregameInfo && summary.moduleNames.length === 0 && summary.roundNumber === null) {
+  if (!hasPregameInfo && summary.turnLabel === null) {
     return null
   }
 
@@ -103,12 +102,11 @@ function GameCardSummaryLines({ summary, isFinished }: { summary: GameCardSummar
       {hasPregameInfo && (
         <span>
           {summary.playerRange}
-          {summary.playerRange && summary.mapBuildStyle && ' · '}
-          {summary.mapBuildStyle}
+          {summary.playerRange && summary.optionsSummary && ' · '}
+          {summary.optionsSummary}
         </span>
       )}
-      {summary.moduleNames.length > 0 && <span>Modules: {summary.moduleNames.join(', ')}</span>}
-      {!isFinished && summary.roundNumber !== null && <span>Round {summary.roundNumber}</span>}
+      {!isFinished && summary.turnLabel !== null && <span>{summary.turnLabel}</span>}
     </div>
   )
 }

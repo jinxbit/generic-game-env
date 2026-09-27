@@ -35,7 +35,6 @@ vi.mock('../supabase', () => ({
 
 const { subscribeToGameState } = await import('../gameApi.ts')
 const { createProductionStack } = await import('../../test/supabaseStack/index.ts')
-const { nextLegalAction, resolveGameContent } = await import('../../test/supabaseStack/sampleGame.ts')
 type ProductionStack = Awaited<ReturnType<typeof createProductionStack>>
 
 const GAME_ID = '3f1c2d4e-0000-4000-8000-000000000646'
@@ -44,15 +43,6 @@ const BOB = 'auth-user-bob'
 
 function settings(): GameSettings {
   return {
-    mapTemplateId: 'classic',
-    mapPoolBoard: null,
-    mapPoolMapId: null,
-    mapPoolRandomAtStart: false,
-    soloBuildMap: false,
-    soloBuilderSelection: 'owner',
-    soloBuilderId: null,
-    soloBuilderUnitOrder: 'last',
-    soloBuilderTurnOrder: null,
     skipHotseatPassGate: false,
     ruleEnforcementEnabled: true,
     // Kept off so this reads through the plain game_state table (getGameState)
@@ -60,9 +50,6 @@ function settings(): GameSettings {
     // skip decision doesn't depend on which one a game uses, and this keeps
     // the test's own request-counting simple.
     hiddenInformationEnabled: false,
-    lockRevealedInformationEnabled: false,
-    activeTaleIds: [],
-    gameLength: 3,
   }
 }
 
@@ -140,12 +127,10 @@ describe('subscribeToGameState (issue #646)', () => {
     stack.dispose()
   })
 
-  /** Plays one legal action (board setup's first tile placement, on a fresh genesis) through the real apply-action Edge Function, returning the version it bumped to. */
+  /** Plays one legal action (Alice's first-round pick, on a fresh genesis) through the real apply-action Edge Function, returning the version it bumped to. */
   async function playOneMove(): Promise<number> {
-    const genesis = buildGenesisState(gameRow(), PLAYERS)
-    const content = resolveGameContent(genesis)
-    const action = nextLegalAction(genesis, content)!
-    const result = await stack.applyAction(USER_ID_BY_SEAT[action.playerId ?? '']!, GAME_ID, action)
+    const action = { type: 'PICK_NUMBER' as const, playerId: 'seat-alice', value: 1 }
+    const result = await stack.applyAction(USER_ID_BY_SEAT[action.playerId]!, GAME_ID, action)
     if (!result.ok) throw new Error(`setup failed: ${result.error}`)
     return result.version
   }

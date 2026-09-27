@@ -285,4 +285,4 @@ jobs:
       - name: Skipped (confirmation not given)
         if: ${{ github.event.inputs.confirm != 'YES' }}
         run: |
-          echo "::notice::confirm input was '${{ github.event.inputs.confirm }}', not 'YES' — nothing was generated or deployed. Re-run with confirm=YES when ready. Note: supabase/migrations/0020_push_subscriptions.sql must already be applied (see the Deploy Supabase / Repair Supabase Migration History workflows) before push notifications will work end-to-end."
+          echo "::notice::confirm input was '${{ github.event.inputs.confirm }}', not 'YES' — nothing was generated or deployed. Re-run with confirm=YES when ready. Note: supabase/migrations/0001_baseline.sql (which creates push_subscriptions) must already be applied (see the Deploy Supabase / Repair Supabase Migration History workflows) before push notifications will work end-to-end."

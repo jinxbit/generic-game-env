@@ -8,11 +8,11 @@ import { GameOverviewCard } from '../components/GameOverviewCard'
 import { GoogleSignIn } from '../components/GoogleSignIn'
 import { GuestSignIn } from '../components/GuestSignIn'
 import { Pagination } from '../components/Pagination'
-import { DiscordCommunityBanner, SupportBanner } from '../components/SupportBanner'
 import { useAuth } from '../hooks/useAuth'
 import { useDisplayName } from '../hooks/useDisplayName'
 import { useIsAdmin } from '../hooks/useIsAdmin'
 import { useRefetchOnVisible } from '../hooks/useRefetchOnVisible'
+import { GAME_TAGLINE, GAME_TITLE } from '../game/display'
 import { isGuestAuthAllowed } from '../lib/auth'
 import { getGameByRoomCode, listAllRooms } from '../lib/gameApi'
 import { buildGameCardSummary, describeGamePhase, formatFinishedAt, formatUpdatedAt, latestUpdatedAt } from '../lib/gameCardView'
@@ -47,7 +47,7 @@ export function HomePage() {
   const [error, setError] = useState<AppError | null>(null)
   const [busy, setBusy] = useState(false)
 
-  // All rooms, public and private (issue #363) — a private room's
+  // All rooms, public and private — a private room's
   // not-started/lobby state is filtered back out below, before rendering,
   // since only the room's owner/players or the room's own link should ever
   // surface that.
@@ -59,9 +59,8 @@ export function HomePage() {
   const [inProgressPage, setInProgressPage] = useState(0)
   const [finishedPage, setFinishedPage] = useState(0)
 
-  // The header's hamburger menu (issue #625) — holds the links that used to
-  // sit directly in the header (Public rooms, Map builder, and the two
-  // admin-only links), the same click-outside/Escape pattern as GamePage's.
+  // The header's hamburger menu — holds Public rooms and the admin-only
+  // links, the same click-outside/Escape pattern as GamePage's.
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -117,9 +116,8 @@ export function HomePage() {
   if (!session) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-8 text-center">
-        <h1 className="text-3xl font-semibold">Rise &amp; Fall</h1>
-        <DiscordCommunityBanner />
-        <SupportBanner />
+        <h1 className="text-3xl font-semibold">{GAME_TITLE}</h1>
+        <p className="max-w-sm text-neutral-300">{GAME_TAGLINE}</p>
         <p className="max-w-sm text-neutral-400">
           Sign in with Discord, Google, or an email and password to create or join a game with your friends.
         </p>
@@ -218,24 +216,6 @@ export function HomePage() {
                 <Link to="/public" role="menuitem" onClick={() => setMenuOpen(false)} className="px-3 py-2 text-left hover:bg-neutral-800">
                   Public rooms
                 </Link>
-                <Link
-                  to="/map-builder"
-                  role="menuitem"
-                  onClick={() => setMenuOpen(false)}
-                  className="px-3 py-2 text-left hover:bg-neutral-800"
-                >
-                  Map builder
-                </Link>
-                {isAdmin && (
-                  <Link
-                    to="/admin/maps"
-                    role="menuitem"
-                    onClick={() => setMenuOpen(false)}
-                    className="px-3 py-2 text-left hover:bg-neutral-800"
-                  >
-                    Saved maps
-                  </Link>
-                )}
                 {isAdmin && (
                   <Link
                     to="/admin/import"
@@ -249,7 +229,7 @@ export function HomePage() {
               </div>
             )}
           </div>
-          <h1 className="text-2xl font-semibold">Rise &amp; Fall</h1>
+          <h1 className="text-2xl font-semibold">{GAME_TITLE}</h1>
         </div>
         <Link to="/profile" className="flex flex-col items-center gap-1 text-sm text-neutral-400 hover:text-neutral-200">
           {avatarUrl && <img src={avatarUrl} alt="" className="h-8 w-8 rounded-full" />}
@@ -262,17 +242,14 @@ export function HomePage() {
 
       {roomEntries === null && !loadError && <div className="text-neutral-400">Loading your games…</div>}
 
-      {/* Wide screens (issue #625) lay the page out as two stacked grid rows
+      {/* Wide screens lay the page out as two stacked grid rows
           instead of one long single column below `xl`:
-          row 1 — banners, then chat (wide, to fit a lot of text);
+          row 1 — the game's tagline, then chat (wide, to fit a lot of text);
           row 2 — your games in progress, then create game + join + rooms not
           started, then games in progress, then finished games. */}
       <div className="flex flex-col gap-8 xl:gap-6">
         <div className="flex flex-col gap-4 xl:grid xl:grid-cols-[1fr_2fr] xl:items-start xl:gap-6">
-          <div className="flex flex-col gap-4">
-            <DiscordCommunityBanner />
-            <SupportBanner />
-          </div>
+          <p className="text-neutral-400">{GAME_TAGLINE}</p>
           <ChatPanel gameId={null} />
         </div>
 

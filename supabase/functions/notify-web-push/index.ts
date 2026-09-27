@@ -19,7 +19,8 @@
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import webpush from 'npm:web-push@3'
-import { type GameStateRow, justFinished, newlyPendingActorIds, phaseLabel } from '../_shared/turnNotify.ts'
+import { GAME_TITLE, TURN_LABEL } from '../../../src/game/display.ts'
+import { type GameStateRow, justFinished, newlyPendingActorIds, phaseLabel, turnNumber } from '../_shared/turnNotify.ts'
 
 interface DatabaseWebhookPayload {
   type: string
@@ -51,7 +52,7 @@ function gameUrlFor(roomCode: string): string {
 //
 // One JSON line per invocation (evt: 'notify_web_push', written by the
 // Deno.serve wrapper below) — notify-discord-turn's twin, see its Logging
-// section and todo.md #151. Never log an endpoint URL: it's a capability
+// section. Never log an endpoint URL: it's a capability
 // anyone can push to. The push service's host (fcm.googleapis.com,
 // updates.push.services.mozilla.com, web.push.apple.com, ...) is enough to
 // tell browsers apart.
@@ -66,7 +67,7 @@ interface SendOutcome {
 
 interface InvocationLog {
   gameId?: string
-  phase?: string
+  phase?: string | null
   round?: number | null
   nowPending?: string[]
   sends?: SendOutcome[]
@@ -96,7 +97,7 @@ async function pushToUsers(supabase: SupabaseClient, userIds: string[], body: st
       try {
         const res = await webpush.sendNotification(
           { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          JSON.stringify({ title: 'Rise & Fall', body, url }),
+          JSON.stringify({ title: GAME_TITLE, body, url }),
         )
         return { userId: sub.user_id, service, result: res.statusCode }
       } catch (err) {
@@ -195,8 +196,10 @@ async function handle(req: Request, log: InvocationLog): Promise<Response> {
 
   const gameUrl = gameUrlFor(game.room_code)
   const phase = phaseLabel(payload.record.state)
-  const round = payload.record.state.status === 'active' ? payload.record.state.turn : null
-  const roundText = round === null ? '' : ` (Round ${round})`
+  const round = turnNumber(payload.record.state)
+  // Same detail format as src/lib/discordNotify.ts's turnNotificationMessage.
+  const details = [round === null ? null : `${TURN_LABEL} ${round}`, phase].filter((part): part is string => !!part)
+  const detailText = details.length > 0 ? ` (${details.join(' · ')})` : ''
   log.phase = phase
   log.round = round
 
@@ -204,7 +207,7 @@ async function handle(req: Request, log: InvocationLog): Promise<Response> {
   if (playersError) return new Response(`players lookup failed: ${playersError.message}`, { status: 500 })
   if (!players || players.length === 0) return new Response('no matching players', { status: 200 })
 
-  const body = `It's your turn to ${phase} in ${game.name}${roundText}.`
+  const body = `It's your turn in ${game.name}${detailText}.`
   const pushError = await pushToUsers(
     supabase,
     players.map((p) => p.user_id),

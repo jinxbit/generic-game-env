@@ -1,19 +1,14 @@
-import { beforeAll, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { canonicalJson, hashGameStateView } from '../gameStateHash'
-import { loadProductionGameFixtures } from '../../test/fixtures/productionGames/loadFixtures'
+import { newGame } from '../../engine/__tests__/helpers'
 import type { GameState } from '../../engine/types'
 
-// A real recorded game's genesis, rather than a hand-built GameRow — those
-// drift every time GameSettings grows a field, and this file cares about
-// serialisation, not about room configuration.
-let genesis: GameState
-beforeAll(async () => {
-  const [fixture] = await loadProductionGameFixtures()
-  genesis = fixture.genesis
-})
+// This file cares about serialisation, not about room configuration, so a
+// plain genesis of the example game is enough.
+const genesis: GameState = newGame({ players: 3 })
 
 const entry = (timestamp: string) => ({
-  action: { type: 'PASS_ACTIONS' as const, playerId: 'seat-alice' },
+  action: { type: 'PICK_NUMBER' as const, playerId: 'p1', value: 3 },
   turn: 0,
   timestamp,
 })

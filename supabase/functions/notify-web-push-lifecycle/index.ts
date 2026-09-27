@@ -6,9 +6,9 @@
 // todo.md #100). Structurally identical to notify-discord-lifecycle (see that
 // function's doc comment for the full trigger/dispatch rationale, and
 // notify-web-push's doc comment for why this is a near-duplicate of the
-// Discord version rather than a shared import): Deno Edge Functions can't
-// import the app's Vite-aliased TypeScript sources, and these are small
-// enough that duplicating them beats the ceremony of a shared module.
+// Discord version rather than a shared module): these are small enough that
+// duplicating them beats the ceremony of a shared module. The title comes
+// from src/game/display.ts, like every notify-* function's.
 //
 // Trigger: the same two Database Webhooks as notify-discord-lifecycle
 // (`players` INSERT, `games` UPDATE) can each also target this function — Database Webhooks support multiple targets per
@@ -19,6 +19,7 @@
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import webpush from 'npm:web-push@3'
+import { GAME_TITLE } from '../../../src/game/display.ts'
 
 interface GameRow {
   id: string
@@ -83,7 +84,7 @@ async function notifyPlayers(supabase: SupabaseClient, players: PlayerRow[], bod
       try {
         await webpush.sendNotification(
           { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          JSON.stringify({ title: 'Rise & Fall', body, url }),
+          JSON.stringify({ title: GAME_TITLE, body, url }),
         )
       } catch (err) {
         // A 404/410 means the browser dropped the subscription — clean it up,

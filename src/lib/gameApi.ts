@@ -1,11 +1,10 @@
 import { supabase } from './supabase'
 import { decompressGameStateFromStorage, type StoredGameState } from './gameStateCompression'
 import type { GameStateSummary } from './gameCardView'
-import { buildGenesisState, resolveMapPoolRandomAtStart, resolveSoloBuildMap } from './gameGenesis'
-import { pickRandomMapFromPool } from './mapPoolApi'
+import { buildGenesisState } from './gameGenesis'
 import { canStartGame } from './roomReadiness'
 import { nextSeatIndex } from './seatIndex'
-import { reconstructMapPoolBoardForImport, remapGameSettingsPlayerIds, remapGameStatePlayerIds } from './duplicateGameState'
+import { remapGameStatePlayerIds } from './duplicateGameState'
 import { decodeGameStateExport } from './gameStateExport'
 import type {
   GameRow,
@@ -18,11 +17,9 @@ import type {
 } from './dbTypes'
 import type { MyGameEntry } from './myGamesView'
 import type { PublicRoomEntry } from './publicRoomsView'
-import type { UnitPlateColorOverrides } from './unitColors'
-import { resolveConfirmBeforeRevealingCards } from './cardRevealConfirmation'
 import { resolveChatNotificationsEnabled } from './chatNotificationPreference'
-import { resolveUnitReserveDisplayMode, type UnitReserveDisplayMode } from './unitReserveDisplay'
-import type { Board, GameState as EngineGameState, GameStatus, PlayMode, RoundPhase } from '../engine/types'
+import type { GameState as EngineGameState, GameStatus, PlayMode } from '../engine/types'
+import type { GameOptions } from '../game/types'
 import type { Action } from '../engine/actions'
 import { applyRedactedGameStateDelta, toClientGameState, type RedactedGameState, type RedactedGameStateDelta, type RedactedLoggedAction } from '../engine/redaction'
 import type { InFlightOverlay } from '../engine/inFlightOverlay'
@@ -97,34 +94,7 @@ export async function saveProfileDisplayName(userId: string, displayName: string
 }
 
 /**
- * Reads a user's unit-plate colour overrides (0022_unit_plate_colors.sql),
- * for whichever of the 3 card-zone states they've customized — each `null`
- * (including "no profile row yet") means "use the default" (see
- * resolveUnitPlateColors in lib/unitColors.ts).
- */
-export async function getProfileUnitColors(userId: string): Promise<UnitPlateColorOverrides> {
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('unit_color_hand, unit_color_selected, unit_color_discard')
-    .eq('user_id', userId)
-    .maybeSingle()
-  if (error) throw error
-  return {
-    hand: data?.unit_color_hand ?? null,
-    selected: data?.unit_color_selected ?? null,
-    discard: data?.unit_color_discard ?? null,
-  }
-}
-
-export async function saveProfileUnitColors(userId: string, colors: UnitPlateColorOverrides): Promise<void> {
-  const { error } = await supabase
-    .from('profiles')
-    .upsert({ user_id: userId, unit_color_hand: colors.hand, unit_color_selected: colors.selected, unit_color_discard: colors.discard })
-  if (error) throw error
-}
-
-/**
- * Reads the generic `preferences` JSONB blob (0023_unit_reserve_display.sql,
+ * Reads the generic `preferences` JSONB blob (profiles.preferences,
  * ProfilePreferences) — a missing profile row (never having been written to)
  * collapses to `{}`, same as every individual key inside it being absent.
  */
@@ -148,40 +118,10 @@ async function saveProfilePreferences(userId: string, patch: Partial<ProfilePref
 }
 
 /**
- * Reads a user's unit reserve display preference (issue #346, stored under
- * `preferences.unitReserveDisplay`) — absent (including "no profile row
- * yet") resolves to the default ('remaining'), same null-collapsing pattern
- * as getProfileDisplayName.
- */
-export async function getProfileUnitReserveDisplay(userId: string): Promise<UnitReserveDisplayMode> {
-  const preferences = await getProfilePreferences(userId)
-  return resolveUnitReserveDisplayMode(preferences.unitReserveDisplay)
-}
-
-export async function saveProfileUnitReserveDisplay(userId: string, mode: UnitReserveDisplayMode): Promise<void> {
-  await saveProfilePreferences(userId, { unitReserveDisplay: mode })
-}
-
-/**
- * Reads a user's "confirm before revealing cards" preference (issue #528,
- * stored under `preferences.confirmBeforeRevealingCards`) — absent
- * (including "no profile row yet") resolves to the default (on), same
- * null-collapsing pattern as getProfileUnitReserveDisplay.
- */
-export async function getProfileConfirmBeforeRevealingCards(userId: string): Promise<boolean> {
-  const preferences = await getProfilePreferences(userId)
-  return resolveConfirmBeforeRevealingCards(preferences.confirmBeforeRevealingCards)
-}
-
-export async function saveProfileConfirmBeforeRevealingCards(userId: string, value: boolean): Promise<void> {
-  await saveProfilePreferences(userId, { confirmBeforeRevealingCards: value })
-}
-
-/**
- * Reads a user's "notify me on chat messages" preference (issue #658, stored
- * under `preferences.chatNotificationsEnabled`) — absent (including "no
- * profile row yet") resolves to the default (on, issue #668), same
- * null-collapsing pattern as getProfileConfirmBeforeRevealingCards. Read
+ * Reads a user's "notify me on chat messages" preference (stored under
+ * `preferences.chatNotificationsEnabled`) — absent (including "no profile
+ * row yet") resolves to the default (on), same null-collapsing pattern as
+ * getProfileDisplayName. Read
  * server-side too, by the notify-discord-chat / notify-web-push-chat Edge
  * Functions, via their service-role client.
  */
@@ -195,8 +135,7 @@ export async function saveProfileChatNotificationsEnabled(userId: string, value:
 }
 
 /**
- * Whether this user holds the "delete any game" override (issue #177,
- * 0017_admin_delete_any_game.sql) — `false` covers both "no profile row
+ * Whether this user is a site admin (`profiles.is_admin`) — `false` covers both "no profile row
  * yet" and "profile row with the flag unset", same null-collapsing pattern
  * as getProfileDisplayName. There's no UI to set this; it's assigned
  * directly via SQL, so this is read-only.
@@ -221,7 +160,7 @@ export function generateRoomCode(length = 5): string {
 }
 
 export async function createGame(params: {
-  /** Owner-chosen room name, immutable after creation (see dbTypes.ts's GameRow.name). Trimmed and length-checked here to match 0012_room_name.sql's constraint; the DB is the source of truth. */
+  /** Owner-chosen room name, immutable after creation (see dbTypes.ts's GameRow.name). Trimmed and length-checked here to match the DB's constraint; the DB is the source of truth. */
   name: string
   playMode: PlayMode
   userId: string
@@ -229,33 +168,15 @@ export async function createGame(params: {
   avatarUrl: string | null
   minPlayers?: number
   maxPlayers?: number
-  /** Content id of a pre-made map template (src/content/mapTemplates.json) to skip interactive tile placement, or null/omitted for the usual interactive setup. */
-  mapTemplateId?: string | null
-  /** A board resolved from a randomly-picked map_pool row (see MapModeSelector.tsx), or null/omitted for the usual interactive setup. Mutually exclusive with mapTemplateId in the UI. */
-  mapPoolBoard?: Board | null
-  /** Which map_pool row mapPoolBoard came from, for display only. */
-  mapPoolMapId?: string | null
-  /** "Truly random" map mode — pick a saved map at actual game start instead of now (see GameSettings.mapPoolRandomAtStart). Mutually exclusive with mapTemplateId/mapPoolBoard in the UI. Defaults to false when omitted. */
-  mapPoolRandomAtStart?: boolean
-  /** "Build alone" map mode — one player places every tile interactively when the game starts (see GameSettings.soloBuildMap). Mutually exclusive with mapTemplateId/mapPoolBoard/mapPoolRandomAtStart in the UI. Defaults to false when omitted. */
-  soloBuildMap?: boolean
-  /** Who builds when soloBuildMap is on (see GameSettings.soloBuilderSelection). Defaults to 'owner' when omitted. */
-  soloBuilderSelection?: GameSettings['soloBuilderSelection']
-  /** Where the builder's own unit-placement turn falls (see GameSettings.soloBuilderUnitOrder). Defaults to 'last' when omitted. */
-  soloBuilderUnitOrder?: GameSettings['soloBuilderUnitOrder']
+  /** Game-specific creation-time options (GameSettings.gameOptions); the game's defaults when omitted. */
+  gameOptions?: GameOptions
   /** Hotseat only: skip the "pass the device" confirmation gate between local players' turns (see GamePage.tsx). Ignored for live/async. Defaults to false (gate shown) when omitted; CreateGamePage.tsx's checkbox defaults to checked (true). */
   skipHotseatPassGate?: boolean
-  /** Opt in to RULE_ENFORCEMENT_PLAN.md's server-side rule enforcement for this game (see GameSettings.ruleEnforcementEnabled). Defaults to false when omitted, so a caller that doesn't care gets the client-trusted path; CreateGamePage.tsx no longer offers a checkbox at all and always passes true (issue #552, superseding issue #432's checked-by-default checkbox) — every game created through the UI is enforced. */
+  /** Opt in to server-side rule enforcement for this game (see GameSettings.ruleEnforcementEnabled). Defaults to false when omitted, so a caller that doesn't care gets the client-trusted path; CreateGamePage.tsx always passes true — every game created through the UI is enforced. */
   ruleEnforcementEnabled?: boolean
-  /** Opt in to HIDDEN_INFORMATION_PLAN.md's redacted read path (see GameSettings.hiddenInformationEnabled) — only meaningful alongside ruleEnforcementEnabled. Defaults to false when omitted, same contract as ruleEnforcementEnabled above; CreateGamePage.tsx no longer offers a checkbox (issue #552, superseding issue #481's checked-by-default checkbox) and always passes `hiddenInformationAvailable`, so games created through the UI hide in-progress picks unless on hotseat (src/lib/hiddenInformationEligibility.ts). */
+  /** Opt in to the redacted read path (see GameSettings.hiddenInformationEnabled) — only meaningful alongside ruleEnforcementEnabled. Defaults to false when omitted; CreateGamePage.tsx passes `hiddenInformationAvailable` (src/lib/hiddenInformationEligibility.ts). */
   hiddenInformationEnabled?: boolean
-  /** Opt in to locking a `selectCards`/`decline` pick once it's been revealed (see GameSettings.lockRevealedInformationEnabled) — only meaningful alongside hiddenInformationEnabled. Defaults to false when omitted, same contract as hiddenInformationEnabled above; CreateGamePage.tsx's checkbox now defaults to *checked* (issue #552, superseding issue #529's unchecked-by-default). */
-  lockRevealedInformationEnabled?: boolean
-  /** Content ids of active Tales (src/content/tales.json) for the Tales variant, or omitted/empty for none. */
-  activeTaleIds?: string[]
-  /** Total achievements claimed (across all players) that ends the game — content/achievements.json's gameLength.min/max bounds it (1-6). Defaults to gameLength.default (4). */
-  gameLength?: number
-  /** Whether the room is listed on the Public Rooms screen (issue #40 section 4-5). Defaults to 'private' when omitted; CreateGamePage.tsx's checkbox defaults to checked ('public'). */
+  /** Whether the room is listed on the Public Rooms screen. Defaults to 'private' when omitted; CreateGamePage.tsx's checkbox defaults to checked ('public'). */
   visibility?: GameRow['visibility']
 }): Promise<{ game: GameRow; player: PlayerRow }> {
   const roomCode = generateRoomCode()
@@ -265,21 +186,10 @@ export async function createGame(params: {
   }
 
   const settings: GameSettings = {
-    mapTemplateId: params.mapTemplateId ?? null,
-    mapPoolBoard: params.mapPoolBoard ?? null,
-    mapPoolMapId: params.mapPoolMapId ?? null,
-    mapPoolRandomAtStart: params.mapPoolRandomAtStart ?? false,
-    soloBuildMap: params.soloBuildMap ?? false,
-    soloBuilderSelection: params.soloBuilderSelection ?? 'owner',
-    soloBuilderId: null,
-    soloBuilderUnitOrder: params.soloBuilderUnitOrder ?? 'last',
-    soloBuilderTurnOrder: null,
     skipHotseatPassGate: params.skipHotseatPassGate ?? false,
     ruleEnforcementEnabled: params.ruleEnforcementEnabled ?? false,
     hiddenInformationEnabled: params.hiddenInformationEnabled ?? false,
-    lockRevealedInformationEnabled: params.lockRevealedInformationEnabled ?? false,
-    activeTaleIds: params.activeTaleIds ?? [],
-    gameLength: params.gameLength ?? 4,
+    ...(params.gameOptions ? { gameOptions: params.gameOptions } : {}),
   }
 
   const { data: game, error: gameError } = await supabase
@@ -345,11 +255,11 @@ export async function listPlayers(gameId: string): Promise<PlayerRow[]> {
  * queries (issue #687), which need the same columns but split across two
  * separate status-filtered requests rather than one unfiltered one.
  */
-const GAME_STATE_SUMMARY_COLUMNS = 'game_id, status, round_phase, turn, pending_player_ids, active_player_id, updated_at'
+const GAME_STATE_SUMMARY_COLUMNS = 'game_id, status, phase, turn, pending_player_ids, active_player_id, updated_at'
 
 type GameStateSummaryRow = Pick<
   GameStateMetaRow,
-  'game_id' | 'status' | 'round_phase' | 'turn' | 'pending_player_ids' | 'active_player_id' | 'updated_at'
+  'game_id' | 'status' | 'phase' | 'turn' | 'pending_player_ids' | 'active_player_id' | 'updated_at'
 >
 
 function summariesFromMetaRows(rows: GameStateSummaryRow[]): {
@@ -361,7 +271,7 @@ function summariesFromMetaRows(rows: GameStateSummaryRow[]): {
   for (const row of rows) {
     summaryByGame.set(row.game_id, {
       status: row.status as GameStatus,
-      roundPhase: row.round_phase as RoundPhase | null,
+      phase: row.phase,
       turn: row.turn,
       activePlayerId: row.active_player_id,
       pendingPlayerIds: row.pending_player_ids,
@@ -402,25 +312,11 @@ async function fetchGameStateSummaries(
 /**
  * Every `games` column used wherever a list of rooms is fetched
  * (listMyGames/listPublicRooms/listAllRooms below) rather than a single
- * room. Includes `settings` (unlike an earlier version of this list, issue
- * #444/#446): every one of these list views renders its games through
- * GameOverviewCard's `buildGameCardSummary` (gameCardView.ts), which reads
- * `settings.activeTaleIds` unconditionally and the map-mode fields
- * (`mapTemplateId`/`mapPoolMapId`/etc, via `mapBuildStyleLabel`) pre-game —
- * dropping `settings` from the query crashed every listing screen with
- * `undefined is not an object (evaluating 'e.settings.activeTaleIds')`.
- * `settings.mapPoolBoard` does embed a full `Board` (one Tile per hex — see
- * GameSettings' doc comment in dbTypes.ts), tens of KB per map-pool game,
- * that no listing card actually reads (issue #620) — the `games_settings_for_listing`
- * computed column (`0033_games_settings_for_listing.sql`) nulls it out
- * DB-side so it's never sent for these queries, while every other field
- * these cards do read (including `mapPoolMapId`, the same board's id, used
- * as `mapBuildStyleLabel`'s truthiness check instead) stays intact.
- * Single-room reads (getGameByRoomCode et al.) still need the real
- * `mapPoolBoard` and keep using plain `select()`.
+ * room — everything GameOverviewCard's `buildGameCardSummary`
+ * (gameCardView.ts) reads. Keep `settings` small: it goes out for every room
+ * on every listing screen.
  */
-const GAME_LIST_COLUMNS =
-  'id, room_code, name, play_mode, status, min_players, max_players, created_by, created_at, updated_at, config_version, visibility, settings:games_settings_for_listing'
+const GAME_LIST_COLUMNS = 'id, room_code, name, play_mode, status, min_players, max_players, created_by, created_at, updated_at, config_version, visibility, settings'
 
 /**
  * Every `players` column a listing screen's player chips need (see
@@ -440,7 +336,7 @@ const PLAYER_LIST_COLUMNS = 'id, game_id, user_id, display_name, seat_index'
  * #441 — see fetchGameStateSummaries/gameCardView.ts's GameStateSummary) so
  * myGamesView.ts can classify turn/finished status without downloading and
  * decompressing every game's full GameState; games.status alone can't tell
- * 'boardSetup' or 'completed' apart from 'active' (see dbTypes.ts's GameRow
+ * 'completed' apart from 'active' (see dbTypes.ts's GameRow
  * comment). `stateSummary` is left null for games still in the lobby, which
  * have no game_state row yet. RLS already scopes game_state/game_state_meta
  * reads to seated players.
@@ -699,6 +595,10 @@ export async function addLocalPlayer(params: { game: GameRow; hostUserId: string
  * client-side (rather than left to the DB's default) so the new roster is
  * known up front and the source GameState/GameSettings can be rewritten
  * onto it (see duplicateGameState.ts) before anything is written.
+ *
+ * The copy keeps the source's settings verbatim — including
+ * `ruleEnforcementEnabled` — so undo/redo in the copy rebuild the same
+ * genesis the source's history was recorded against.
  */
 export async function duplicateGameAsHotseat(params: {
   sourceGame: GameRow
@@ -713,7 +613,7 @@ export async function duplicateGameAsHotseat(params: {
 
   const suffix = ' (copy)'
   const name = `${params.sourceGame.name.slice(0, 60 - suffix.length)}${suffix}`
-  const settings = remapGameSettingsPlayerIds(params.sourceGame.settings, playerIdMap)
+  const settings = params.sourceGame.settings
 
   const { data: game, error: gameError } = await supabase
     .from('games')
@@ -763,17 +663,12 @@ export async function duplicateGameAsHotseat(params: {
  * Shares its player-remapping approach with duplicateGameAsHotseat above,
  * but there's no source GameRow/PlayerRow/GameSettings to read here — an
  * export only ever contains a bare GameState (see GameStateExportEnvelope).
- * The new room's settings are mostly seeded with harmless defaults rather
- * than reconstructed — enforcement/hidden-information both off, which is
- * required for hotseat anyway (dbTypes.ts's hiddenInformationEnabled doc
- * comment) and for this plain client insert to be allowed at all by
- * 0029_start_game_edge_function.sql's "seated players can insert game
- * state when enforcement is off" policy — except the map source, which
- * buildGenesisState (gameGenesis.ts) needs to get right so it rebuilds the
- * exact genesis the export's actionHistory was recorded against; see
- * reconstructMapPoolBoardForImport's doc comment (duplicateGameState.ts,
- * issue #680) for why a preset-board source can't just default to "no map
- * source" like everything else here.
+ * The new room's settings are seeded with defaults — enforcement and hidden
+ * information both off, which hotseat requires anyway and which this plain
+ * client insert needs to be allowed by RLS at all — except `gameOptions`,
+ * recovered from the export's own `GameState.options`, which
+ * buildGenesisState (gameGenesis.ts) needs to rebuild the exact genesis the
+ * export's actionHistory was recorded against.
  */
 export async function importGameExportAsHotseat(params: { exportText: string; hostUserId: string }): Promise<GameRow> {
   const { gameState: sourceState } = await decodeGameStateExport(params.exportText)
@@ -784,21 +679,10 @@ export async function importGameExportAsHotseat(params: { exportText: string; ho
   }
 
   const settings: GameSettings = {
-    mapTemplateId: null,
-    mapPoolBoard: reconstructMapPoolBoardForImport(sourceState),
-    mapPoolMapId: null,
-    mapPoolRandomAtStart: false,
-    soloBuildMap: false,
-    soloBuilderSelection: 'owner',
-    soloBuilderId: null,
-    soloBuilderUnitOrder: 'last',
-    soloBuilderTurnOrder: null,
     skipHotseatPassGate: false,
     ruleEnforcementEnabled: false,
     hiddenInformationEnabled: false,
-    lockRevealedInformationEnabled: false,
-    activeTaleIds: sourceState.activeTaleIds,
-    gameLength: sourceState.gameLength,
+    gameOptions: sourceState.options,
   }
 
   const { data: game, error: gameError } = await supabase
@@ -928,8 +812,7 @@ export function subscribeToPlayers(gameId: string, onChange: () => void): () => 
  * Fires with `payload.new` on every `games` row UPDATE (issue #533's fix).
  * That's Postgres's logical-replication view of the new row, not a fresh
  * `select()` — a column that's unchanged by this particular UPDATE *and*
- * stored out-of-line (TOASTed; `settings` qualifies once it embeds a
- * map-pool board, tens of KB) is omitted from it entirely rather than sent
+ * stored out-of-line (TOASTed — a large `settings` can qualify) is omitted from it entirely rather than sent
  * as its last value. Callers must merge this onto their last known full row
  * (`{ ...prev, ...updated }`), never replace it outright, or an unrelated
  * status/visibility update can silently null out `settings` for the rest of
@@ -1034,44 +917,13 @@ export async function startGameFromLobby(game: GameRow): Promise<void> {
       throw new Error('This room changed since you loaded it — refresh and try again.')
     }
 
-    // "Random saved map at start" (issue #166): resolve the actual pick now
-    // that the real seated player count is known, and persist it into
-    // settings.mapPoolBoard before building genesis — buildGenesisState must
-    // stay a synchronous, deterministic function of the game row alone (see
-    // gameGenesis.ts) for undo/replay to keep working, so the randomness
-    // can't live inside it. No saved map for this exact count just falls
-    // through to buildGenesisState's normal interactive board-building path,
-    // per GameSettings.mapPoolRandomAtStart.
-    let startingGame = game
-    if (game.settings.mapPoolRandomAtStart && !game.settings.mapPoolBoard) {
-      const picked = await pickRandomMapFromPool(players.length)
-      const settings = resolveMapPoolRandomAtStart(game.settings, picked)
-      if (settings !== game.settings) {
-        await updateGameSettings(game.id, { settings, minPlayers: game.min_players, maxPlayers: game.max_players })
-        startingGame = { ...game, settings }
-      }
-    }
-
-    // "Build alone" (issue #243): same resolve-then-persist reasoning as
-    // above — a random builder/unit-placement-order pick has to be rolled
-    // and locked in once, here, before buildGenesisState can use it (see
-    // resolveSoloBuildMap's own doc comment).
-    if (startingGame.settings.soloBuildMap) {
-      const settings = resolveSoloBuildMap(startingGame.settings, players)
-      if (settings !== startingGame.settings) {
-        await updateGameSettings(startingGame.id, { settings, minPlayers: startingGame.min_players, maxPlayers: startingGame.max_players })
-        startingGame = { ...startingGame, settings }
-      }
-    }
-
-    await insertGameState(game.id, buildGenesisState(startingGame, players))
+    await insertGameState(game.id, buildGenesisState(game, players))
   }
-  // The `games` row's own status stays the coarse lobby/active/completed
-  // (see dbTypes.ts) — the engine's finer-grained status (boardSetup ->
-  // active) lives only in the game_state row's GameState.status, and
-  // GamePage branches its rendering on that instead. So starting a game
-  // means: build the real initial GameState (above), persist it, then flip
-  // `games.status` to 'active' just to move everyone out of the lobby screen.
+  // The `games` row's own status stays the coarse lobby/active/canceled
+  // (see dbTypes.ts) — whether the game has finished lives only in the
+  // game_state row's GameState.status. So starting a game means: build the
+  // genesis GameState (above), persist it, then flip `games.status` to
+  // 'active' to move everyone out of the lobby screen.
   await setGameStatus(game.id, 'active')
 }
 
@@ -1287,10 +1139,10 @@ export async function redoActionEnforced(gameId: string, previous?: EngineGameSt
  * `game_state` itself (issue #448): Realtime's `postgres_changes` broadcasts
  * the entire new row over the websocket on every event, so subscribing
  * directly to `game_state` meant every move pushed the full `GameState` JSON
- * (board/units/players/cards/the whole `actionHistory`) — routinely ~200kb —
- * uncompressed, to both clients on every single turn. `game_state_meta` is
- * kept in sync with `game_state` by a DB trigger on every write and carries
- * only `status`/`round_phase`/`turn`/`version` — a few bytes — so all that
+ * (including the whole `actionHistory`) uncompressed to every client on
+ * every turn. `game_state_meta` is kept in sync with `game_state` by a DB
+ * trigger on every write and carries only `status`/`phase`/`turn`/`version`
+ * — a few bytes — so all that
  * travels over the socket now is "something changed"; the actual state comes
  * from the `getGameState` REST call below, which (unlike the websocket) goes
  * over plain HTTP and gets normal gzip transport compression.

@@ -6,7 +6,7 @@
 # tested against a real instance instead of only type-checked. See
 # .github/workflows/claude.yml, which installs the Supabase CLI and Deno so
 # this can be driven from a GitHub Actions run.
-project_id = "rise-and-fall"
+project_id = "game-platform"
 
 [api]
 enabled = true

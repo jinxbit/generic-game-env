@@ -62,7 +62,7 @@ export function DiscordWebhookSettings({ user }: { user: User }) {
           discordUserId: discordUserIdFromIdentities(user.identities),
           roomName: 'Test Room',
           roomCode: 'TEST',
-          phase: 'take a test turn',
+          phase: null,
           round: 1,
           gameUrl: null,
         }),

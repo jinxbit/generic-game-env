@@ -66,26 +66,6 @@ Watch, in order:
    badge appears in production, the Vercel environment scoping is wrong.
 4. **Open the app.** Sign in, load a real game, take a turn.
 
-## This release (as of 2026-09-12)
-
-`main` is ~95 commits ahead of `production` and carries three unapplied
-migrations, all of which change live behaviour:
-
-- `0028_hidden_information_rls_lockdown.sql` — revokes direct client
-  `SELECT` on `game_state` for hidden-information games; those reads must go
-  through `get-game-state`.
-- `0029_start_game_edge_function.sql` — blocks the client-side genesis write
-  and the `lobby -> active` flip for enforced games; Start Game goes through
-  the new `start-game` Edge Function.
-- `0030_purchase_phase_simultaneous.sql` — `game_state_sync_meta` now
-  projects the whole `pending_player_ids` list during the purchase phase.
-
-0028 and 0029 **cut off a code path the currently-live frontend still
-uses**, so the frontend and the functions must reach production in the same
-promotion — which they do, since both ride the same commit. Existing games
-are untouched: every lockdown is scoped to games whose settings carry the
-matching flag, and games predating the flags read `false`.
-
 ## If it goes wrong
 
 **Roll forward.** `production` is fast-forward only and branch protection

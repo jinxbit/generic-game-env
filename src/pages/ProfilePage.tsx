@@ -1,17 +1,11 @@
 import { Link } from 'react-router-dom'
 import { ChatNotificationSettings } from '../components/ChatNotificationSettings'
-import { ConfirmBeforeRevealingCardsSettings } from '../components/ConfirmBeforeRevealingCardsSettings'
 import { DiscordWebhookSettings } from '../components/DiscordWebhookSettings'
 import { DisplayNameSettings } from '../components/DisplayNameSettings'
 import { PushNotificationSettings } from '../components/PushNotificationSettings'
-import { UnitColorSettings } from '../components/UnitColorSettings'
-import { UnitReserveDisplaySettings } from '../components/UnitReserveDisplaySettings'
 import { useAuth } from '../hooks/useAuth'
 import { useChatNotificationsEnabled } from '../hooks/useChatNotificationsEnabled'
-import { useConfirmBeforeRevealingCards } from '../hooks/useConfirmBeforeRevealingCards'
 import { useDisplayName } from '../hooks/useDisplayName'
-import { useUnitPlateColors } from '../hooks/useUnitPlateColors'
-import { useUnitReserveDisplayMode } from '../hooks/useUnitReserveDisplayMode'
 import { signOut } from '../lib/auth'
 import { resolveDisplayName } from '../lib/displayName'
 
@@ -22,21 +16,6 @@ export function ProfilePage() {
     loading: displayNameLoading,
     setProfileDisplayName,
   } = useDisplayName(session?.user ?? null)
-  const {
-    overrides: unitColorOverrides,
-    loading: unitColorsLoading,
-    setOverrides: setUnitColorOverrides,
-  } = useUnitPlateColors(session?.user ?? null)
-  const {
-    mode: unitReserveDisplayMode,
-    loading: unitReserveDisplayLoading,
-    setMode: setUnitReserveDisplayMode,
-  } = useUnitReserveDisplayMode(session?.user ?? null)
-  const {
-    value: confirmBeforeRevealingCards,
-    loading: confirmBeforeRevealingCardsLoading,
-    setValue: setConfirmBeforeRevealingCards,
-  } = useConfirmBeforeRevealingCards(session?.user ?? null)
   const {
     value: chatNotificationsEnabled,
     loading: chatNotificationsEnabledLoading,
@@ -82,27 +61,6 @@ export function ProfilePage() {
         fallback={discordName}
         loading={displayNameLoading}
         onSaved={setProfileDisplayName}
-      />
-
-      <UnitColorSettings
-        userId={user.id}
-        overrides={unitColorOverrides}
-        loading={unitColorsLoading}
-        onSaved={setUnitColorOverrides}
-      />
-
-      <UnitReserveDisplaySettings
-        userId={user.id}
-        value={unitReserveDisplayMode}
-        loading={unitReserveDisplayLoading}
-        onSaved={setUnitReserveDisplayMode}
-      />
-
-      <ConfirmBeforeRevealingCardsSettings
-        userId={user.id}
-        value={confirmBeforeRevealingCards}
-        loading={confirmBeforeRevealingCardsLoading}
-        onSaved={setConfirmBeforeRevealingCards}
       />
 
       <DiscordWebhookSettings user={user} />

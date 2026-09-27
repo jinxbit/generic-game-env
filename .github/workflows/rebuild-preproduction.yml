@@ -88,7 +88,7 @@ jobs:
           fi
 
       # Edge Functions import the game packages (src/games/registry.ts via
-      # supabase/functions/import_map.json); one installed from another repo
+      # supabase/functions/deno.json); one installed from another repo
       # lives in node_modules, so install before deploying.
       - name: Set up Node
         uses: actions/setup-node@v4

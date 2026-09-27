@@ -18,3 +18,12 @@ jobs:
       - run: npm run lint
       - run: npm run test
       - run: npm run build
+      # The Edge Functions run on Deno, which resolves imports differently from
+      # Vite/Vitest (supabase/functions/deno.json's import map, explicit `.ts`
+      # extensions, npm:/jsr: specifiers). Type-checking them the way Deno sees
+      # them catches what would otherwise only fail at deploy time.
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Type-check Edge Functions with Deno
+        run: deno check --config supabase/functions/deno.json supabase/functions/*/index.ts

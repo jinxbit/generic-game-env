@@ -7,7 +7,7 @@
 //
 // Server-reachable: every import here must resolve in the Edge Runtime too,
 // which means each package specifier needs an entry in
-// supabase/functions/import_map.json (gamesImportMap.test.ts checks this).
+// supabase/functions/deno.json (edgeFunctionImports.test.ts checks this).
 //
 // To keep games that started under an older rules version playable after a
 // replay-incompatible rules change, register the old version alongside the

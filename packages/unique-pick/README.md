@@ -123,7 +123,7 @@ version installed under an npm alias and register both in the platform's
 4. In the platform repo, add the package to the platform's `package.json`,
    register its rules in `src/games/registry.ts` and its UI in
    `src/games/ui.ts`, and map its `rules` entry in
-   `supabase/functions/import_map.json` (for a package in `node_modules`, e.g.
+   `supabase/functions/deno.json` (for a package in `node_modules`, e.g.
    `"@you/my-game/rules": "../../node_modules/@you/my-game/src/rules.ts"`).
    `src/test/__tests__/edgeFunctionImports.test.ts` fails if that mapping is
    missing.

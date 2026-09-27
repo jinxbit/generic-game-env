@@ -1,8 +1,9 @@
-// The Edge Runtime resolves bare package specifiers only through
-// supabase/functions/import_map.json (wired to every function in
-// supabase/config.toml), and a gap there only surfaces at deploy time — the
-// in-process test stack resolves the same imports through node_modules and
-// never notices. These checks close that gap.
+// The Edge Runtime resolves bare package specifiers only through the
+// `imports` map in supabase/functions/deno.json (found by walking up from
+// each function — a per-function `import_map` in config.toml is ignored), and
+// a gap there only surfaces at deploy time: the in-process test stack
+// resolves the same imports through node_modules and never notices. These
+// checks close that gap.
 
 /// <reference types="node" />
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -11,8 +12,8 @@ import { describe, expect, it } from 'vitest'
 
 const root = resolve(__dirname, '../../..')
 const functionsDir = join(root, 'supabase/functions')
-const importMapPath = join(functionsDir, 'import_map.json')
-const importMap = JSON.parse(readFileSync(importMapPath, 'utf8')) as { imports: Record<string, string> }
+const denoConfig = JSON.parse(readFileSync(join(functionsDir, 'deno.json'), 'utf8')) as { imports: Record<string, string>; nodeModulesDir?: string }
+const importMap = denoConfig
 
 /** Every relative/bare import in a server-reachable file, following relative imports. */
 function serverImportGraph(entries: string[]): { files: Set<string>; bare: Set<string> } {
@@ -46,7 +47,7 @@ describe('Edge Function imports', () => {
   it('maps every bare specifier reachable from a function to an existing file', () => {
     const { bare } = serverImportGraph(functionNames.map((name) => join(functionsDir, name, 'index.ts')))
     for (const specifier of bare) {
-      expect(importMap.imports[specifier], `${specifier} is missing from supabase/functions/import_map.json`).toBeDefined()
+      expect(importMap.imports[specifier], `${specifier} is missing from supabase/functions/deno.json's imports`).toBeDefined()
       expect(existsSync(resolve(functionsDir, importMap.imports[specifier])), `${specifier} maps to a file that doesn't exist`).toBe(true)
     }
   })
@@ -58,10 +59,16 @@ describe('Edge Function imports', () => {
     }
   })
 
-  it('wires the shared import map into every function in supabase/config.toml', () => {
-    const config = readFileSync(join(root, 'supabase/config.toml'), 'utf8')
+  it('keeps one shared Deno config that every function inherits', () => {
+    // A deno.json/deno.jsonc/import_map.json closer to a function would win
+    // over the shared one and silently drop its imports map.
     for (const name of functionNames) {
-      expect(config, `supabase/config.toml has no [functions.${name}] import_map`).toContain(`[functions.${name}]\nimport_map = "./functions/import_map.json"`)
+      for (const shadow of ['deno.json', 'deno.jsonc', 'import_map.json']) {
+        expect(existsSync(join(functionsDir, name, shadow)), `supabase/functions/${name}/${shadow} would shadow supabase/functions/deno.json`).toBe(false)
+      }
     }
+    // Without this Deno looks for npm:/jsr: dependencies in the repo's
+    // node_modules (it sees the root package.json) and fails to resolve them.
+    expect(denoConfig.nodeModulesDir).toBe('none')
   })
 })

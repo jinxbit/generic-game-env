@@ -34,8 +34,8 @@ npm run lint         # oxlint (not eslint) — sub-second
 npm run build        # tsc -b (3 projects) + vite build
 ```
 
-CI (`.github/workflows/ci.yml`) runs `lint`, `test`, `build` in that order on
-every PR. Run all three before pushing; they are fast enough that there is no
+CI (`.github/workflows/ci.yml`) runs `lint`, `test`, `build` and a `deno check` of the Edge Functions on
+every PR. Run them all before pushing; they are fast enough that there is no
 excuse to skip them.
 
 A green CI run on a PR can merge it: `automerge.yml` merges into `main`
@@ -192,11 +192,14 @@ verify it against a server hash.
 - **Edge Functions import the SDK, the registered games' `rules` entries, and
   `src/lib/` directly and unmodified.** There is no rule-logic duplication
   between client and server, and there must not be. Bare package specifiers
-  resolve through `supabase/functions/import_map.json`, wired to every
-  function in `supabase/config.toml`; `src/test/__tests__/edgeFunctionImports.test.ts`
-  fails if a reachable specifier isn't mapped, a mapped file is missing, or a
-  function isn't wired. **Adding a game means adding its `rules` entry to the
-  import map.**
+  resolve through the `imports` map in `supabase/functions/deno.json`, which
+  the Edge Runtime finds by walking up from each function (a per-function
+  `import_map` in `config.toml` is ignored — verified against a local
+  `supabase functions serve`). It also sets `"nodeModulesDir": "none"` so Deno
+  fetches `npm:`/`jsr:` dependencies itself instead of looking in the repo's
+  `node_modules`. `src/test/__tests__/edgeFunctionImports.test.ts` fails if a
+  reachable specifier isn't mapped or a mapped file is missing. **Adding a
+  game means adding its `rules` entry to that map.**
 - **The Edge Runtime does not honor `sloppy-imports`.** Every relative import
   in the graph reachable from `supabase/functions/` must carry an explicit
   `.ts` extension, and JSON imports need `with { type: 'json' }`. That graph
@@ -232,9 +235,10 @@ verify it against a server hash.
   one game-related column: which registered game the room plays, immutable.
   Adding a game needs no migration.
 - A local stack (`supabase start` / `db push` / `functions serve`,
-  `supabase/config.toml`) needs Docker, which the sandbox doesn't have. The
-  `@claude` GitHub Action runner does — it preinstalls the Supabase CLI and
-  Deno for exactly this.
+  `supabase/config.toml`) needs Docker. The `@claude` GitHub Action runner
+  preinstalls the Supabase CLI and Deno for exactly this. To typecheck the
+  functions the way Deno sees them without Docker:
+  `deno check --config supabase/functions/deno.json supabase/functions/*/index.ts`.
 
 ## Testing
 

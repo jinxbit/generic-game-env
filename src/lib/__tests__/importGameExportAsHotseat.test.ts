@@ -10,6 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { GameState as UniquePickState } from '@game-platform/unique-pick/rules'
 
 let currentClient: SupabaseClient
 vi.mock('../supabase', () => ({
@@ -45,6 +46,7 @@ describe('importGameExportAsHotseat', () => {
     currentClient = stack.clientFor(ALICE)
     const { game: sourceGame } = await createGame({
       name: 'Source room',
+      gameType: 'unique-pick',
       playMode: 'live',
       userId: ALICE,
       displayName: 'Alice',
@@ -72,6 +74,10 @@ describe('importGameExportAsHotseat', () => {
     expect(importedGame.created_by).toBe(ADMIN)
     expect(importedGame.settings.ruleEnforcementEnabled).toBe(false)
     expect(importedGame.settings.hiddenInformationEnabled).toBe(false)
+    // Same game, same pinned rules version, same options as the source room.
+    expect(importedGame.game_type).toBe(sourceGame.game_type)
+    expect(importedGame.settings.rulesVersion).toBe(sourceSnapshot.state.rulesVersion)
+    expect(importedGame.settings.gameOptions).toEqual(sourceSnapshot.state.options)
 
     const importedPlayers = stack.db
       .table<{ id: string; game_id: string; user_id: string }>('players')
@@ -89,7 +95,7 @@ describe('importGameExportAsHotseat', () => {
     expect(importedSnapshot.state.players).toHaveLength(2)
     expect(importedSnapshot.state.players.every((p) => p.authUserId === ADMIN)).toBe(true)
     // The game-specific slice is keyed by the new roster's ids too.
-    expect(Object.keys(importedSnapshot.state.game.scores).sort()).toEqual(importedPlayers.map((p) => p.id).sort())
+    expect(Object.keys((importedSnapshot.state as UniquePickState).game.scores).sort()).toEqual(importedPlayers.map((p) => p.id).sort())
 
     // The source game is completely untouched.
     const sourceStillThere = await getGameState(sourceGame.id)

@@ -183,8 +183,44 @@ describe('GameOverviewCard', () => {
   })
 
   function emptySummary(): GameCardSummary {
-    return { playerRange: null, optionsSummary: null, turnLabel: null }
+    return { gameTitle: 'Unique Pick', playerRange: null, optionsSummary: null, turnLabel: null }
   }
+
+  it("shows which game the room plays, before and after it starts, and once it's finished", () => {
+    const { rerender } = render(
+      <ul>
+        <GameOverviewCard
+          name="Test room"
+          phase="Not started"
+          players={[]}
+          pendingPlayerIds={[]}
+          isMyTurn={false}
+          isFinished={false}
+          updatedAt="Updated just now"
+          summary={{ ...emptySummary(), playerRange: '2–4 players' }}
+          onOpen={() => {}}
+        />
+      </ul>,
+    )
+    expect(screen.getByText('Unique Pick')).toBeInTheDocument()
+
+    rerender(
+      <ul>
+        <GameOverviewCard
+          name="Test room"
+          phase="Finished"
+          players={[]}
+          pendingPlayerIds={[]}
+          isMyTurn={false}
+          isFinished
+          updatedAt="Updated 2d ago"
+          summary={{ ...emptySummary(), gameTitle: 'retired-game', turnLabel: 'Turn 4' }}
+          onOpen={() => {}}
+        />
+      </ul>,
+    )
+    expect(screen.getByText('retired-game')).toBeInTheDocument()
+  })
 
   it('shows the player range and options summary on a joinable card', () => {
     render(
@@ -286,5 +322,6 @@ describe('GameOverviewCard', () => {
 
     expect(screen.queryByText(/Round /)).not.toBeInTheDocument()
     expect(screen.queryByText(/players$/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Unique Pick')).not.toBeInTheDocument()
   })
 })

@@ -17,6 +17,10 @@
 // rather than being handed to a test that would then "pass" against a game
 // that never happened.
 
+// The deployment's games, registered: every fixture's genesis and replay
+// needs its game's rules, and the smoke and seed runs (vitest.smoke.config.ts,
+// vitest.seed.config.ts) load this without src/test/setup.ts.
+import '../../../games/registry.ts'
 import { replayActions, type GameState } from '@game-platform/sdk'
 import { buildGenesisState } from '../../../lib/gameGenesis.ts'
 import type { GameRow, GameSettings, PlayerRow } from '../../../lib/dbTypes.ts'

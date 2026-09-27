@@ -8,6 +8,7 @@
 // than silently producing a genesis that replays to the wrong state and turns
 // every cold open into a hash mismatch.
 import { describe, expect, it } from 'vitest'
+import type { GameState } from '@game-platform/unique-pick/rules'
 import { act, pickAll } from '@game-platform/unique-pick/testing'
 import { replayActions } from '@game-platform/sdk'
 import { buildDeltaReplayContextFromState } from '../deltaReplayContext'
@@ -18,6 +19,7 @@ const game: GameRow = {
   id: 'game_1',
   room_code: 'ABCDE',
   name: 'Test room',
+  game_type: 'unique-pick',
   play_mode: 'async',
   status: 'active',
   min_players: 2,
@@ -38,7 +40,7 @@ const players: PlayerRow[] = [
 
 /** A cached state a cold open would actually have on disk: a couple of rounds in, with a concede. */
 function playedState() {
-  let state = buildGenesisState(game, players)
+  let state = buildGenesisState(game, players) as GameState
   state = pickAll(state, { p1: 1, p2: 2, p3: 2 })
   state = act(state, { type: 'CONCEDE', playerId: 'p2' })
   return pickAll(state, { p1: 3, p3: 4 })
@@ -59,5 +61,9 @@ describe('buildDeltaReplayContextFromState', () => {
 
   it('returns null rather than throwing for a state with no players', () => {
     expect(buildDeltaReplayContextFromState(game, { ...playedState(), players: [] })).toBeNull()
+  })
+
+  it('returns null rather than throwing for a room whose game type is not registered here', () => {
+    expect(buildDeltaReplayContextFromState({ ...game, game_type: 'retired-game' }, playedState())).toBeNull()
   })
 })

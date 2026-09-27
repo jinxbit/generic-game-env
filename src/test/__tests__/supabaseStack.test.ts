@@ -22,7 +22,7 @@ import { encodeGameStateExport, decodeGameStateExport } from '../../lib/gameStat
 import type { CompressedGameState } from '../../lib/gameStateCompression.ts'
 import { buildFixture, stripTimestamps } from '../fixtures/productionGames/loadFixtures.ts'
 import { createProductionStack, type ProductionStack } from '../supabaseStack/index.ts'
-import { gameData, nextLegalAction, pickAction, testGameRow, testGameSettings, testPlayers } from '../supabaseStack/sampleGame.ts'
+import { gameData, nextLegalAction, pickAction, TEST_GAME_TYPE, testGameRow, testGameSettings, testPlayers } from '../supabaseStack/sampleGame.ts'
 import { normalizeForComparison, replayFixtureThroughStack } from '../supabaseStack/replayFixture.ts'
 
 const GAME_ID = '3f1c2d4e-0000-4000-8000-000000000001'
@@ -314,7 +314,7 @@ describe('production Supabase stack', () => {
       const owner = stack.clientFor(ALICE)
       const { data: room, error } = await owner
         .from('games')
-        .insert({ room_code: 'TRIG01', name: 'Trigger room', play_mode: 'live', created_by: ALICE, settings: testGameSettings() })
+        .insert({ game_type: TEST_GAME_TYPE, room_code: 'TRIG01', name: 'Trigger room', play_mode: 'live', created_by: ALICE, settings: testGameSettings() })
         .select()
         .single()
       expect(error).toBeNull()
@@ -328,6 +328,13 @@ describe('production Supabase stack', () => {
       const renamed = await owner.from('games').update({ name: 'Another name' }).eq('id', room.id)
       expect(renamed.error?.message).toMatch(/Room name cannot be changed/)
 
+      // So is the game the room plays — even in the lobby, and even to
+      // another well-formed game type (games_enforce_name_immutable).
+      const regamed = await owner.from('games').update({ game_type: 'another-game' }).eq('id', room.id)
+      expect(regamed.error).toMatchObject({ code: 'P0001' })
+      expect(regamed.error?.message).toMatch(/A room's game cannot be changed after creation/)
+      expect(stack.db.table<{ id: string; game_type: string }>('games').find((row) => row.id === room.id)?.game_type).toBe(TEST_GAME_TYPE)
+
       // A rule-enforced room can't be started by a direct client write.
       const started = await owner.from('games').update({ status: 'active' }).eq('id', room.id)
       expect(started.error?.message).toMatch(/start-game Edge Function/)
@@ -340,6 +347,29 @@ describe('production Supabase stack', () => {
       // Config can't change outside the lobby.
       const lateEdit = await owner.from('games').update({ max_players: 3 }).eq('id', room.id)
       expect(lateEdit.error?.message).toMatch(/Configuration can only change/)
+    })
+
+    it('requires every room to name its game, as a lowercase slug (games.game_type, games_game_type_format, section 3)', async () => {
+      stack.addUser(ALICE)
+      const owner = stack.clientFor(ALICE)
+      const room = (roomCode: string, gameType?: unknown) => ({ ...(gameType === undefined ? {} : { game_type: gameType }), room_code: roomCode, name: `Room ${roomCode}`, play_mode: 'live', created_by: ALICE, settings: testGameSettings() })
+
+      const missing = await owner.from('games').insert(room('TYPE01'))
+      expect(missing.error).toMatchObject({ code: '23502' })
+      expect(missing.error?.message).toMatch(/"game_type"/)
+
+      for (const [index, badType] of ['Unique-Pick', '-leading-dash', 'has space', 'x'.repeat(65), ''].entries()) {
+        const bad = await owner.from('games').insert(room(`TYPE1${index}`, badType))
+        expect(bad.error, JSON.stringify(badType)).toMatchObject({ code: '23514' })
+        expect(bad.error?.message).toMatch(/games_game_type_format/)
+      }
+      expect(stack.db.table('games')).toEqual([])
+
+      // The format is all the database checks: whether the game is actually
+      // registered is the app's business (see the start-game test below).
+      const unregistered = await owner.from('games').insert(room('TYPE02', 'not-registered-9')).select('game_type').single()
+      expect(unregistered.error).toBeNull()
+      expect(unregistered.data).toEqual({ game_type: 'not-registered-9' })
     })
 
     it('only lets the owner delete a room once it is canceled, unless they are an admin (section 3)', async () => {
@@ -372,7 +402,7 @@ describe('production Supabase stack', () => {
       const { data: room } = await stack
         .clientFor(ALICE)
         .from('games')
-        .insert({ room_code: 'TRIG02', name: 'Readiness room', play_mode: 'live', created_by: ALICE, settings: testGameSettings() })
+        .insert({ game_type: TEST_GAME_TYPE, room_code: 'TRIG02', name: 'Readiness room', play_mode: 'live', created_by: ALICE, settings: testGameSettings() })
         .select()
         .single()
       await stack.clientFor(ALICE).from('games').update({ settings: testGameSettings({ skipHotseatPassGate: true }) }).eq('id', room.id)
@@ -399,6 +429,41 @@ describe('production Supabase stack', () => {
    * condition isAuthorizedToActAs and redactedResponseState key their own
    * hotseat carve-outs on.
    */
+  describe('start-game', () => {
+    /** A full, ready lobby for `gameType` — everything start-game checks passes except, possibly, the game itself. */
+    function seedLobby(gameType: string, settings = testGameSettings()) {
+      stack.addUser(ALICE)
+      stack.addUser(BOB)
+      stack.db.seed('games', { ...testGameRow({ id: GAME_ID, createdBy: ALICE, playerCount: PLAYERS.length, status: 'lobby', gameType, settings }) })
+      for (const player of PLAYERS) stack.db.seed('players', { ...player })
+    }
+
+    it('starts a ready, rule-enforced lobby server-side', async () => {
+      seedLobby(TEST_GAME_TYPE)
+      expect(await stack.startGame(ALICE, GAME_ID)).toEqual({ ok: true, status: 200 })
+      expect(stack.db.table<{ status: string }>('games')[0].status).toBe('active')
+      const read = await stack.readGameState(BOB, GAME_ID)
+      expect(read?.state).toMatchObject({ gameType: TEST_GAME_TYPE, rulesVersion: testGameSettings().rulesVersion, status: 'active' })
+    })
+
+    it('refuses cleanly to start a room whose game this deployment has not registered, leaving it in the lobby', async () => {
+      seedLobby('no-such-game')
+      const result = await stack.startGame(ALICE, GAME_ID)
+      expect(result).toMatchObject({ ok: false, status: 400 })
+      if (!result.ok) expect(result.error).toMatch(/no-such-game/)
+      expect(stack.db.table<{ status: string }>('games')[0].status).toBe('lobby')
+      expect(stack.db.table('game_state')).toEqual([])
+    })
+
+    it('refuses a room pinned to a rules version this deployment does not have', async () => {
+      seedLobby(TEST_GAME_TYPE, testGameSettings({ rulesVersion: 999 }))
+      const result = await stack.startGame(ALICE, GAME_ID)
+      expect(result).toMatchObject({ ok: false, status: 400 })
+      if (!result.ok) expect(result.error).toMatch(/rules version 999/)
+      expect(stack.db.table('game_state')).toEqual([])
+    })
+  })
+
   it('lets a hotseat player act for their other seat after undoing the first one’s pick', async () => {
     // Both seats belong to one signed-in human, which is what hotseat means.
     const hotseatPlayers = PLAYERS.map((player) => ({ ...player, user_id: ALICE }))
@@ -506,7 +571,7 @@ describe('production Supabase stack', () => {
     it('refuses to load an export whose history no longer replays to itself', async () => {
       const genesis = await seed(stack)
       const { state } = await playThroughStack(stack, genesis, 2)
-      const tampered: GameState = { ...state, game: { ...state.game, scores: { ...state.game.scores, 'seat-alice': 99 } } }
+      const tampered: GameState = { ...state, game: { ...gameData(state), scores: { ...gameData(state).scores, 'seat-alice': 99 } } }
       expect(() => buildFixture('self-test-tampered', { exportedAt: new Date(0).toISOString(), gameState: tampered })).toThrow(/disagrees on game/)
     })
   })

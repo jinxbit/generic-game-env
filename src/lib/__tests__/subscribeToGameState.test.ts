@@ -58,6 +58,7 @@ function gameRow(): GameRow {
     id: GAME_ID,
     room_code: 'BW646',
     name: 'subscribeToGameState self-test',
+    game_type: 'unique-pick',
     play_mode: 'live',
     status: 'active',
     min_players: 2,

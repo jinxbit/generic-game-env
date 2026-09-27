@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { replayActions } from '@game-platform/sdk'
+import type { GameState } from '@game-platform/unique-pick/rules'
 import { act, newGame, pick } from '@game-platform/unique-pick/testing'
 import { remapGameStatePlayerIds } from '../duplicateGameState'
 
@@ -15,9 +16,11 @@ describe('remapGameStatePlayerIds', () => {
     state = pick(state, 'p2', 4)
     state = act(state, { type: 'CONCEDE', playerId: 'p3' })
 
-    const remapped = remapGameStatePlayerIds(state, { newGameId: 'game_2', playerIdMap, hostUserId: 'host_1' })
+    const remapped = remapGameStatePlayerIds(state, { newGameId: 'game_2', playerIdMap, hostUserId: 'host_1' }) as GameState
 
     expect(remapped.gameId).toBe('game_2')
+    expect(remapped.gameType).toBe(state.gameType)
+    expect(remapped.rulesVersion).toBe(state.rulesVersion)
     expect(remapped.players.map((p) => p.id)).toEqual(['new-p1', 'new-p2', 'new-p3'])
     expect(remapped.players.every((p) => p.authUserId === 'host_1')).toBe(true)
     expect(remapped.turnOrder).toEqual(['new-p1', 'new-p2'])

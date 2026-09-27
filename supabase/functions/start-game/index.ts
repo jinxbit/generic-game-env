@@ -20,6 +20,7 @@
 // Request body: `{ gameId: string }`. Idempotent past the point a
 // `game_state` row exists: a retry after a prior call inserted genesis but
 // failed before flipping `games.status` just (re)flips status.
+import { findGameDefinition } from '@game-platform/sdk'
 import { canStartGame } from '../../../src/lib/roomReadiness.ts'
 import { compressGameStateForStorage } from '../../../src/lib/gameStateCompression.ts'
 import type { GameRow, PlayerRow } from '../../../src/lib/dbTypes.ts'
@@ -78,6 +79,14 @@ async function handleStartGame(req: Request): Promise<Response> {
   if (!existingState) {
     if (gameRow.status !== 'lobby') {
       return jsonResponse(400, { ok: false, error: 'This room is not in the lobby.' })
+    }
+    // buildGenesisState throws for a game (or pinned rules version) this
+    // deployment hasn't registered (src/games/registry.ts). That's the
+    // room's problem, not the server's — say so as a 400 rather than let it
+    // surface as the catch-all 500.
+    if (!findGameDefinition(gameRow.game_type, gameRow.settings.rulesVersion)) {
+      const version = gameRow.settings.rulesVersion === undefined ? '' : ` (rules version ${gameRow.settings.rulesVersion})`
+      return jsonResponse(400, { ok: false, error: `This room's game "${gameRow.game_type}"${version} isn't available on this site, so it can't be started.` })
     }
 
     const { data: playerRows, error: playersError } = await supabase

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { buildGameCardSummary, describeGamePhase, formatFinishedAt, formatUpdatedAt, isMyTurnFor, latestUpdatedAt, pendingActorIdsFor, type GameStateSummary } from '../gameCardView'
-import { describeGameOptions, TURN_LABEL } from '../../game/display'
-import { gameDefinition, PICK_PHASE } from '../../game/rules'
+import { gameDefinition, PICK_PHASE } from '@game-platform/unique-pick/rules'
+import { buildGameCardSummary, describeGamePhase, formatFinishedAt, formatUpdatedAt, gameTitleFor, isMyTurnFor, latestUpdatedAt, pendingActorIdsFor, type GameStateSummary } from '../gameCardView'
 import type { GameRow, GameSettings } from '../dbTypes'
 
 function makeSettings(overrides: Partial<GameSettings> = {}): GameSettings {
@@ -18,6 +17,7 @@ function makeGame(overrides: Partial<GameRow> = {}, settingsOverrides: Partial<G
     id: 'game_1',
     room_code: 'ABCDE',
     name: 'Test room',
+    game_type: 'unique-pick',
     play_mode: 'live',
     status: 'lobby',
     min_players: 2,
@@ -42,13 +42,17 @@ describe('buildGameCardSummary', () => {
     const summary = buildGameCardSummary(game, null)
 
     expect(summary.playerRange).toBe('2–4 players')
-    expect(summary.optionsSummary).toBe(describeGameOptions({ targetScore: 15, maxRounds: 5 }))
+    expect(summary.optionsSummary).toBe(gameDefinition.describeOptions({ targetScore: 15, maxRounds: 5 }))
     expect(summary.optionsSummary).toBe('First to 15 · max 5 rounds')
     expect(summary.turnLabel).toBeNull()
   })
 
   it("summarizes the game's default options when settings omit them", () => {
-    expect(buildGameCardSummary(makeGame(), null).optionsSummary).toBe(describeGameOptions(undefined))
+    expect(buildGameCardSummary(makeGame(), null).optionsSummary).toBe(gameDefinition.describeOptions(gameDefinition.defaultOptions))
+  })
+
+  it('normalizes stored options before summarizing them', () => {
+    expect(buildGameCardSummary(makeGame({}, { gameOptions: { targetScore: 999 } }), null).optionsSummary).toBe('First to 30 · max 10 rounds')
   })
 
   it('clears pregame info once a GameStateSummary exists, and reports the turn label instead', () => {
@@ -56,7 +60,36 @@ describe('buildGameCardSummary', () => {
 
     expect(summary.playerRange).toBeNull()
     expect(summary.optionsSummary).toBeNull()
-    expect(summary.turnLabel).toBe(`${TURN_LABEL} 3`)
+    expect(summary.turnLabel).toBe(`${gameDefinition.turnLabel} 3`)
+    expect(summary.turnLabel).toBe('Round 3')
+  })
+
+  it("names the room's game, before and after it starts", () => {
+    expect(buildGameCardSummary(makeGame(), null).gameTitle).toBe('Unique Pick')
+    expect(buildGameCardSummary(makeGame(), makeSummary()).gameTitle).toBe(gameDefinition.title)
+  })
+
+  it('degrades gracefully for a game type this deployment has not registered', () => {
+    const game = makeGame({ game_type: 'retired-game' }, { gameOptions: { anything: true } })
+
+    expect(buildGameCardSummary(game, null)).toEqual({ gameTitle: 'retired-game', playerRange: '2–4 players', optionsSummary: null, turnLabel: null })
+    expect(buildGameCardSummary(game, makeSummary({ turn: 4 })).turnLabel).toBe('Turn 4')
+  })
+
+  it('degrades the same way for a registered game at a rules version that is not', () => {
+    const summary = buildGameCardSummary(makeGame({}, { rulesVersion: 99 }), null)
+    expect(summary.gameTitle).toBe('Unique Pick')
+    expect(summary.optionsSummary).toBeNull()
+  })
+})
+
+describe('gameTitleFor', () => {
+  it("is the registered game's title", () => {
+    expect(gameTitleFor({ game_type: 'unique-pick' })).toBe('Unique Pick')
+  })
+
+  it('falls back to the raw game type when it is not registered', () => {
+    expect(gameTitleFor({ game_type: 'retired-game' })).toBe('retired-game')
   })
 })
 
@@ -119,6 +152,10 @@ describe('describeGamePhase', () => {
   it("uses the game's own label for the current phase while active", () => {
     expect(describeGamePhase(makeGame(), makeSummary({ phase: PICK_PHASE }))).toBe(gameDefinition.describePhase(PICK_PHASE))
     expect(describeGamePhase(makeGame(), makeSummary({ phase: PICK_PHASE }))).toBe('Picking')
+  })
+
+  it('falls back to "In progress" for a game type this deployment has not registered', () => {
+    expect(describeGamePhase(makeGame({ game_type: 'retired-game' }), makeSummary({ phase: PICK_PHASE }))).toBe('In progress')
   })
 })
 

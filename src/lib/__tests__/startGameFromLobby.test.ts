@@ -27,7 +27,7 @@ vi.mock('../supabase', () => ({
 
 const { createGame, joinGame, markReady, removePlayer, startGameFromLobby, getGameState } = await import('../gameApi.ts')
 const { createProductionStack } = await import('../../test/supabaseStack/index.ts')
-const { game: engineGame } = await import('../../engine/game.ts')
+const { gameDefinition: engineGame } = await import('@game-platform/unique-pick/rules')
 type ProductionStack = Awaited<ReturnType<typeof createProductionStack>>
 
 const ALICE = 'alice-user-id'
@@ -52,6 +52,7 @@ describe('startGameFromLobby', () => {
     currentClient = stack.clientFor(ALICE)
     const { game } = await createGame({
       name: 'Race room',
+      gameType: 'unique-pick',
       playMode: 'live',
       userId: ALICE,
       displayName: 'Alice',
@@ -76,12 +77,18 @@ describe('startGameFromLobby', () => {
 
     const stateAsAlice = await getGameState(game.id)
     expect(stateAsAlice?.state.players).toHaveLength(3)
+    // createGame pinned the game and its newest rules version; genesis carries both.
+    expect(game.game_type).toBe('unique-pick')
+    expect(game.settings.rulesVersion).toBe(engineGame.rulesVersion)
+    expect(stateAsAlice?.state.gameType).toBe('unique-pick')
+    expect(stateAsAlice?.state.rulesVersion).toBe(engineGame.rulesVersion)
   })
 
   it('refuses to start if the fresh roster no longer meets the minimum by the time Start is actually called', async () => {
     currentClient = stack.clientFor(ALICE)
     const { game } = await createGame({
       name: 'Shrinking room',
+      gameType: 'unique-pick',
       playMode: 'live',
       userId: ALICE,
       displayName: 'Alice',
@@ -130,6 +137,7 @@ describe('startGameFromLobby (ruleEnforcementEnabled)', () => {
     currentClient = stack.clientFor(ALICE)
     const { game } = await createGame({
       name: 'Enforced race room',
+      gameType: 'unique-pick',
       playMode: 'live',
       userId: ALICE,
       displayName: 'Alice',
@@ -161,6 +169,7 @@ describe('startGameFromLobby (ruleEnforcementEnabled)', () => {
     currentClient = stack.clientFor(ALICE)
     const { game } = await createGame({
       name: 'Enforced shrinking room',
+      gameType: 'unique-pick',
       playMode: 'live',
       userId: ALICE,
       displayName: 'Alice',
@@ -186,6 +195,7 @@ describe('startGameFromLobby (ruleEnforcementEnabled)', () => {
     currentClient = stack.clientFor(ALICE)
     const { game } = await createGame({
       name: 'Owner-only room',
+      gameType: 'unique-pick',
       playMode: 'live',
       userId: ALICE,
       displayName: 'Alice',
@@ -217,6 +227,7 @@ describe('startGameFromLobby (ruleEnforcementEnabled)', () => {
     currentClient = stack.clientFor(ALICE)
     const { game } = await createGame({
       name: 'Broken setup room',
+      gameType: 'unique-pick',
       playMode: 'live',
       userId: ALICE,
       displayName: 'Alice',
@@ -239,6 +250,7 @@ describe('startGameFromLobby (ruleEnforcementEnabled)', () => {
     currentClient = stack.clientFor(ALICE)
     const { game } = await createGame({
       name: 'No direct start room',
+      gameType: 'unique-pick',
       playMode: 'live',
       userId: ALICE,
       displayName: 'Alice',

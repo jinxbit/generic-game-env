@@ -4,8 +4,10 @@
 // in-process test stack resolves the same imports through node_modules and
 // never notices. These checks close that gap.
 
+/// <reference types="node" />
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { describe, expect, it } from 'vitest'
 
 const root = resolve(__dirname, '../../..')
 const functionsDir = join(root, 'supabase/functions')

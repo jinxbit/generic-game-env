@@ -12,6 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { GameRow, GameSettings, PlayerRow } from '../../lib/dbTypes.ts'
 import { createProductionStack, type ProductionStack } from '../supabaseStack/index.ts'
+import { TEST_GAME_TYPE } from '../supabaseStack/sampleGame.ts'
 
 const PRIVATE_GAME_ID = '3f1c2d4e-0000-4000-8000-0000000000d1'
 const PUBLIC_GAME_ID = '3f1c2d4e-0000-4000-8000-0000000000d2'
@@ -20,12 +21,13 @@ const BOB = 'auth-user-bob' // seated in the private game only
 const CAROL = 'auth-user-carol' // never seated anywhere
 
 function settingsFor(): GameSettings {
-  return { skipHotseatPassGate: false, ruleEnforcementEnabled: false, hiddenInformationEnabled: false }
+  return { skipHotseatPassGate: false, ruleEnforcementEnabled: false, hiddenInformationEnabled: false, rulesVersion: 1 }
 }
 
 function gameRow(id: string, roomCode: string, visibility: GameRow['visibility']): GameRow {
   return {
     id,
+    game_type: TEST_GAME_TYPE,
     room_code: roomCode,
     name: 'chat read status RLS self-test',
     play_mode: 'live',

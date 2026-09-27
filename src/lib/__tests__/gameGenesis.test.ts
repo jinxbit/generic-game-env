@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { applyAction, replayActions } from '@game-platform/sdk'
-import { DEFAULT_GAME_OPTIONS, PICK_PHASE } from '../../game/rules'
+import { applyAction, registerGame, replayActions, type GameDefinition } from '@game-platform/sdk'
+import { DEFAULT_GAME_OPTIONS, gameDefinition, PICK_PHASE, type GameState, type PickNumberAction } from '@game-platform/unique-pick/rules'
 import { buildGenesisState } from '../gameGenesis'
 import type { GameRow, GameSettings, PlayerRow } from '../dbTypes'
 
@@ -9,6 +9,7 @@ function makeGame(overrides: Partial<GameRow> = {}, settingsOverrides: Partial<G
     id: 'game_1',
     room_code: 'ABCDE',
     name: 'Test room',
+    game_type: 'unique-pick',
     play_mode: 'hotseat',
     status: 'lobby',
     min_players: 2,
@@ -91,13 +92,39 @@ describe('buildGenesisState', () => {
     // replay every logged action except the last one.
     const genesis = buildGenesisState(makeGame(), makePlayers())
 
-    const step1 = applyAction(genesis, { type: 'PICK_NUMBER', playerId: 'p1', value: 3 })
+    const pick: PickNumberAction = { type: 'PICK_NUMBER', playerId: 'p1', value: 3 }
+    const step1 = applyAction(genesis, pick)
     if (!step1.ok) throw new Error(step1.error)
-    expect(step1.state.game.picks.p1).toBe(3)
+    expect((step1.state as GameState).game.picks.p1).toBe(3)
 
     const rebuiltGenesis = buildGenesisState(makeGame(), makePlayers())
     const undone = replayActions(rebuiltGenesis, step1.state.actionHistory.slice(0, -1))
 
     expect(undone).toEqual(genesis)
+  })
+
+  it("stamps the row's game_type and the newest rules version when settings pin none", () => {
+    const genesis = buildGenesisState(makeGame(), makePlayers())
+    expect(genesis.gameType).toBe('unique-pick')
+    expect(genesis.rulesVersion).toBe(gameDefinition.rulesVersion)
+  })
+
+  it('normalizes stored options through the game', () => {
+    const genesis = buildGenesisState(makeGame({}, { gameOptions: { targetScore: 999, maxRounds: 'lots' } }), makePlayers())
+    expect(genesis.options).toEqual({ targetScore: 30, maxRounds: DEFAULT_GAME_OPTIONS.maxRounds })
+  })
+
+  it("rebuilds under the row's pinned settings.rulesVersion, even once a newer version is registered", () => {
+    const copy = (rulesVersion: number): GameDefinition => ({ ...gameDefinition, id: 'test-genesis-versions', rulesVersion }) as GameDefinition
+    registerGame(copy(1))
+    registerGame(copy(2))
+    const game = makeGame({ game_type: 'test-genesis-versions' }, { rulesVersion: 1 })
+
+    expect(buildGenesisState(game, makePlayers()).rulesVersion).toBe(1)
+    expect(buildGenesisState(makeGame({ game_type: 'test-genesis-versions' }), makePlayers()).rulesVersion).toBe(2)
+  })
+
+  it('throws for a game type this deployment has not registered', () => {
+    expect(() => buildGenesisState(makeGame({ game_type: 'retired-game' }), makePlayers())).toThrow(/Unknown game type "retired-game"/)
   })
 })

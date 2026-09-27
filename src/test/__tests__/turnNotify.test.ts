@@ -16,9 +16,12 @@
 
 import { describe, expect, it } from 'vitest'
 import { applyAction, createNewGame, applyRedoAction, applyUndoAction, pendingActorIds as enginePendingActorIds, type Action, type ActionResult, type GameState } from '@game-platform/sdk'
-import { describePhase } from '../../game/display.ts'
+import { gameDefinition } from '@game-platform/unique-pick/rules'
 import { compressGameStateForStorage } from '../../lib/gameStateCompression.ts'
 import { type GameStateRow, justFinished, newlyPendingActorIds, phaseLabel, turnNumber } from '../../../supabase/functions/_shared/turnNotify.ts'
+import { pickAction } from '../supabaseStack/sampleGame.ts'
+
+const GAME_TYPE = gameDefinition.id
 
 type Encoding = 'compressed' | 'plain'
 
@@ -45,6 +48,7 @@ function engineNewlyPending(before: GameState, after: GameState): string[] {
 function playGame(): GameState[] {
   const genesis = createNewGame({
     gameId: GAME_ID,
+    gameType: GAME_TYPE,
     playMode: 'async',
     players: ['a', 'b', 'c'].map((id) => ({ id, authUserId: `user-${id}`, displayName: id.toUpperCase(), color: 'red' })),
     options: { targetScore: 5, maxRounds: 30 },
@@ -61,18 +65,18 @@ function playGame(): GameState[] {
     states.push(state)
   }
 
-  submit({ type: 'PICK_NUMBER', playerId: 'a', value: 1 })
-  submit({ type: 'PICK_NUMBER', playerId: 'a', value: 2 })
+  submit(pickAction('a', 1))
+  submit(pickAction('a', 2))
   submit({ type: 'UNDO_ACTION', playerId: 'a' })
   submit({ type: 'REDO_ACTION', playerId: 'a' })
-  submit({ type: 'PICK_NUMBER', playerId: 'b', value: 2 })
-  submit({ type: 'PICK_NUMBER', playerId: 'c', value: 1 })
-  submit({ type: 'PICK_NUMBER', playerId: 'b', value: 1 })
+  submit(pickAction('b', 2))
+  submit(pickAction('c', 1))
+  submit(pickAction('b', 1))
   submit({ type: 'CONCEDE', playerId: 'c' })
   let value = 1
   while (state.status === 'active') {
     const next = state.pendingPlayerIds[0]
-    submit({ type: 'PICK_NUMBER', playerId: next, value: next === 'a' ? 1 : 1 + (value++ % 4) })
+    submit(pickAction(next, next === 'a' ? 1 : 1 + (value++ % 4)))
   }
   return states
 }
@@ -107,15 +111,20 @@ describe('turn-ping decision (supabase/functions/_shared/turnNotify.ts)', () => 
     for (const state of states) {
       const compressed = await webhookRow(state, 'compressed')
       const plain = await webhookRow(state, 'plain')
-      expect(phaseLabel(compressed.state)).toBe(phaseLabel(plain.state))
+      expect(phaseLabel(compressed.state, GAME_TYPE)).toBe(phaseLabel(plain.state, GAME_TYPE))
       expect(turnNumber(compressed.state)).toBe(turnNumber(plain.state))
       if (state.status === 'active' && state.phase) {
-        expect(phaseLabel(compressed.state)).toBe(describePhase(state.phase))
+        expect(phaseLabel(compressed.state, GAME_TYPE)).toBe(gameDefinition.describePhase(state.phase))
         expect(turnNumber(compressed.state)).toBe(state.turn)
       } else {
-        expect(phaseLabel(compressed.state)).toBe(null)
+        expect(phaseLabel(compressed.state, GAME_TYPE)).toBe(null)
       }
     }
+  })
+
+  it('labels no phase for a game this deployment has not registered, rather than throwing', async () => {
+    const active = states.find((state) => state.status === 'active' && state.phase)!
+    expect(phaseLabel((await webhookRow(active, 'compressed')).state, 'no-such-game')).toBe(null)
   })
 
   describe('rows built by hand', () => {

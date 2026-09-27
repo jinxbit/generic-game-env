@@ -3,10 +3,10 @@
 // render it — against a real, deployed project (or, for the half that doesn't
 // need a socket, the in-process stack).
 //
-// The secret is the example game's (src/game/rules.ts, "Unique Pick"): while
+// The secret is the example game's (@game-platform/unique-pick, "Unique Pick"): while
 // a round is open, every other player's pick must read `null` in
 // `game.picks` and their PICK_NUMBER log entry must be a HIDDEN_ACTION
-// placeholder (src/engine/redaction.ts) — in a full response, in a
+// placeholder (packages/sdk/src/redaction.ts) — in a full response, in a
 // protocol-2 delta's append and overlay, and in the acting player's own
 // write response alike. Once the round resolves, both are revealed.
 //
@@ -36,11 +36,12 @@
 // (./hiddenInformationWire.smoke.ts).
 //
 // Game-specific in what it looks for (`game.picks`, `game.rounds`,
-// PICK_NUMBER): replacing src/game/ means re-expressing `disclosedPick` and
-// `revealedPick` below for the new game's secret.
+// PICK_NUMBER): checking another game means re-expressing `disclosedPick` and
+// `revealedPick` below for that game's secret.
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { applyAction, type Action, type GameState } from '@game-platform/sdk'
+import type { PickNumberAction } from '@game-platform/unique-pick/rules'
 import { buildGenesisState } from '../../lib/gameGenesis.ts'
 import { buildFixture, type ProductionGameFixture } from '../fixtures/productionGames/loadFixtures.ts'
 import { nextLegalAction, testGameRow, testGameSettings, testPlayers } from '../supabaseStack/sampleGame.ts'
@@ -194,7 +195,8 @@ function assertRevealed(response: RawWireResponse, secret: Secret, where: string
 
 function secretOf(action: Action | null | undefined, round: number): Secret {
   if (!action || action.type !== 'PICK_NUMBER') throw new Error(`Expected a PICK_NUMBER action, got ${action?.type ?? 'nothing'}.`)
-  return { playerId: action.playerId, value: action.value, round }
+  const pick = action as PickNumberAction
+  return { playerId: pick.playerId, value: pick.value, round }
 }
 
 function assertThat(condition: boolean, message: string): asserts condition {

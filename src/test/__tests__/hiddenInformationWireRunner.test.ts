@@ -15,6 +15,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createProductionStack, type ProductionStack } from '../supabaseStack/index.ts'
 import { buildHiddenInformationFixture, checkHiddenInformationWire } from '../productionSmoke/hiddenInformationWire.ts'
+import { gameData } from '../supabaseStack/sampleGame.ts'
 
 describe('hidden-information wire check runner', () => {
   let stack: ProductionStack
@@ -34,7 +35,7 @@ describe('hidden-information wire check runner', () => {
     const fixture = buildHiddenInformationFixture()
     expect(fixture.game.settings).toMatchObject({ ruleEnforcementEnabled: true, hiddenInformationEnabled: true })
     expect(fixture.finalState).toMatchObject({ status: 'active', turn: 2 })
-    expect(fixture.finalState.game.rounds).toHaveLength(1)
+    expect(gameData(fixture.finalState).rounds).toHaveLength(1)
     expect(fixture.finalState.pendingPlayerIds).toHaveLength(2)
     expect(fixture.finalState.actionHistory.at(-1)?.action.type).toBe('PICK_NUMBER')
   })

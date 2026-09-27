@@ -10,7 +10,7 @@
 // redactStateForPlayer() code paths, rather than just the engine-level
 // redaction unit tests.
 //
-// The secret here is the example game's (src/game/rules.ts): while a round
+// The secret here is the example game's (@game-platform/unique-pick): while a round
 // is open, another player's pick is `null` in `game.picks` and their
 // PICK_NUMBER log entry is a HIDDEN_ACTION placeholder; once the round
 // resolves, both are revealed.

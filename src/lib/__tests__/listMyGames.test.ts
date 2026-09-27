@@ -51,6 +51,7 @@ function seedGame(
     id,
     room_code: id.slice(0, 6).toUpperCase(),
     name: `Game ${id}`,
+    game_type: 'unique-pick',
     play_mode: 'live',
     status,
     min_players: 2,

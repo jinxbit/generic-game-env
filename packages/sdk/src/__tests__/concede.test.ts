@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { applyAction } from '../applyAction'
-import { game } from '../game'
-import { act, newGame, pick } from './helpers'
+import { act, game, newGame, pick } from './helpers'
 
 afterEach(() => {
   vi.restoreAllMocks()

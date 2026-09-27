@@ -2,9 +2,13 @@
 
 A base for building web apps that play turn-based board games with a small
 group of friends — live, async ("play by turn"), or pass-and-play on one
-shared device (hotseat). It ships with a tiny example game, **Unique Pick**,
-wired all the way through so every part of the platform is exercised; build
-your own game by replacing `src/game/` (see [`src/game/README.md`](src/game/README.md)).
+shared device (hotseat). One deployment can host several games — each game
+is its own package (it can live in its own repo) that this repo, the main
+platform repo, installs and registers. It ships with a tiny example game,
+**Unique Pick** (`packages/unique-pick/`), wired all the way through so every
+part of the platform is exercised; see
+[`packages/unique-pick/README.md`](packages/unique-pick/README.md) for how to
+build another.
 
 What the platform gives a game for free:
 
@@ -35,18 +39,22 @@ What the platform gives a game for free:
 
 ## Architecture
 
-- `src/engine/` — the rules *framework*. Pure TypeScript, zero React/Supabase
-  imports, fully unit-testable. Everything else in the app treats
-  `GameState` as opaque and only changes it by calling `applyAction()` here.
-  A game's current state is always reconstructable by replaying its
-  append-only `actionHistory` from genesis (event sourcing), which is what
-  makes undo/redo, history review, server enforcement and the replay tests
-  work. It knows nothing about any particular game: it calls the game's
-  rules through the `GameDefinition` contract (`src/engine/gameDefinition.ts`).
-- `src/game/` — the pluggable game slot: the game's state and action types,
-  its rules (a `GameDefinition`), its React view, its creation-time options
-  editor and its display strings. Replace this folder to build a different
-  game.
+- `packages/sdk/` (`@game-platform/sdk`) — the rules *framework*. Pure
+  TypeScript, zero React/Supabase imports, fully unit-testable. Everything
+  else treats `GameState` as opaque and only changes it by calling
+  `applyAction()` here. A game's current state is always reconstructable by
+  replaying its append-only `actionHistory` from genesis (event sourcing),
+  which is what makes undo/redo, history review, server enforcement and the
+  replay tests work. It knows nothing about any particular game: it finds a
+  state's rules in a registry by the state's `gameType`/`rulesVersion`, and
+  calls them through the `GameDefinition` contract.
+- `packages/<game>/` — one package per game (here just `unique-pick`), each
+  with a `rules` entry (its `GameDefinition` — also run by the Edge Functions)
+  and a `view` entry (its React view and options form). A game can equally
+  live in its own repo and be installed from a registry or git.
+- `src/games/` — the deployment's game list: `registry.ts` registers each
+  game's rules (browser, Edge Functions and tests all import it), `ui.ts`
+  maps each game to its view. `src/site.ts` holds the site's own branding.
 - `src/lib/` — Supabase client, auth helpers, and typed query functions
   (`gameApi.ts`) that read/write the `games` / `players` / `game_state` /
   `game_state_meta` / `profiles` tables, plus genesis (`gameGenesis.ts`), the
@@ -62,9 +70,9 @@ What the platform gives a game for free:
 - `supabase/functions/` — Edge Functions: `start-game`, `apply-action`,
   `undo-action`, `redo-action` and `get-game-state`, which enforce the rules
   and redact hidden information server-side, plus the `notify-*` turn,
-  lifecycle and chat notifiers. The enforcement functions import
-  `src/engine/` and `src/game/` unmodified — there is no second copy of the
-  rules.
+  lifecycle and chat notifiers. They import the SDK and every registered
+  game's rules unmodified, through `supabase/functions/import_map.json` —
+  there is no second copy of the rules.
 - `src/test/` — vitest setup, an in-process Supabase stack that behaves like
   production (`supabaseStack/`), and real games replayed as regression tests
   (`fixtures/productionGames/`).
@@ -643,7 +651,7 @@ and the host adds them in the lobby with `addLocalPlayer()`
 no multi-session juggling.
 
 In game, `GamePage.tsx` makes "which player is this browser acting as"
-follow whoever must act next (`currentActorId`, `src/engine/turnOrder.ts`)
+follow whoever must act next (`currentActorId`, `packages/sdk/src/turnOrder.ts`)
 rather than a fixed identity, and puts a **"pass the device"
 confirmation** in front of each handover so the next player doesn't see the
 previous one's secrets. A game can opt out of that gate
@@ -683,7 +691,7 @@ state back out:
 - **In this codebase**: `decodeGameStateExport(text)` from
   `src/lib/gameStateExport.ts` parses the file, decompresses
   `gameStateZipped`, and returns `{ schema, version, exportedAt, gameState }`
-  with `gameState` as a fully-typed `engine.GameState` (`src/engine/types.ts`).
+  with `gameState` as a `GameState` (`@game-platform/sdk`).
 - **From the command line**, with `jq` and `gzip` installed:
   ```sh
   jq -r .gameStateZipped export.json | base64 -d | gunzip
@@ -745,15 +753,34 @@ contains another player's action, only the room owner or a site admin with
 **admin mode** switched on (a logged action, so the room keeps a record) may
 do it.
 
-## Building your own game
+## Games, sites and branding
 
-Everything game-specific lives in `src/game/`. Replace its files — the
-state and action types, the `GameDefinition` rules, the React view, the
-options editor and the display strings — and the rest of the platform
-(lobby, enforcement, redaction, undo/redo, history review, notifications,
-tests) works unchanged. [`src/game/README.md`](src/game/README.md) walks
-through the contract and the rules every game must follow (determinism, one
-log entry per submitted action, `pendingPlayerIds` always accurate).
+**Adding a game.** Each game is a package with a `rules` entry and a `view`
+entry. To add one — from this repo's `packages/` or installed from another
+repo — add it to `package.json`, register its rules in
+`src/games/registry.ts` and its view in `src/games/ui.ts`, and map its
+`rules` entry in `supabase/functions/import_map.json` so the Edge Functions
+can load it (a test fails if you forget). No migration is needed.
+[`packages/unique-pick/README.md`](packages/unique-pick/README.md) covers the
+contract, the rules every game must follow, and starting a game in its own
+repo.
+
+**One site or one per game.** A deployment hosts whichever games
+`src/games/registry.ts` registers. With several, the create-game screen shows
+a picker and every room records which game it plays (`games.game_type`); with
+one, the picker disappears and it's a single-game site. Running a game as its
+own site is just another deployment of this repo — its own Supabase and
+Vercel projects — with only that game registered.
+
+**Branding.** The site's name and tagline live in `src/site.ts` and flow into
+the page title, the PWA manifest, the home page and notification fallbacks.
+Each game's own name comes from its definition and appears on room cards, in
+the lobby and in notifications about that game.
+
+**Rules versions.** Every game records the `rulesVersion` it started with and
+always replays under it, so a rules change that would alter existing games
+ships as a new version registered alongside the old one (see the game package
+README).
 
 ## What's not built yet
 

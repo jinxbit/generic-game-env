@@ -22,7 +22,7 @@ import { encodeGameStateExport, decodeGameStateExport } from '../../lib/gameStat
 import type { CompressedGameState } from '../../lib/gameStateCompression.ts'
 import { buildFixture, stripTimestamps } from '../fixtures/productionGames/loadFixtures.ts'
 import { createProductionStack, type ProductionStack } from '../supabaseStack/index.ts'
-import { nextLegalAction, testGameRow, testGameSettings, testPlayers } from '../supabaseStack/sampleGame.ts'
+import { gameData, nextLegalAction, pickAction, testGameRow, testGameSettings, testPlayers } from '../supabaseStack/sampleGame.ts'
 import { normalizeForComparison, replayFixtureThroughStack } from '../supabaseStack/replayFixture.ts'
 
 const GAME_ID = '3f1c2d4e-0000-4000-8000-000000000001'
@@ -146,7 +146,7 @@ describe('production Supabase stack', () => {
 
   it('rejects an illegal action with the engine’s own message, and leaves the row untouched', async () => {
     await seed(stack)
-    const result = await stack.applyAction(ALICE, GAME_ID, { type: 'PICK_NUMBER', playerId: 'seat-alice', value: 99 })
+    const result = await stack.applyAction(ALICE, GAME_ID, pickAction('seat-alice', 99))
     expect(result).toMatchObject({ ok: false, status: 400 })
     if (!result.ok) expect(result.error).toMatch(/whole number from 1 to/)
     expect((await stack.readGameState(ALICE, GAME_ID))?.version).toBe(0)
@@ -406,7 +406,7 @@ describe('production Supabase stack', () => {
     const genesis = buildGenesisState(game, hotseatPlayers)
     await stack.seedStartedGame({ game, players: hotseatPlayers, genesis })
 
-    const picked = await stack.applyAction(ALICE, GAME_ID, { type: 'PICK_NUMBER', playerId: 'seat-alice', value: 3 })
+    const picked = await stack.applyAction(ALICE, GAME_ID, pickAction('seat-alice', 3))
     if (!picked.ok) throw new Error(picked.error)
 
     const undone = await stack.undoAction(ALICE, GAME_ID)
@@ -414,9 +414,9 @@ describe('production Supabase stack', () => {
 
     // The same human, now playing their other seat. Nobody else's move is
     // being discarded — there is nobody else.
-    const accepted = await stack.applyAction(ALICE, GAME_ID, { type: 'PICK_NUMBER', playerId: 'seat-bob', value: 2 })
+    const accepted = await stack.applyAction(ALICE, GAME_ID, pickAction('seat-bob', 2))
     if (!accepted.ok) throw new Error(accepted.error)
-    expect(accepted.state.game.picks['seat-bob']).toBe(2)
+    expect(gameData(accepted.state).picks['seat-bob']).toBe(2)
     expect(accepted.state.pendingPlayerIds).toEqual(['seat-alice'])
   })
 
@@ -429,7 +429,7 @@ describe('production Supabase stack', () => {
   describe("discarding another player's undone move", () => {
     async function bobPicksThenAliceUndoes() {
       await seed(stack)
-      const bobPicked = await stack.applyAction(BOB, GAME_ID, { type: 'PICK_NUMBER', playerId: 'seat-bob', value: 4 })
+      const bobPicked = await stack.applyAction(BOB, GAME_ID, pickAction('seat-bob', 4))
       if (!bobPicked.ok) throw new Error(bobPicked.error)
       const undone = await stack.undoAction(ALICE, GAME_ID)
       if (!undone.ok) throw new Error(undone.error)
@@ -438,7 +438,7 @@ describe('production Supabase stack', () => {
 
     it('is refused without room admin mode, even for the room owner', async () => {
       await bobPicksThenAliceUndoes()
-      const result = await stack.applyAction(ALICE, GAME_ID, { type: 'PICK_NUMBER', playerId: 'seat-alice', value: 2 })
+      const result = await stack.applyAction(ALICE, GAME_ID, pickAction('seat-alice', 2))
       expect(result).toMatchObject({ ok: false, status: 403 })
     })
 
@@ -448,9 +448,9 @@ describe('production Supabase stack', () => {
       if (!adminOn.ok) throw new Error(adminOn.error)
       expect(adminOn.state.adminModeActive).toBe(true)
 
-      const result = await stack.applyAction(ALICE, GAME_ID, { type: 'PICK_NUMBER', playerId: 'seat-alice', value: 2 })
+      const result = await stack.applyAction(ALICE, GAME_ID, pickAction('seat-alice', 2))
       if (!result.ok) throw new Error(result.error)
-      expect(result.state.game.picks).toEqual({ 'seat-alice': 2, 'seat-bob': null })
+      expect(gameData(result.state).picks).toEqual({ 'seat-alice': 2, 'seat-bob': null })
       expect(result.state.actionHistory.at(-1)?.viaAdminMode).toBe(true)
     })
 

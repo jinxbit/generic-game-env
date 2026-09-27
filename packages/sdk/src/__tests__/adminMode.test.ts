@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyAction } from '../applyAction'
 import { resolveHistory } from '../historyFold'
 import { applyUndoAction } from '../undoRedo'
-import { act, newGame, pick } from './helpers'
+import { act, asGame, newGame, pick } from './helpers'
 
 const on = { type: 'SET_ADMIN_MODE', playerId: 'p1', enabled: true } as const
 const off = { type: 'SET_ADMIN_MODE', playerId: 'p1', enabled: false } as const
@@ -51,7 +51,7 @@ describe('SET_ADMIN_MODE', () => {
     if (!undone.ok) throw new Error(undone.error)
 
     expect(undone.state.adminModeActive).toBe(true)
-    expect(undone.state.game.picks.p1).toBeNull()
+    expect(asGame(undone.state).game.picks.p1).toBeNull()
   })
 
   it('gives undo nothing to revert on its own', () => {

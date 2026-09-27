@@ -4,14 +4,12 @@
 // and folded into the triggering entry. The example game has no forced
 // moves, so these tests stub the hook on the bound game object.
 
+import type { GameAction } from '@game-platform/unique-pick/rules'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { GameAction } from '../../game/types'
 import { applyAction, applyActionWithSteps } from '../applyAction'
-import { game } from '../game'
 import { replayActions } from '../replay'
-import type { GameState } from '../types'
 import { applyUndoAction } from '../undoRedo'
-import { act, newGame, pick } from './helpers'
+import { act, game, newGame, pick, pickAction, type GameState } from './helpers'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -57,7 +55,7 @@ describe('forced follow-up folding', () => {
   it('reports every folded step, in order, through applyActionWithSteps', () => {
     vi.spyOn(game, 'nextForcedAction').mockImplementation(forceEveryoneAfterP1)
 
-    const result = applyActionWithSteps(newGame({ players: 3 }), { type: 'PICK_NUMBER', playerId: 'p1', value: 5 })
+    const result = applyActionWithSteps(newGame({ players: 3 }), pickAction('p1', 5))
     if (!result.ok) throw new Error(result.error)
 
     expect(result.steps.map((step) => step.action)).toEqual([
@@ -121,7 +119,7 @@ describe('forced follow-up folding', () => {
       .spyOn(game, 'nextForcedAction')
       .mockImplementation((state) => ({ type: 'PICK_NUMBER', playerId: 'p1', value: state.game.picks.p1 === 1 ? 2 : 1 }))
 
-    const result = applyAction(newGame({ players: 3 }), { type: 'PICK_NUMBER', playerId: 'p2', value: 5 })
+    const result = applyAction(newGame({ players: 3 }), pickAction('p2', 5))
 
     expect(result).toEqual({ ok: false, error: 'Forced follow-up actions did not converge.' })
     expect(spy.mock.calls.length).toBeGreaterThan(1000)

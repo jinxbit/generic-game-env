@@ -303,7 +303,9 @@ export class Database {
    * - `games_bump_config_version`: a change to settings or the player-count
    *   bounds is only allowed while the room is in the lobby, and bumps
    *   config_version.
-   * - `games_enforce_name_immutable`: the name never changes.
+   * - `games_enforce_name_immutable`: neither the name nor `game_type`
+   *   ever changes — `enforce_game_name_immutable()` checks `game_type`
+   *   first, so a write changing both raises the game-type message.
    * - `games_enforce_status_transition`: only lobby -> active, lobby ->
    *   canceled and active -> canceled are legal; and for a rule-enforced game
    *   lobby -> active may only be made by the service role (the start-game
@@ -321,6 +323,7 @@ export class Database {
       if (old.status !== 'lobby') throw raiseException('Configuration can only change while the room is Active - Not Started')
       next.config_version = old.config_version + 1
     }
+    if (old.game_type !== next.game_type) throw raiseException("A room's game cannot be changed after creation")
     if (old.name !== next.name) throw raiseException('Room name cannot be changed after creation')
     if (old.status !== next.status) {
       const legal = [
@@ -406,8 +409,20 @@ export class Database {
       if (this.rows[table].some((existing) => existing[key] === row[key])) {
         throw new DatabaseError(409, '23505', `duplicate key value violates unique constraint "${table}_pkey"`)
       }
+      // `games.game_type text not null` and the `games_game_type_format`
+      // check constraint (section 3): every room names the game it plays,
+      // as a lowercase slug — the same format registerGame() accepts.
+      if (table === 'games') {
+        const gameType = row.game_type
+        if (gameType === undefined || gameType === null) {
+          throw new DatabaseError(400, '23502', 'null value in column "game_type" of relation "games" violates not-null constraint')
+        }
+        if (typeof gameType !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(gameType)) {
+          throw new DatabaseError(400, '23514', 'new row for relation "games" violates check constraint "games_game_type_format"')
+        }
+      }
       // chat_messages' `check (char_length(body) between 1 and 2000)`
-      // (section 10) — the one column CHECK constraint a test in this repo
+      // (section 10) — the other column CHECK constraint a test in this repo
       // actually needs modeled.
       if (table === 'chat_messages') {
         const body = row.body as string | undefined

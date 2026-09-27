@@ -4,7 +4,7 @@
 // roster and seat order never change after the game starts, and nothing here
 // reads randomness, the clock or ambient state. Used when starting a game
 // (gameApi.ts's startGameFromLobby, the start-game Edge Function), by undo/
-// redo (which replay the history against it — ../engine/undoRedo.ts), and by
+// redo (which replay the history against it — @game-platform/sdk's undoRedo.ts), and by
 // the delta read path (./deltaReplayContext.ts).
 //
 // A game that needs randomness at setup (a shuffled deck, a random first

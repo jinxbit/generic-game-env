@@ -303,6 +303,7 @@ export async function provisionLiveRoom(config: LiveProjectConfig, fixture: Prod
     const { data: gameRow, error: gameError } = await ownerClient
       .from('games')
       .insert({
+        game_type: fixture.game.game_type,
         room_code: `S${globalThis.crypto.randomUUID().replace(/-/g, '').slice(0, 6).toUpperCase()}`,
         name: roomName(fixture.name, namePrefix),
         play_mode: 'live',

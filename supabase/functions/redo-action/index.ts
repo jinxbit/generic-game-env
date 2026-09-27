@@ -1,6 +1,6 @@
 // Redoes the last undone action of a rule-enforced game, server-side.
 // Undo/redo are logged actions (UNDO_ACTION/REDO_ACTION) folded in by
-// resolveHistory (src/engine/historyFold.ts), not a splice of the log, so
+// resolveHistory (packages/sdk/src/historyFold.ts), not a splice of the log, so
 // this needs the game's genesis (buildGenesisState, src/lib/gameGenesis.ts):
 // it's a shorter/longer replay from the start, not a step forward from the
 // current state — mirroring GamePage.tsx's client-trusted handleUndo/

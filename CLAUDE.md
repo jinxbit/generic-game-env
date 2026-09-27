@@ -12,10 +12,14 @@ Vite + React 19 + TypeScript + Tailwind v4 on the frontend, Supabase
 (Postgres + RLS + Realtime + Auth + Edge Functions) on the backend, Vercel
 for hosting.
 
-The game itself is a pluggable slot, `src/game/`. It currently holds a tiny
-example game, **Unique Pick**, that exists to exercise every platform
-feature. Building a real game means replacing that folder — read
-`src/game/README.md` first.
+This repo is an npm-workspaces monorepo and the **main platform repo**.
+Games are packages: the rules framework is `packages/sdk`
+(`@game-platform/sdk`), and each game is its own package — here only the
+example game, **Unique Pick** (`packages/unique-pick`), which exists to
+exercise every platform feature and is the test fixture. A game can live in
+its own repo and be installed. One deployment hosts whichever games
+`src/games/registry.ts` registers. Read `packages/unique-pick/README.md`
+before building or changing a game.
 
 ## Commands
 
@@ -74,8 +78,10 @@ build need no env vars.
 ## Architecture — the layering rules that matter
 
 ```
-src/engine/    game-agnostic rules framework — no React, no Supabase, no I/O
-src/game/      the pluggable game: types, rules (a GameDefinition), view, options, display strings
+packages/sdk/  @game-platform/sdk: game-agnostic rules framework + registry + game contract — no React, no Supabase, no I/O
+packages/<game>/ one package per game: `rules` entry (a GameDefinition, server-safe) + `view` entry (React)
+src/games/     the deployment's game list: registry.ts (rules, imported everywhere rules run) + ui.ts (views)
+src/site.ts    site branding (title, tagline) — also read by vite.config.ts
 src/lib/       Supabase client, typed queries (gameApi.ts), genesis, storage encoding, delta protocol
 src/hooks/     React hooks (auth, admin, display name, preferences)
 src/pages/     routed screens (see src/App.tsx); GamePage.tsx is the in-game shell
@@ -87,28 +93,34 @@ src/test/      vitest setup, an in-process production-like Supabase stack, repla
 Five invariants hold across the whole codebase. Breaking any of them will
 break replay, the Edge Functions, or both:
 
-1. **`applyAction()` (`src/engine/applyAction.ts`) is the only place game
-   rules run.** UI and network layers treat `GameState` as opaque and change
-   it exclusively by dispatching an `Action` (`src/engine/actions.ts`).
-   Framework actions (CONCEDE, UNDO_ACTION, REDO_ACTION, SET_ADMIN_MODE) are
-   handled by the engine; every other action goes to the game's
-   `GameDefinition.applyAction` (`src/game/rules.ts`), reached only through
-   `src/engine/game.ts`.
-2. **The framework never knows the game.** `src/engine/` reads nothing inside
-   `GameState.game`; everything game-specific goes through the
-   `GameDefinition` contract (`src/engine/gameDefinition.ts`). Platform
-   screens get game-specific strings from `src/game/display.ts` and render
-   the game through `src/game/GameView.tsx`. Keep new game-specific logic in
-   `src/game/`, and new platform logic out of it.
+1. **`applyAction()` (`packages/sdk/src/applyAction.ts`) is the only place
+   game rules run.** UI and network layers treat `GameState` as opaque and
+   change it exclusively by dispatching an `Action`. Framework actions
+   (CONCEDE, UNDO_ACTION, REDO_ACTION, SET_ADMIN_MODE) are handled by the SDK;
+   every other action goes to the rules of the game the state belongs to,
+   found in the registry (`packages/sdk/src/registry.ts`) by the state's
+   `gameType`/`rulesVersion`.
+2. **The framework never knows a game, and games never know the app.** The
+   SDK reads nothing inside `GameState.game`; everything game-specific goes
+   through `GameDefinition` (rules, labels, options) and `GameUi` (view,
+   options form). Game packages depend only on the SDK — never on `src/`.
+   Platform screens get game names/labels from the definition
+   (`findGameDefinition(game.game_type, …)`) and render games through
+   `src/games/ui.ts`. Anything that runs rules must import
+   `src/games/registry.ts` first (the browser entry, `supabase/functions/_shared/games.ts`
+   and `src/test/setup.ts` do).
 3. **Event sourcing.** `GameState.actionHistory` is append-only and never
    pruned or reordered. Current state = genesis (`buildGenesisState`,
    `src/lib/gameGenesis.ts`, a deterministic function of the `games` row +
-   seated `players`) replayed through `replayActions` (`src/engine/replay.ts`).
+   seated `players`) replayed through `replayActions` (`@game-platform/sdk`).
    Undo/redo are themselves logged actions folded in by `resolveHistory`
-   (`src/engine/historyFold.ts`) — not a client-local stack. Anything that
+   (`packages/sdk/src/historyFold.ts`) — not a client-local stack. Anything that
    makes replay non-deterministic (randomness, clock reads, ambient state) is
    a bug; randomness must be rolled before genesis and stored in
-   `games.settings`.
+   `games.settings`. A game always replays under the `rulesVersion` it
+   started with (pinned in `games.settings.rulesVersion` and on the state), so
+   a replay-incompatible rules change ships as a new version registered
+   alongside the old one.
 4. **One submitted action → exactly one `actionHistory` entry.** A forced
    single-option follow-up (`GameDefinition.nextForcedAction`) is dispatched
    inside the same `applyAction` call and folded into the same log entry.
@@ -119,7 +131,7 @@ break replay, the Edge Functions, or both:
    hotseat hand-off and admin mode all read it, and the DB projects it into
    `game_state_meta`.
 
-`GameState` is `src/engine/types.ts`; DB row shapes are `src/lib/dbTypes.ts`
+`GameState` is `packages/sdk/src/types.ts`; DB row shapes are `src/lib/dbTypes.ts`
 — deliberately separate types, don't merge them.
 
 ## The two write paths
@@ -167,27 +179,32 @@ needs both the old and new status).
 `get-game-state` Edge Function, and the write functions redact their
 responses the same way (`redactedResponseState`). What's secret is the
 game's call (`GameDefinition.redactGame`/`isActionSecret`); the framework
-(`src/engine/redaction.ts`) masks the state, replaces secret log entries
+(`packages/sdk/src/redaction.ts`) masks the state, replaces secret log entries
 with `HIDDEN_ACTION` placeholders, and the client keeps only the log prefix
 before the first one (`unredactedPrefix`). The delta read protocol
 (`respondWithState` in `supabase/functions/_shared/gameEnforcement.ts`,
 `src/lib/replayDelta.ts`) has the client replay new log entries itself, lay
-an in-flight overlay (`src/engine/inFlightOverlay.ts`) over the result, and
+an in-flight overlay (`packages/sdk/src/inFlightOverlay.ts`) over the result, and
 verify it against a server hash.
 
 ## Supabase / Edge Function gotchas
 
-- **Edge Functions import `src/engine/`, `src/game/`, and `src/lib/` directly
-  and unmodified** (`supabase/functions/_shared/gameEnforcement.ts`). There
-  is no rule-logic duplication between client and server, and there must not
-  be.
+- **Edge Functions import the SDK, the registered games' `rules` entries, and
+  `src/lib/` directly and unmodified.** There is no rule-logic duplication
+  between client and server, and there must not be. Bare package specifiers
+  resolve through `supabase/functions/import_map.json`, wired to every
+  function in `supabase/config.toml`; `src/test/__tests__/edgeFunctionImports.test.ts`
+  fails if a reachable specifier isn't mapped, a mapped file is missing, or a
+  function isn't wired. **Adding a game means adding its `rules` entry to the
+  import map.**
 - **The Edge Runtime does not honor `sloppy-imports`.** Every relative import
   in the graph reachable from `supabase/functions/` must carry an explicit
   `.ts` extension, and JSON imports need `with { type: 'json' }`. That graph
-  includes all of `src/engine/`, `src/game/types.ts`/`rules.ts`/`display.ts`,
-  and the `src/lib/` modules the functions import. **If you add an import to
-  a server-reachable file, use the `.ts` extension** — a missing one only
-  fails at deploy time, not in CI.
+  includes all of `packages/sdk/src/` (except `ui.ts`/`testing.ts`), every
+  game's `rules` entry and what it imports, `src/games/registry.ts`,
+  `src/site.ts`, and the `src/lib/` modules the functions import. A missing
+  extension only fails at deploy time, not in CI. Never let React or the
+  `view` entry of a game into that graph.
 - **`main` is pre-production, not production.** `.github/workflows/deploy-supabase.yml`
   deploys to the **Preview** Supabase project on push to `main`, and to
   production on push to the `production` branch — which is only ever
@@ -210,8 +227,10 @@ verify it against a server hash.
   `push_subscriptions`, `app_config`, `chat_messages`, `chat_read_status`.
   Per-game config lives in the `games.settings` jsonb column rather than new
   columns — add pregame toggles there (`GameSettings` in `dbTypes.ts`), and
-  game-specific options under `settings.gameOptions` (`GameOptions` in
-  `src/game/types.ts`). No migration needed for either.
+  game-specific options under `settings.gameOptions` (opaque to the platform;
+  the game's `normalizeOptions` makes sense of them). `games.game_type` is the
+  one game-related column: which registered game the room plays, immutable.
+  Adding a game needs no migration.
 - A local stack (`supabase start` / `db push` / `functions serve`,
   `supabase/config.toml`) needs Docker, which the sandbox doesn't have. The
   `@claude` GitHub Action runner does — it preinstalls the Supabase CLI and
@@ -221,10 +240,11 @@ verify it against a server hash.
 
 - Vitest, jsdom environment, globals enabled, `@testing-library/react` +
   `jest-dom` (`src/test/setup.ts`, config lives in `vite.config.ts`).
-- Engine tests (`src/engine/__tests__/`) pin the framework's invariants, using
-  the example game as their fixture; game rules tests live in
-  `src/game/__tests__/`. Both are pure and fast — the right place to pin any
-  rules change.
+- SDK tests (`packages/sdk/src/__tests__/`) pin the framework's invariants,
+  using the example game as their fixture; each game's rules tests live in
+  its own package (`packages/unique-pick/src/__tests__/`). Both are pure and
+  fast — the right place to pin any rules change. Vitest runs them from the
+  repo root along with everything else.
 - `src/test/supabaseStack/` is an **in-process stack that behaves like
   production**: real `@supabase/supabase-js` clients over a patched `fetch`,
   the real Edge Function handlers, the migrations' RLS (transcribed in
@@ -281,7 +301,8 @@ verify it against a server hash.
 | File | What it is |
 | --- | --- |
 | `README.md` | Setup and operations: Supabase, Discord/Google OAuth, Discord + Web Push notifications, guest auth, hotseat, server-side rule enforcement, game-state export. |
-| `src/game/README.md` | **The game slot**: the `GameDefinition` contract, the rules every game must follow, and how to swap in a new game. |
+| `packages/unique-pick/README.md` | **How a game package works**: the `GameDefinition`/`GameUi` contract, the rules every game must follow, rules versions, and starting a game in its own repo. |
+| `packages/sdk/README.md` | The framework package: entry points and how the registry fits together. |
 | `CHAT_PLAN.md` | Site-wide + in-game chat design record. |
 | `DELIVERY_PIPELINE_PLAN.md` | How a change reaches production: the pre-production environment, branch topology, what auto-merges and what never does. |
 | `PRODUCTION_DEPLOYMENT.md` | The production deployment runbook: preconditions, how to promote, what to watch afterwards, how to recover, and hotfixes. |
@@ -291,5 +312,6 @@ verify it against a server hash.
 - Branch, commit, and push as instructed; don't open a PR unless asked.
 - Keep changes minimal and in the style of the surrounding code.
 - Settings that matter to a running game are copied onto `GameState` at
-  genesis (`options`, `hiddenInformationEnabled`) so a running game and its
-  export stay self-contained; read them from `GameState`, not the `games` row.
+  genesis (`gameType`, `rulesVersion`, `options`, `hiddenInformationEnabled`)
+  so a running game and its export stay self-contained; read them from
+  `GameState`, not the `games` row.

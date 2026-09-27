@@ -1,7 +1,7 @@
 // Chat: the typed data layer for CHAT_PLAN.md §6, mirroring gameApi.ts's
 // shape. Parameterized by `gameId: string | null` throughout (null =
 // site-wide) so in-game chat uses this file unchanged with a real game id — nothing here is HomePage-specific.
-// Never touches src/engine/: chat is not a game rule (CHAT_PLAN.md §1).
+// Never touches the rules framework: chat is not a game rule (CHAT_PLAN.md §1).
 
 import { supabase } from './supabase'
 import type { ChatMessageRow, ChatReadStatusRow } from './dbTypes'

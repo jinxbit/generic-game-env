@@ -166,7 +166,7 @@ export function redactedResponseState(ctx: GameContext, callerUserId: string, st
  * Whether appending `submittedByPlayerId`'s new action would discard another
  * player's undone action. Appending to the raw `actionHistory` while the undo
  * pointer sits behind the tip prunes the un-redone tail automatically
- * (resolveHistory, src/engine/historyFold.ts) — this checks, before that
+ * (resolveHistory, packages/sdk/src/historyFold.ts) — this checks, before that
  * happens, whether that tail contains anyone else's action.
  *
  * Only decides WHETHER an override is needed, not whether the caller has one:
@@ -186,7 +186,7 @@ function actionPlayerId(action: Action): string | null {
 }
 
 /**
- * Applies `action` against `state` via applyAction (src/engine/applyAction.ts)
+ * Applies `action` against `state` via applyAction (packages/sdk/src/applyAction.ts)
  * — the same entry point GamePage.tsx's submitAction uses client-side, so
  * forced follow-ups fold into the same actionHistory entry here and there.
  */

@@ -5,6 +5,7 @@ import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
+import { SITE } from './src/site.ts'
 
 // Unique per build so the client can detect a newer deploy is live.
 const buildId = Date.now().toString(36)
@@ -16,6 +17,17 @@ const buildId = Date.now().toString(36)
 // badge already treats as "nothing to show".
 const gitCommitRef = process.env.VERCEL_GIT_COMMIT_REF ?? ''
 const gitCommitSha = process.env.VERCEL_GIT_COMMIT_SHA ?? ''
+
+/** Fills index.html's %SITE_TITLE%/%SITE_TAGLINE% placeholders from src/site.ts. */
+function siteBranding(): Plugin {
+  const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;')
+  return {
+    name: 'site-branding',
+    transformIndexHtml(html) {
+      return html.replaceAll('%SITE_TITLE%', escape(SITE.title)).replaceAll('%SITE_SHORT_NAME%', escape(SITE.shortName)).replaceAll('%SITE_TAGLINE%', escape(SITE.tagline))
+    },
+  }
+}
 
 /** Emits version.json into the build output so running tabs can poll for a newer buildId. */
 function writeVersionFile(): Plugin {
@@ -38,6 +50,7 @@ export default defineConfig({
     react(),
     tailwindcss(),
     writeVersionFile(),
+    siteBranding(),
     VitePWA({
       // Custom src/sw.ts (not the default generated worker) so it can also
       // handle `push`/`notificationclick` for turn notifications — see that
@@ -53,12 +66,10 @@ export default defineConfig({
       registerType: 'autoUpdate',
       devOptions: { enabled: false },
       manifest: {
-        // Mirrors GAME_TITLE/GAME_TAGLINE in src/game/display.ts (not
-        // imported: that module pulls in the game's rules, which this Node
-        // config shouldn't compile) — update both when swapping the game.
-        name: 'Unique Pick',
-        short_name: 'Unique Pick',
-        description: 'Pick a number nobody else picks. A tiny example game for this platform.',
+        // Site branding — src/site.ts, the one place to change it.
+        name: SITE.title,
+        short_name: SITE.shortName,
+        description: SITE.tagline,
         start_url: '/',
         display: 'standalone',
         background_color: '#0a0a0a',

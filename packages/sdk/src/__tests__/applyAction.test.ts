@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { applyAction, applyActionWithSteps } from '../applyAction'
-import { game } from '../game'
-import { act, newGame, pick } from './helpers'
+import { act, asGame, game, newGame, pick, pickAction } from './helpers'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -27,7 +26,7 @@ describe('applyAction', () => {
     })
 
     it("passes a game's rejection straight through", () => {
-      const result = applyAction(newGame(), { type: 'PICK_NUMBER', playerId: 'p1', value: 99 })
+      const result = applyAction(newGame(), pickAction('p1', 99))
       expect(result).toEqual({ ok: false, error: 'Pick a whole number from 1 to 5.' })
     })
 
@@ -45,7 +44,7 @@ describe('applyAction', () => {
       const completed = act(newGame(), { type: 'CONCEDE', playerId: 'p2' })
       const spy = vi.spyOn(game, 'applyAction')
 
-      const result = applyAction(completed, { type: 'PICK_NUMBER', playerId: 'p1', value: 3 })
+      const result = applyAction(completed, pickAction('p1', 3))
 
       expect(result).toEqual({ ok: false, error: 'Game is not active (status: completed)' })
       expect(spy).not.toHaveBeenCalled()
@@ -66,7 +65,7 @@ describe('applyAction', () => {
 
     it('appends nothing for a rejected action', () => {
       const state = pick(newGame({ players: 3 }), 'p1', 3)
-      const result = applyAction(state, { type: 'PICK_NUMBER', playerId: 'p1', value: 3 })
+      const result = applyAction(state, pickAction('p1', 3))
       expect(result.ok).toBe(false)
       expect(state.actionHistory).toHaveLength(1)
     })
@@ -120,12 +119,12 @@ describe('applyAction', () => {
   describe('applyActionWithSteps', () => {
     it('reports the one step behind an action with no forced follow-ups, with its before/after pair', () => {
       const genesis = newGame()
-      const result = applyActionWithSteps(genesis, { type: 'PICK_NUMBER', playerId: 'p1', value: 3 })
+      const result = applyActionWithSteps(genesis, pickAction('p1', 3))
       if (!result.ok) throw new Error(result.error)
 
       expect(result.steps).toHaveLength(1)
       expect(result.steps[0].before).toBe(genesis)
-      expect(result.steps[0].after.game.picks.p1).toBe(3)
+      expect(asGame(result.steps[0].after).game.picks.p1).toBe(3)
       // The step's `after` is pre-logging; the returned state carries the entry.
       expect(result.steps[0].after.actionHistory).toHaveLength(0)
       expect(result.state.actionHistory).toHaveLength(1)

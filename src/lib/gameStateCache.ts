@@ -47,7 +47,7 @@ import type { GameState } from '@game-platform/sdk'
  *   partially-written IndexedDB entry — not a check against anything the
  *   server reports; the server has no notion of a content hash for a given
  *   version (the delta protocol only ever agrees on lengths — see
- *   `applyRedactedGameStateDelta` in `../engine/redaction.ts`), and this
+ *   `applyRedactedGameStateDelta` in `@game-platform/sdk's redaction.ts`), and this
  *   cache deliberately builds against that existing request shape rather
  *   than inventing a new one.
  * - **version too new / not recognised**: not checked here at all — it

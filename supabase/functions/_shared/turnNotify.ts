@@ -5,7 +5,7 @@
 // one had already silently diverged from the other.
 //
 // Game-agnostic: "whose turn" is the game-maintained `pendingPlayerIds`
-// (src/engine/types.ts — every player who may act right now, sequential or
+// (packages/sdk/src/types.ts — every player who may act right now, sequential or
 // simultaneous), diffed across the write. Nothing here knows which game is
 // being played beyond its phase label (GameDefinition.describePhase, looked
 // up by the room's `game_type`).
@@ -15,7 +15,7 @@
 // status/phase/turn/pendingPlayerIds/activePlayerId/turnOrder duplicated in
 // plaintext (src/lib/gameStateCompression.ts), so these functions read only
 // those fields. src/test/__tests__/turnNotify.test.ts checks them against the
-// engine's own pendingActorIds() (src/engine/turnOrder.ts) on both
+// engine's own pendingActorIds() (packages/sdk/src/turnOrder.ts) on both
 // encodings — keep the two in sync; the test fails if they aren't.
 
 import { findGameDefinition } from '@game-platform/sdk'
@@ -39,7 +39,7 @@ export interface GameStateRow {
   active_player_id: string | null
 }
 
-/** Mirrors src/engine/turnOrder.ts's pendingActorIds(). */
+/** Mirrors packages/sdk/src/turnOrder.ts's pendingActorIds(). */
 export function pendingActorIds(state: GameState): string[] {
   return state.status === 'active' ? (state.pendingPlayerIds ?? []) : []
 }

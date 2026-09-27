@@ -98,6 +98,16 @@ jobs:
           fi
           echo "Environment '$ENVIRONMENT' -> Supabase project '$SUPABASE_PROJECT_ID' (production is '$PRODUCTION_PROJECT_ID')."
 
+      # Edge Functions import the game packages (src/games/registry.ts via
+      # supabase/functions/import_map.json); one installed from another repo
+      # lives in node_modules, so install before deploying.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install npm packages
+        run: npm ci
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v1
         with:

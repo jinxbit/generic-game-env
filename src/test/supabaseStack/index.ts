@@ -67,7 +67,7 @@ export type GameStateDeltaReadResult = (({ ok: true; version: number } & Redacte
 /**
  * get-game-state's protocol-2 delta (issue #648): no materialised state at
  * all, just the actions the caller may replay, an overlay for what a replay
- * cannot reach (src/engine/inFlightOverlay.ts) and a hash of the result.
+ * cannot reach (packages/sdk/src/inFlightOverlay.ts) and a hash of the result.
  */
 export type GameStateReplayDeltaReadResult = (
   | { ok: true; version: number; actionHistoryFrom: number; actionHistoryAppend: RedactedLoggedAction[]; actionHistoryLength: number; overlay?: InFlightOverlay; stateHash: string }

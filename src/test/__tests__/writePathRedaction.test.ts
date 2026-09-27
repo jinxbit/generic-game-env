@@ -22,7 +22,7 @@ import { hashGameStateView } from '../../lib/gameStateHash.ts'
 import { buildGenesisState } from '../../lib/gameGenesis.ts'
 import type { GameSettings } from '../../lib/dbTypes.ts'
 import { createProductionStack, type ProductionStack } from '../supabaseStack/index.ts'
-import { testGameRow, testGameSettings, testPlayers } from '../supabaseStack/sampleGame.ts'
+import { gameData, pickAction, testGameRow, testGameSettings, testPlayers } from '../supabaseStack/sampleGame.ts'
 
 const GAME_ID = '3f1c2d4e-0000-4000-8000-000000000003'
 const ALICE = 'auth-user-alice' // room owner, seated
@@ -37,8 +37,8 @@ const PLAYERS = testPlayers(GAME_ID, [
 
 const PICKS: Record<string, number> = { 'seat-alice': 2, 'seat-bob': 4, 'seat-charlie': 5 }
 
-function pick(seat: string): Action {
-  return { type: 'PICK_NUMBER', playerId: seat, value: PICKS[seat] }
+function pick(seat: string): PickNumberAction {
+  return pickAction(seat, PICKS[seat])
 }
 
 function gameRow(settings: GameSettings) {
@@ -84,19 +84,19 @@ describe('apply-action/undo-action/redo-action write-path redaction', () => {
     // Alice's own browser, in the state or in the log.
     const aliceResponse = await rawApplyAction(ALICE, pick('seat-alice'))
     expect(aliceResponse.state.pendingPlayerIds).toEqual(['seat-charlie'])
-    expect(aliceResponse.state.game.picks['seat-bob']).toBeNull()
+    expect(gameData(aliceResponse.state).picks['seat-bob']).toBeNull()
     expect(aliceResponse.state.actionHistory.map((entry) => entry.action)).toEqual([
       { type: 'HIDDEN_ACTION', playerId: 'seat-bob' },
       pick('seat-alice'),
     ])
     // Alice's own pick is never hidden from herself.
-    expect(aliceResponse.state.game.picks['seat-alice']).toBe(PICKS['seat-alice'])
+    expect(gameData(aliceResponse.state).picks['seat-alice']).toBe(PICKS['seat-alice'])
 
     // Charlie's own submission resolves the round — nothing left pending, so
     // this same response now reveals every pick, Bob's included.
     const charlieResponse = await rawApplyAction(CHARLIE, pick('seat-charlie'))
     expect(charlieResponse.state.turn).toBe(2)
-    expect(charlieResponse.state.game.rounds[0].picks).toEqual(PICKS)
+    expect(gameData(charlieResponse.state).rounds[0].picks).toEqual(PICKS)
     expect(charlieResponse.state.actionHistory.map((entry) => entry.action)).toEqual([pick('seat-bob'), pick('seat-alice'), pick('seat-charlie')])
   })
 
@@ -104,12 +104,12 @@ describe('apply-action/undo-action/redo-action write-path redaction', () => {
     await seedRoundOne()
     const bobChose = await stack.applyAction(BOB, GAME_ID, pick('seat-bob'))
     if (!bobChose.ok) throw new Error(bobChose.error)
-    const bobChanged = await stack.applyAction(BOB, GAME_ID, { type: 'PICK_NUMBER', playerId: 'seat-bob', value: 1 })
+    const bobChanged = await stack.applyAction(BOB, GAME_ID, pickAction('seat-bob', 1))
     if (!bobChanged.ok) throw new Error(bobChanged.error)
-    expect(bobChanged.state.game.picks['seat-bob']).toBe(1)
+    expect(gameData(bobChanged.state).picks['seat-bob']).toBe(1)
 
     const aliceResponse = await rawApplyAction(ALICE, pick('seat-alice'))
-    expect(aliceResponse.state.game.picks['seat-bob']).toBeNull()
+    expect(gameData(aliceResponse.state).picks['seat-bob']).toBeNull()
     expect(aliceResponse.state.actionHistory.slice(0, 2).map((entry) => entry.action.type)).toEqual(['HIDDEN_ACTION', 'HIDDEN_ACTION'])
   })
 
@@ -146,8 +146,8 @@ describe('apply-action/undo-action/redo-action write-path redaction', () => {
       // Charlie is still pending, so redaction is live — and Alice rebuilding
       // the state herself is not a way around it.
       expect(rebuilt.pendingPlayerIds).toEqual(['seat-charlie'])
-      expect(rebuilt.game.picks['seat-bob']).toBeNull()
-      expect(rebuilt.game.picks['seat-alice']).toBe(PICKS['seat-alice'])
+      expect(gameData(rebuilt).picks['seat-bob']).toBeNull()
+      expect(gameData(rebuilt).picks['seat-alice']).toBe(PICKS['seat-alice'])
 
       // ...and it agrees with what a plain read would have said.
       const read = await stack.getGameState(ALICE, GAME_ID)
@@ -177,7 +177,7 @@ describe('apply-action/undo-action/redo-action write-path redaction', () => {
       const rebuilt = rebuild(genesis, base, delta)
       expect(hashGameStateView(rebuilt)).toBe(delta.stateHash)
       expect(rebuilt.turn).toBe(2)
-      expect(rebuilt.game.rounds[0].picks).toEqual(PICKS)
+      expect(gameData(rebuilt).rounds[0].picks).toEqual(PICKS)
     })
 
     it('undo and redo answer in the same shape', async () => {
@@ -220,7 +220,7 @@ describe('apply-action/undo-action/redo-action write-path redaction', () => {
     // real pick comes straight through.
     const aliceChose = await stack.applyAction(ALICE, GAME_ID, pick('seat-alice'))
     if (!aliceChose.ok) throw new Error(aliceChose.error)
-    expect(aliceChose.state.game.picks['seat-bob']).toBe(PICKS['seat-bob'])
+    expect(gameData(aliceChose.state).picks['seat-bob']).toBe(PICKS['seat-bob'])
   })
 })
 

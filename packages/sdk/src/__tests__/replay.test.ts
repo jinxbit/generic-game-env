@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { LoggedAction } from '../actions'
 import { extendReplay, replayActions, replayToBase } from '../replay'
-import type { GameState } from '../types'
 import { applyUndoAction } from '../undoRedo'
-import { act, newGame, pick, pickAll } from './helpers'
+import { act, gameData, newGame, pick, pickAction, pickAll, type GameState } from './helpers'
 
 /** Two rounds and a concede in a 3-player game. */
 function played(genesis: GameState): GameState {
@@ -44,12 +43,12 @@ describe('replayActions', () => {
     const undone = applyUndoAction(genesis, pick(genesis, 'p1', 3), 'p1')
     if (!undone.ok) throw new Error(undone.error)
 
-    expect(replayActions(genesis, undone.state.actionHistory).game.picks.p1).toBeNull()
+    expect(gameData(replayActions(genesis, undone.state.actionHistory)).picks.p1).toBeNull()
   })
 
   it('throws on an entry the rules reject — a genesis mismatch or a corrupt log', () => {
     const genesis = newGame()
-    const corrupt: LoggedAction[] = [{ action: { type: 'PICK_NUMBER', playerId: 'p1', value: 9 }, turn: 1, timestamp: '' }]
+    const corrupt: LoggedAction[] = [{ action: pickAction('p1', 9), turn: 1, timestamp: '' }]
     expect(() => replayActions(genesis, corrupt)).toThrow(/^Replay failed at action .*PICK_NUMBER/)
   })
 })
@@ -95,12 +94,12 @@ describe('extendReplay', () => {
 
     expect(extended).toEqual(replayActions(genesis, full))
     expect(extended.turn).toBe(1)
-    expect(extended.game.picks.p1).toBeNull()
+    expect(gameData(extended).picks.p1).toBeNull()
   })
 
   it('throws on an append entry the rules reject', () => {
     const genesis = newGame()
-    const bad: LoggedAction[] = [{ action: { type: 'PICK_NUMBER', playerId: 'p1', value: 0 }, turn: 1, timestamp: '' }]
+    const bad: LoggedAction[] = [{ action: pickAction('p1', 0), turn: 1, timestamp: '' }]
     expect(() => extendReplay(genesis, genesis, bad)).toThrow(/^Delta replay failed at/)
   })
 })

@@ -4,7 +4,7 @@
 // undo-action/redo-action/get-game-state/start-game.
 //
 // Request body: `{ gameId: string, action: Action }` (see
-// src/engine/actions.ts). UNDO_ACTION/REDO_ACTION are rejected here (same as
+// packages/sdk/src/actions.ts). UNDO_ACTION/REDO_ACTION are rejected here (same as
 // applyAction() itself) — submit those to undo-action/redo-action, which
 // replay from genesis rather than stepping forward. SET_ADMIN_MODE IS
 // handled here — an ordinary forward step, just with its own owner-or-admin

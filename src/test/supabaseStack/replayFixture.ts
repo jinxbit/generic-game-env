@@ -2,7 +2,7 @@
 // each entry the way production submits that kind of entry: a game action,
 // CONCEDE or SET_ADMIN_MODE to apply-action, an UNDO_ACTION/REDO_ACTION
 // marker to undo-action/redo-action (those move a pointer, they aren't a step
-// forward — see UndoAction's doc comment in src/engine/actions.ts), each as
+// forward — see UndoAction's doc comment in packages/sdk/src/actions.ts), each as
 // the signed-in user who holds the seat that made it.
 //
 // Shared by ../__tests__/productionGames.test.ts, which points it at the
@@ -37,7 +37,7 @@ export type LoggedEntry = GameState['actionHistory'][number]
 
 export function submitLoggedEntry(stack: ReplayTarget, fixture: ProductionGameFixture, entry: LoggedEntry): Promise<EnforcedCallResult> {
   // UNDO_ACTION/REDO_ACTION/SET_ADMIN_MODE carry a nullable, narration-only
-  // playerId (see their doc comments in src/engine/actions.ts) — a null one
+  // playerId (see their doc comments in packages/sdk/src/actions.ts) — a null one
   // means nobody in particular was "acting", so the room owner stands in,
   // which is also the only caller SET_ADMIN_MODE would have accepted.
   const playerId = entry.action.playerId

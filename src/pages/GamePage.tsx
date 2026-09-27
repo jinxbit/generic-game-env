@@ -105,7 +105,7 @@ export function GamePage() {
   /**
    * The *base* behind the rendered view: the state replayed up to this
    * viewer's safe actionHistory prefix, before any in-flight overlay
-   * (engine/inFlightOverlay.ts). This — never the view — seeds the next delta
+   * (@game-platform/sdk's inFlightOverlay.ts). This — never the view — seeds the next delta
    * request and gets cached, because the view has the overlay's effects baked
    * in and would double-apply them once those actions became visible.
    */
@@ -194,7 +194,7 @@ export function GamePage() {
    * toggle — so every client agrees and the log records when it was on.
    */
   const adminModeActive = gameState?.adminModeActive ?? false
-  /** Undo/redo availability — a pure read of the shared, logged history (engine/historyFold.ts). */
+  /** Undo/redo availability — a pure read of the shared, logged history (@game-platform/sdk's historyFold.ts). */
   const historyPointer = useMemo(() => (gameState ? resolveHistory(gameState.actionHistory) : { effective: [], canUndo: false, canRedo: false }), [gameState])
   /**
    * History review: step through past points in the game without touching
@@ -355,7 +355,7 @@ export function GamePage() {
   // When set, `me` in hotseat just follows whoever must act next, and the
   // pass-the-device gate never shows.
   const skipHotseatGate = game?.settings.skipHotseatPassGate ?? false
-  /** Whichever seated player must act next (engine/turnOrder.ts). */
+  /** Whichever seated player must act next (@game-platform/sdk's turnOrder.ts). */
   const pendingActorId = gameState ? currentActorId(gameState) : null
   const needsHotseatGate = isHotseat && !skipHotseatGate && pendingActorId !== null && pendingActorId !== hotseatActivePlayerId
 
@@ -409,7 +409,7 @@ export function GamePage() {
   }, [reviewIndex, genesis, gameState])
   const displayState = isReviewingHistory ? reviewState : gameState
 
-  /** The narration log for whatever's on screen (engine/gameLog.ts), masked for this viewer (redactGameLog). */
+  /** The narration log for whatever's on screen (@game-platform/sdk's gameLog.ts), masked for this viewer (redactGameLog). */
   const visibleGameLog = useMemo(() => {
     if (!genesis || !displayState) return []
     try {
@@ -521,7 +521,7 @@ export function GamePage() {
    * Undo: any player, at any time — even after the game has ended — rolls
    * the game back one logged entry. Deliberately not gated on `me` (which is
    * null in some hotseat/post-game states); `me` only narrates who undid.
-   * Undo is a logged UNDO_ACTION replayed from genesis (engine/undoRedo.ts),
+   * Undo is a logged UNDO_ACTION replayed from genesis (@game-platform/sdk's undoRedo.ts),
    * so every client sees the same result and it survives a reload.
    */
   async function handleUndo() {

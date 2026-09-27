@@ -3,7 +3,7 @@ import { PLAYER_PLACEHOLDER, type GameEvent } from '@game-platform/sdk'
 import type { PlayerRow } from '../lib/dbTypes'
 
 /**
- * The narration log (engine/gameLog.ts), newest first. `{player}` in a
+ * The narration log (@game-platform/sdk's gameLog.ts), newest first. `{player}` in a
  * message is swapped for the acting player's name in their colour — the
  * engine builds narration without access to display names.
  */

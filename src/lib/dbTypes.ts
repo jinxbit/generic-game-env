@@ -1,5 +1,5 @@
 // Row shapes for the Supabase tables (see supabase/migrations/0001_baseline.sql).
-// Deliberately separate from src/engine/types.ts: these describe how a game
+// Deliberately separate from @game-platform/sdk's GameState: these describe how a game
 // is stored/queried, not the rules-engine's in-memory GameState shape. The
 // game_state.state column holds a serialized engine GameState.
 

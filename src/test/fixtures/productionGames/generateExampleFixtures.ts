@@ -18,14 +18,19 @@
 // metadata that replay never reads — see LoggedAction), which also keeps the
 // output byte-for-byte reproducible apart from gzip itself.
 //
-// Game-specific by nature: replacing src/game/ means replacing these scripts
-// (or deleting them and dropping in real exports instead — see ./README.md).
+// Game-specific by nature: these scripts play the example game
+// (@game-platform/unique-pick). Fixtures for another registered game mean
+// scripting that game here too (or dropping in real exports instead — see
+// ./README.md).
 
-import { applyAction, applyRedoAction, applyUndoAction, type Action, type GameState } from '@game-platform/sdk'
+// The deployment's games, registered — this module also runs outside vitest
+// (scripts/generate-example-fixtures.mjs), where src/test/setup.ts doesn't.
+import '../../../games/registry.ts'
+import { applyAction, applyRedoAction, applyUndoAction, type GameState } from '@game-platform/sdk'
+import { gameDefinition, type GameOptions, type PickNumberAction } from '@game-platform/unique-pick/rules'
 import { buildGenesisState } from '../../../lib/gameGenesis.ts'
 import type { GameRow, GameSettings } from '../../../lib/dbTypes.ts'
 import { encodeGameStateExport } from '../../../lib/gameStateExport.ts'
-import type { GameOptions } from '../../../game/types.ts'
 import type { RoomOverrides } from './loadFixtures.ts'
 
 /** One scripted move: a seat's pick, a concede, admin mode, or an undo/redo by a seat (null = the room owner, unseated narration). */
@@ -71,7 +76,7 @@ function seat(key: string, index: number, gameSuffix: string): Seat {
 }
 
 function settings(options: GameOptions, overrides: Partial<GameSettings> = {}): GameSettings {
-  return { skipHotseatPassGate: false, ruleEnforcementEnabled: true, hiddenInformationEnabled: false, gameOptions: options, ...overrides }
+  return { skipHotseatPassGate: false, ruleEnforcementEnabled: true, hiddenInformationEnabled: false, rulesVersion: gameDefinition.rulesVersion, gameOptions: options, ...overrides }
 }
 
 const GAMES: ExampleGame[] = [
@@ -161,6 +166,7 @@ const GAMES: ExampleGame[] = [
 function play(game: ExampleGame): GameState {
   const row: GameRow = {
     id: game.gameId,
+    game_type: gameDefinition.id,
     room_code: 'EXAMPL',
     name: game.name,
     play_mode: game.playMode,
@@ -188,7 +194,7 @@ function play(game: ExampleGame): GameState {
   for (const [index, move] of game.moves.entries()) {
     let result
     if ('pick' in move) {
-      const action: Action = { type: 'PICK_NUMBER', playerId: idFor(move.pick[0]), value: move.pick[1] }
+      const action: PickNumberAction = { type: 'PICK_NUMBER', playerId: idFor(move.pick[0]), value: move.pick[1] }
       result = applyAction(state, action)
     } else if ('concede' in move) {
       result = applyAction(state, { type: 'CONCEDE', playerId: idFor(move.concede) })

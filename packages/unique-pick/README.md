@@ -1,111 +1,133 @@
-# The game slot
+# @game-platform/unique-pick
 
-Everything specific to the game being played lives in this folder. The rest
-of the platform — rooms, lobby, accounts, undo/redo, history review, admin
-mode, concede, server-side rule enforcement, hidden information, realtime
-sync, notifications, chat, the test harness — only ever talks to it through
-the files below. To build a different game, replace them.
+The platform's example game, and the template for every other game package.
+Every round each player secretly picks a number from 1 to 5 at the same time;
+once everyone has picked, the picks are revealed and every player whose number
+nobody else picked scores it. First to the target score wins (or the highest
+score after the last round). It's deliberately tiny, but it exercises every
+platform feature: simultaneous moves, secret information, changing a move
+before the reveal, concede mid-round, game end with ties. The platform's own
+tests play it as their fixture.
 
-The example here is **Unique Pick**: every round each player secretly picks a
-number from 1 to 5 at the same time; once everyone has picked, the picks are
-revealed and every player whose number nobody else picked scores it. First to
-the target score wins (or the highest score after the last round). It's
-deliberately tiny, but it exercises every platform feature: simultaneous
-moves, secret information, changing a move before the reveal, concede
-mid-round, game end with ties.
+This package is laid out exactly like a standalone game repo, so copying it is
+the quickest way to start a new game.
 
-## Files
+## Entry points
 
-| File | What it is | Imported by |
-| --- | --- | --- |
-| `types.ts` | `GameData` (the game-specific slice of `GameState`, stored under `state.game`), `GameAction` (the game's actions — each must carry `playerId: string`), `GameOptions` (creation-time options). | engine, server, UI |
-| `rules.ts` | `gameDefinition`, implementing `GameDefinition` (`../engine/gameDefinition.ts`). The rules. | engine (via `../engine/game.ts`), server |
-| `display.ts` | `GAME_TITLE`, `GAME_TAGLINE`, `TURN_LABEL`, `describeGameOptions`, `describePhase` — the strings the platform's own screens and notifications show. | UI, notifications |
-| `GameView.tsx` | The in-game view (`GameViewProps`). Rendered by `src/pages/GamePage.tsx`. | UI |
-| `GameOptionsEditor.tsx` | The creation-time options form, shown on the create-game screen and in the lobby's config editor. | UI |
-| `__tests__/` | Rules tests. The engine's own tests (`src/engine/__tests__/`) use this game as their fixture too. | — |
+| Entry | File | What it is | Loaded by |
+| --- | --- | --- | --- |
+| `@game-platform/unique-pick/rules` | `src/rules.ts` | `gameDefinition` (the `GameDefinition` from `@game-platform/sdk`), the game's types, option helpers. Pure: no React, no I/O. | browser **and Edge Functions** |
+| `@game-platform/unique-pick/view` | `src/view.ts` | `ui` (a `GameUi`: the game's React view, options editor and tagline). | browser only |
+| `@game-platform/unique-pick/testing` | `src/testing.ts` | `newGame`, `pick`, `pickAll` for tests. | tests only |
 
-`index.html` and the PWA manifest in `vite.config.ts` carry their own copy of
-the title — update them alongside `display.ts`.
+The rules and view are separate entry points so the Edge Functions never load
+React.
 
 ## The contract
 
-`GameState` (`../engine/types.ts`) is an envelope. The framework owns
+`GameState` (`@game-platform/sdk`) is an envelope. The framework owns
 `players`, `turnOrder`, `actionHistory`, `adminModeActive`, `playMode`,
-`hiddenInformationEnabled`; the game owns `game` and `options`, and is
-responsible for keeping these envelope fields accurate:
+`hiddenInformationEnabled`, `gameType`, `rulesVersion` and `options`; the game
+owns `game`, and keeps these envelope fields accurate:
 
 - `status` — `'active'` once `setup` returns, `'completed'` when the game ends.
 - `pendingPlayerIds` — **everyone who may act right now**: `[activePlayerId]`
-  in a sequential turn, several ids in a simultaneous phase, `[]` when
-  nobody is owed a move. Turn notifications, "your turn" badges on every
-  listing screen, the hotseat hand-off and admin mode all read this, so it
-  must never be stale.
+  in a sequential turn, several ids in a simultaneous phase, `[]` when nobody
+  is owed a move. Turn notifications, "your turn" badges, the hotseat hand-off
+  and admin mode all read it, so it must never be stale.
 - `activePlayerId` — the single player whose turn it is, or null in a
   simultaneous phase.
-- `turn` and `phase` — a turn/round counter and a short phase id. Both are
-  projected into `game_state_meta` for listing screens and notifications;
-  `display.ts` turns them into labels.
+- `turn` and `phase` — a turn/round counter and a short phase id, projected
+  into the database for listing screens and notifications.
 - `winnerPlayerIds` — set when the game ends (several on a tie).
 
-`GameDefinition`'s hooks:
+`GameDefinition` fields and hooks:
 
-- `setup(lobby, options)` — build genesis from the seated players. Normalize
-  `options` (a stored row may be missing or out of range) and store them on
-  `state.options`.
+- `id` — stable, lowercase letters/digits/dashes; stored on every room
+  (`games.game_type`). Never change it once games exist.
+- `rulesVersion` — bump it when a change would make an existing game's
+  history replay differently (see "Changing the rules" below).
+- `title`, `turnLabel`, `minPlayers`, `maxPlayers` — what the platform shows
+  and enforces around the game.
+- `defaultOptions`, `normalizeOptions(raw)`, `describeOptions(options)` — the
+  game's creation-time options. `normalizeOptions` must accept anything (a
+  stored row may be missing or out of range).
+- `setup(lobby)` — build genesis from the seated players (`lobby.options` is
+  already normalized).
 - `applyAction(state, action)` — validate and apply one game action; reject
-  anything illegal, including a player acting out of turn. The framework
-  appends the log entry — don't touch `actionHistory`.
-- `onPlayerEliminated(state, playerId)` — called after a CONCEDE, once the
-  framework has removed the player from `turnOrder`/`pendingPlayerIds`
-  (and ended the game itself if only one player is left). Advance whatever
-  their pending move was blocking.
-- `nextForcedAction(state)` — a move with exactly one legal option that
-  nobody needs to be asked to make, or null. The framework dispatches these
-  until none is left and folds them into the triggering action's single log
-  entry.
+  anything illegal, including a player acting out of turn. Don't touch
+  `actionHistory`.
+- `onPlayerEliminated(state, playerId)` — after a CONCEDE; advance whatever the
+  leaver's move was blocking.
+- `nextForcedAction(state)` — a move with exactly one legal option, or null.
+  The framework folds these into the triggering action's single log entry.
 - `redactGame(state, viewerId)` / `isActionSecret(entry, state, viewerId)` —
-  what's hidden from whom *right now*. They must agree: anything masked in
-  the state must also be masked in the log, or the log leaks it straight
-  back out. Masking is always derived from the current state, so an undo can
-  re-hide something — that's fine.
-- `describeAction(action, before, after)` — narration for the game log;
-  `{player}` is replaced with the actor's name. Give secret actions a
-  `redactedMessage`.
-- `describePhase(phase)` — label for listing screens.
+  what's hidden from whom *right now*. They must agree, or the log leaks what
+  the state hides.
+- `describeAction(action, before, after)` — log narration (`{player}` is
+  replaced with the actor's name); give secret actions a `redactedMessage`.
+- `describePhase(phase)` — label for listing screens and notifications.
+
+Every game action must carry `playerId: string`; the framework reserves the
+action types `CONCEDE`, `UNDO_ACTION`, `REDO_ACTION`, `SET_ADMIN_MODE` and
+`HIDDEN_ACTION`.
+
+The view (`GameUi`, from `@game-platform/sdk/ui`) gets `state`, the seated
+`players`, `myPlayerId` (null when read-only), `submitting`, and `onAction` to
+submit a move — the platform routes it to the right write path and shows any
+rejection.
 
 ## Rules every game must follow
 
 1. **Deterministic.** Every hook is a pure function of its inputs: no
    `Math.random()`, no `Date.now()`, no module-level mutable state. The whole
    game is replayed from genesis on undo, on every server submission, when a
-   client rebuilds state from a delta, and in tests — anything
-   non-deterministic desyncs clients from the server. Randomness a game
-   needs (a shuffled deck, a random first player) must be rolled once before
-   genesis, persisted into `games.settings`, and read from there by `setup`
-   (see `src/lib/gameGenesis.ts` and the `start-game` Edge Function).
-2. **Pure data, no I/O.** `types.ts` and `rules.ts` (and anything they import)
-   run inside Supabase Edge Functions: no React, no Supabase, no JSON imports
-   without `with { type: 'json' }`, and **every relative import carries an
-   explicit `.ts` extension** — the Edge Runtime doesn't resolve extensionless
-   imports, and a missing one only fails at deploy time, not in CI.
+   client rebuilds state from a delta, and in tests. Randomness a game needs
+   must be rolled before genesis and stored in `games.settings` (see the
+   platform's `src/lib/gameGenesis.ts` and `start-game` Edge Function).
+2. **Server-safe rules.** Everything reachable from the `rules` entry runs in
+   Supabase Edge Functions (Deno): no React, no JSON imports without
+   `with { type: 'json' }`, and **every relative import carries an explicit
+   `.ts` extension** — a missing one only fails at deploy time.
 3. **Never mutate.** Return new objects; the framework keeps the old ones for
    undo, review and the log.
-4. **One submitted action, one log entry.** Don't split a move into several
-   actions the client must submit in sequence if the later ones are forced —
-   use `nextForcedAction`.
+4. **One submitted action, one log entry.** Use `nextForcedAction` for
+   follow-ups nobody needs to be asked about.
 
-## Swapping in a new game
+## Changing the rules
 
-1. Replace `types.ts`, `rules.ts`, `display.ts`, `GameView.tsx`,
-   `GameOptionsEditor.tsx` and `__tests__/`.
-2. Update the title in `index.html` and `vite.config.ts`.
-3. Rewrite the engine tests that use this game as their fixture
-   (`src/engine/__tests__/`) and the test harness's move picker
-   (`src/test/supabaseStack/sampleGame.ts`), and regenerate the replay
-   fixtures (`src/test/fixtures/productionGames/`).
-4. `npm run lint && npm run test && npm run build`.
+A game in progress is replayed under the `rulesVersion` it started with. A
+change that can't alter any existing game's history (new wording, a fix to an
+unreachable branch) can ship as-is. A change that can — different scoring,
+a new legality check — needs a new `rulesVersion`, and the old definition must
+stay registered until no game uses it. The simplest way is to keep the old
+version installed under an npm alias and register both in the platform's
+`src/games/registry.ts`:
 
-No migration is needed: the database stores `GameState` as opaque JSON, and
-the only fields SQL reads (`status`, `phase`, `turn`, `pendingPlayerIds`,
-`activePlayerId`) are the envelope's.
+```jsonc
+// platform package.json
+"@you/my-game": "^2.0.0",
+"@you/my-game-v1": "npm:@you/my-game@^1.0.0"
+```
+
+## Making a new game in its own repo
+
+1. Copy this package into a new repo and rename it (`name` in `package.json`,
+   `id`/`title` in `rules.ts`, `id` in `view.ts`).
+2. Depend on `@game-platform/sdk` as a peer dependency, and publish the
+   package (GitHub Packages works for private repos) — or install it straight
+   from git.
+3. Write the rules, view and options editor. Test the rules against the real
+   framework with `@game-platform/sdk/testing` (`seatPlayers`, `act`) — see
+   `src/__tests__/` here.
+4. In the platform repo, add the package to the platform's `package.json`,
+   register its rules in `src/games/registry.ts` and its UI in
+   `src/games/ui.ts`, and map its `rules` entry in
+   `supabase/functions/import_map.json` (for a package in `node_modules`, e.g.
+   `"@you/my-game/rules": "../../node_modules/@you/my-game/src/rules.ts"`).
+   `src/test/__tests__/edgeFunctionImports.test.ts` fails if that mapping is
+   missing.
+
+No database migration is needed: the database stores `GameState` as opaque
+JSON and only reads the envelope's `status`, `phase`, `turn`,
+`pendingPlayerIds` and `activePlayerId`.

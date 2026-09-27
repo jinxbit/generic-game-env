@@ -87,7 +87,7 @@ export function stripTimestamps(state: GameState): GameState {
  * Two states compared as the same *game*, not as the same bytes: timestamps
  * stripped, and the two optional flags whose absence is documented as
  * meaning `false` (`adminModeActive`, `hiddenInformationEnabled` — see
- * src/engine/types.ts) coerced, so an export written without the key and a
+ * packages/sdk/src/types.ts) coerced, so an export written without the key and a
  * state the engine just built compare equal.
  */
 export function normalizeStateForComparison(state: GameState): GameState {
@@ -113,7 +113,9 @@ export function divergentStateFields(left: GameState, right: GameState): string[
  * Recovers the `games`/`players` rows a game must have had.
  *
  * Everything genesis depends on is carried on the state itself: `gameId`,
- * `playMode`, `hiddenInformationEnabled`, the game's creation-time `options`
+ * which game it is and at which rules version (`gameType`/`rulesVersion` —
+ * the room's `game_type` and pinned `settings.rulesVersion`), `playMode`,
+ * `hiddenInformationEnabled`, the game's creation-time `options`
  * (copied onto GameState at genesis for exactly this reason), and the seats —
  * `players` is in seat order and never shrinks, so it *is* the roster, and
  * each seat's `authUserId` names who sat there.
@@ -148,10 +150,15 @@ function reconstructRoom(finalState: GameState, overrides: RoomOverrides): { gam
     hiddenInformationEnabled: finalState.hiddenInformationEnabled ?? false,
     gameOptions: finalState.options,
     ...overrides.settings,
+    // Not overridable: replay has to run the exact rules the game was played
+    // under, and a sidecar that said otherwise would only fail the
+    // self-check below with a less useful message.
+    rulesVersion: finalState.rulesVersion,
   }
 
   const game: GameRow = {
     id: finalState.gameId,
+    game_type: finalState.gameType,
     room_code: overrides.roomCode ?? 'PRODX',
     name: overrides.name ?? 'Replayed game',
     play_mode: finalState.playMode,

@@ -73,7 +73,7 @@ export function applyReplayDelta(
 
 
 /**
- * `replayToBase` (../engine/replay) with a `DeltaReplayContext` unpacked and a
+ * `replayToBase` (@game-platform/sdk's replay.ts) with a `DeltaReplayContext` unpacked and a
  * failure turned into `undefined`: a client running an older engine than the
  * server can fail to replay an action it does not understand, and the caller's
  * answer to that is simply not to cache, not to crash.

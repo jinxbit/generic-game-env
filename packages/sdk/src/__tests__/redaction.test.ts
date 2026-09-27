@@ -10,7 +10,7 @@ import {
   type RedactedGameStateDelta,
   type RedactedLoggedAction,
 } from '../redaction'
-import { act, newGame, pick, pickAll } from './helpers'
+import { act, gameData, newGame, pick, pickAction, pickAll } from './helpers'
 
 /** Round 1 of a 3-player game with p1 and p2 picked and p3 still pending. */
 function midRound() {
@@ -23,8 +23,8 @@ const hidden = (playerId: string | null) => ({ type: 'HIDDEN_ACTION', playerId }
 describe('redactStateForPlayer', () => {
   it("masks other players' open picks and shows the viewer their own", () => {
     const { state } = midRound()
-    expect(redactStateForPlayer(state, 'p1').game.picks).toEqual({ p1: 3, p2: null, p3: null })
-    expect(redactStateForPlayer(state, 'p2').game.picks).toEqual({ p1: null, p2: 4, p3: null })
+    expect(gameData(redactStateForPlayer(state, 'p1')).picks).toEqual({ p1: 3, p2: null, p3: null })
+    expect(gameData(redactStateForPlayer(state, 'p2')).picks).toEqual({ p1: null, p2: 4, p3: null })
   })
 
   it("replaces others' still-secret log entries with a HIDDEN_ACTION that keeps who acted, not what", () => {
@@ -39,7 +39,7 @@ describe('redactStateForPlayer', () => {
     const { state } = midRound()
     const view = redactStateForPlayer(state, null)
 
-    expect(view.game.picks).toEqual({ p1: null, p2: null, p3: null })
+    expect(gameData(view).picks).toEqual({ p1: null, p2: null, p3: null })
     expect(view.actionHistory.map((entry) => entry.action)).toEqual([hidden('p1'), hidden('p2')])
   })
 
@@ -47,7 +47,7 @@ describe('redactStateForPlayer', () => {
     const { state } = midRound()
     const view = redactStateForPlayer(state, 'p3')
     expect({ ...view, game: state.game, actionHistory: state.actionHistory }).toEqual(state)
-    expect(view.game.scores).toEqual(state.game.scores)
+    expect(gameData(view).scores).toEqual(state.game.scores)
   })
 
   it('reveals a round once it resolves — derived from the current state, not the state when logged', () => {
@@ -56,7 +56,7 @@ describe('redactStateForPlayer', () => {
     const view = redactStateForPlayer(resolved, 'p3')
 
     expect(view.actionHistory).toEqual(resolved.actionHistory)
-    expect(view.game.rounds[0].picks).toEqual({ p1: 3, p2: 4, p3: 4 })
+    expect(gameData(view).rounds[0].picks).toEqual({ p1: 3, p2: 4, p3: 4 })
   })
 
   it('keeps past rounds revealed while hiding the open one', () => {
@@ -65,7 +65,7 @@ describe('redactStateForPlayer', () => {
     const view = redactStateForPlayer(state, 'p2')
 
     expect(view.actionHistory.map((entry) => entry.action.type)).toEqual(['PICK_NUMBER', 'PICK_NUMBER', 'HIDDEN_ACTION'])
-    expect(view.game.picks).toEqual({ p1: null, p2: null })
+    expect(gameData(view).picks).toEqual({ p1: null, p2: null })
   })
 
   it('hides nothing once the game is over', () => {
@@ -98,7 +98,7 @@ describe('revealedGameStateView', () => {
 })
 
 describe('unredactedPrefix', () => {
-  const visible = (value: number): RedactedLoggedAction => ({ action: { type: 'PICK_NUMBER', playerId: 'p1', value }, turn: 1, timestamp: '' })
+  const visible = (value: number): RedactedLoggedAction => ({ action: pickAction('p1', value), turn: 1, timestamp: '' })
   const secret = (): RedactedLoggedAction => ({ action: { type: 'HIDDEN_ACTION', playerId: 'p2' }, turn: 1, timestamp: '' })
 
   it('keeps a log with nothing hidden whole', () => {
@@ -121,7 +121,7 @@ describe('toClientGameState', () => {
     const client = toClientGameState(redactStateForPlayer(state, 'p1'))
 
     expect(client.actionHistory).toEqual(state.actionHistory.slice(0, 1))
-    expect(client.game.picks).toEqual({ p1: 3, p2: null, p3: null })
+    expect(gameData(client).picks).toEqual({ p1: 3, p2: null, p3: null })
     expect(client.pendingPlayerIds).toEqual(['p3'])
   })
 })

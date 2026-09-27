@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { Action, LoggedAction } from '../actions'
 import { redoableTail, resolveHistory } from '../historyFold'
+import { pickAction } from './helpers'
 
 // Hand-built logs: resolveHistory is pure bookkeeping over entries and never
 // applies them, so the actions needn't be legal in sequence.
 const entry = (action: Action): LoggedAction => ({ action, turn: 1, timestamp: '' })
-const pickBy = (playerId: string, value: number) => entry({ type: 'PICK_NUMBER', playerId, value })
+const pickBy = (playerId: string, value: number) => entry(pickAction(playerId, value))
 const undo = () => entry({ type: 'UNDO_ACTION', playerId: 'p1' })
 const redo = () => entry({ type: 'REDO_ACTION', playerId: 'p1' })
 const admin = (enabled: boolean) => entry({ type: 'SET_ADMIN_MODE', playerId: 'p1', enabled })

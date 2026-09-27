@@ -1,11 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LoggedAction } from '../actions'
-import { game } from '../game'
 import { buildGameLog, buildGameLogFrom, PLAYER_PLACEHOLDER } from '../gameLog'
-import type { GameState } from '../types'
 import { redactStateForPlayer, toClientGameState } from '../redaction'
 import { applyRedoAction, applyUndoAction } from '../undoRedo'
-import { act, newGame, pick, pickAll } from './helpers'
+import { act, asGame, game, newGame, pick, pickAction, pickAll, type GameState } from './helpers'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -16,7 +14,7 @@ const messages = (genesis: GameState, state: GameState) => buildGameLog(genesis,
 function undo(genesis: GameState, state: GameState, playerId: string | null): GameState {
   const result = applyUndoAction(genesis, state, playerId)
   if (!result.ok) throw new Error(result.error)
-  return result.state
+  return asGame(result.state)
 }
 
 describe('buildGameLog', () => {
@@ -76,11 +74,11 @@ describe('buildGameLog', () => {
     const undone = undo(genesis, pick(genesis, 'p1', 3), 'p1')
     const redone = applyRedoAction(genesis, undone, null)
     if (!redone.ok) throw new Error(redone.error)
-    const undoneAgain = undo(genesis, redone.state, null)
+    const undoneAgain = undo(genesis, asGame(redone.state), null)
     const redoneAgain = applyRedoAction(genesis, undoneAgain, 'p2')
     if (!redoneAgain.ok) throw new Error(redoneAgain.error)
 
-    expect(messages(genesis, redoneAgain.state).slice(1)).toEqual([
+    expect(messages(genesis, asGame(redoneAgain.state)).slice(1)).toEqual([
       '{player} undid the last action.',
       'An action was redone.',
       'The last action was undone.',
@@ -137,15 +135,15 @@ describe('buildGameLogFrom', () => {
     const genesis = newGame()
     const history: LoggedAction[] = [
       ...pick(genesis, 'p1', 3).actionHistory,
-      { action: { type: 'PICK_NUMBER', playerId: 'p2', value: 42 }, turn: 1, timestamp: '' },
-      { action: { type: 'PICK_NUMBER', playerId: 'p2', value: 1 }, turn: 1, timestamp: '' },
+      { action: pickAction('p2', 42), turn: 1, timestamp: '' },
+      { action: pickAction('p2', 1), turn: 1, timestamp: '' },
     ]
 
     const result = buildGameLogFrom(genesis, history)
 
     expect(result.ok).toBe(false)
     expect(result.events).toHaveLength(1)
-    expect(result.state.game.picks.p1).toBe(3)
+    expect(asGame(result.state).game.picks.p1).toBe(3)
   })
 })
 
@@ -155,7 +153,7 @@ describe('buildGameLogFrom with an undone hidden entry', () => {
     let state = pick(genesis, 'p1', 2)
     const undone = applyUndoAction(genesis, state, 'p2')
     if (!undone.ok) throw new Error(undone.error)
-    state = act(undone.state, { type: 'PICK_NUMBER', playerId: 'p2', value: 4 })
+    state = pick(asGame(undone.state), 'p2', 4)
     const view = toClientGameState(redactStateForPlayer(state, 'p3'))
     const built = buildGameLogFrom(genesis, view.actionHistory)
     expect(built.ok).toBe(true)

@@ -1,19 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { resolveHistory } from '../historyFold'
-import type { GameState } from '../types'
 import { applyRedoAction, applyUndoAction } from '../undoRedo'
-import { act, newGame, pick } from './helpers'
+import { act, asGame, newGame, pick, type GameState } from './helpers'
 
 function undo(genesis: GameState, state: GameState, playerId: string | null = 'p1'): GameState {
   const result = applyUndoAction(genesis, state, playerId)
   if (!result.ok) throw new Error(result.error)
-  return result.state
+  return asGame(result.state)
 }
 
 function redo(genesis: GameState, state: GameState, playerId: string | null = 'p1'): GameState {
   const result = applyRedoAction(genesis, state, playerId)
   if (!result.ok) throw new Error(result.error)
-  return result.state
+  return asGame(result.state)
 }
 
 /** Everything but the log, which undo/redo only ever append to. */

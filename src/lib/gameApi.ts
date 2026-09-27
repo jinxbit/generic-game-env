@@ -842,7 +842,7 @@ export interface GameStateSnapshot {
   /**
    * What to cache and send back as the next delta's starting point: the state
    * replayed up to the viewer's safe `actionHistory` prefix, *before* the
-   * in-flight overlay is laid over it (../engine/inFlightOverlay.ts).
+   * in-flight overlay is laid over it (@game-platform/sdk's inFlightOverlay.ts).
    *
    * Never the same object as `state` when anything is masked, and that
    * distinction is load-bearing: caching the rendered view instead would
@@ -858,7 +858,7 @@ export interface GameStateSnapshot {
 
 /**
  * Writes the game's very first GameState row (see createNewGame/startGame in
- * ../engine/createGame.ts). A no-op if a row already exists — startGameFromLobby
+ * @game-platform/sdk's createGame.ts). A no-op if a row already exists — startGameFromLobby
  * checks first via getGameState, but this stays defensive in case "start
  * game" is ever clicked twice in a race.
  */

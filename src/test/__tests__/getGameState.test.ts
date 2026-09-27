@@ -21,7 +21,7 @@ import { hashGameStateView } from '../../lib/gameStateHash.ts'
 import { buildGenesisState } from '../../lib/gameGenesis.ts'
 import type { GameRow, GameSettings } from '../../lib/dbTypes.ts'
 import { createProductionStack, type ProductionStack } from '../supabaseStack/index.ts'
-import { testGameRow, testGameSettings, testPlayers } from '../supabaseStack/sampleGame.ts'
+import { gameData, pickAction, testGameRow, testGameSettings, testPlayers } from '../supabaseStack/sampleGame.ts'
 
 const GAME_ID = '3f1c2d4e-0000-4000-8000-000000000002'
 const ALICE = 'auth-user-alice' // room owner, seated
@@ -68,7 +68,7 @@ describe('get-game-state Edge Function', () => {
   }
 
   async function bobPicks(): Promise<void> {
-    const picked = await stack.applyAction(BOB, GAME_ID, { type: 'PICK_NUMBER', playerId: 'seat-bob', value: BOB_PICK })
+    const picked = await stack.applyAction(BOB, GAME_ID, pickAction('seat-bob', BOB_PICK))
     if (!picked.ok) throw new Error(picked.error)
   }
 
@@ -87,13 +87,13 @@ describe('get-game-state Edge Function', () => {
     // Bob's still-secret pick.
     const asOwner = await fullRead(ALICE)
     expect(asOwner.state.pendingPlayerIds).toEqual(['seat-alice'])
-    expect(asOwner.state.game.picks['seat-bob']).toBeNull()
+    expect(gameData(asOwner.state).picks['seat-bob']).toBeNull()
     expect(asOwner.state.actionHistory).toEqual([expect.objectContaining({ action: { type: 'HIDDEN_ACTION', playerId: 'seat-bob' } })])
     expect(JSON.stringify(asOwner.state)).not.toContain('"value"')
 
     // Bob sees his own real pick.
     const asBob = await fullRead(BOB)
-    expect(asBob.state.game.picks['seat-bob']).toBe(BOB_PICK)
+    expect(gameData(asBob.state).picks['seat-bob']).toBe(BOB_PICK)
     expect(asBob.state.actionHistory[0].action).toEqual({ type: 'PICK_NUMBER', playerId: 'seat-bob', value: BOB_PICK })
   })
 
@@ -106,7 +106,7 @@ describe('get-game-state Edge Function', () => {
     // redactStateForPlayer) — but the response is the same shape as every
     // other caller's, so gameApi.ts's toClientGameState never has to sniff
     // which shape it got back.
-    expect(asAdmin.state.game.picks['seat-bob']).toBe(BOB_PICK)
+    expect(gameData(asAdmin.state).picks['seat-bob']).toBe(BOB_PICK)
     expect(asAdmin.state.actionHistory[0].action.type).toBe('PICK_NUMBER')
   })
 
@@ -115,7 +115,7 @@ describe('get-game-state Edge Function', () => {
     await bobPicks()
 
     const asOwner = await fullRead(ALICE)
-    expect(asOwner.state.game.picks['seat-bob']).toBe(BOB_PICK)
+    expect(gameData(asOwner.state).picks['seat-bob']).toBe(BOB_PICK)
   })
 
   it('never redacts a hotseat game, regardless of hiddenInformationEnabled', async () => {
@@ -126,7 +126,7 @@ describe('get-game-state Edge Function', () => {
     // auth.uid() per local device means per-seat masking would just hide a
     // local player's own pick from the device they're using to make it.
     const asAlice = await fullRead(ALICE)
-    expect(asAlice.state.game.picks['seat-bob']).toBe(BOB_PICK)
+    expect(gameData(asAlice.state).picks['seat-bob']).toBe(BOB_PICK)
   })
 
   it('lets a signed-in stranger read a started game redacted with no seat of their own, but refuses a lobby game', async () => {
@@ -134,7 +134,7 @@ describe('get-game-state Edge Function', () => {
     await bobPicks()
 
     const asStranger = await fullRead(CAROL)
-    expect(asStranger.state.game.picks['seat-bob']).toBeNull()
+    expect(gameData(asStranger.state).picks['seat-bob']).toBeNull()
     expect(asStranger.state.actionHistory[0].action.type).toBe('HIDDEN_ACTION')
 
     // A lobby-status game is invisible to a non-seated, non-admin stranger —
@@ -180,15 +180,15 @@ describe('get-game-state Edge Function', () => {
   it('reveals both picks once the round resolves and moves on', async () => {
     await seedRoundOne()
     await bobPicks()
-    const resolved = await stack.applyAction(ALICE, GAME_ID, { type: 'PICK_NUMBER', playerId: 'seat-alice', value: ALICE_PICK })
+    const resolved = await stack.applyAction(ALICE, GAME_ID, pickAction('seat-alice', ALICE_PICK))
     if (!resolved.ok) throw new Error(resolved.error)
     expect(resolved.state.turn).toBe(2)
 
     const asOwner = await fullRead(ALICE)
-    expect(asOwner.state.game.rounds[0].picks).toEqual({ 'seat-alice': ALICE_PICK, 'seat-bob': BOB_PICK })
+    expect(gameData(asOwner.state).rounds[0].picks).toEqual({ 'seat-alice': ALICE_PICK, 'seat-bob': BOB_PICK })
     expect(asOwner.state.actionHistory.map((entry) => entry.action.type)).toEqual(['PICK_NUMBER', 'PICK_NUMBER'])
     // The new round's picks are all open again.
-    expect(asOwner.state.game.picks).toEqual({ 'seat-alice': null, 'seat-bob': null })
+    expect(gameData(asOwner.state).picks).toEqual({ 'seat-alice': null, 'seat-bob': null })
   })
 
   describe('response telemetry', () => {
@@ -269,7 +269,7 @@ describe('get-game-state Edge Function', () => {
       // ...and it matches what the state-carrying path would have said.
       expect(rebuilt).toEqual(toClientGameState((await fullRead(ALICE)).state))
       // Alice still cannot see what Bob picked — rebuilding is not a way around redaction.
-      expect(rebuilt.game.picks['seat-bob']).toBeNull()
+      expect(gameData(rebuilt).picks['seat-bob']).toBeNull()
     })
 
     it("carries an overlay while a pick is pending, because the viewer's own replay cannot reach it", async () => {
@@ -286,7 +286,7 @@ describe('get-game-state Edge Function', () => {
       expect(delta.actionHistoryLength).toBe(0)
       expect(delta.overlay).toBeDefined()
       expect(delta.overlay!.pendingPlayerIds).toEqual(['seat-alice'])
-      expect(delta.overlay!.game.picks['seat-bob']).toBeNull()
+      expect(gameData(delta.overlay!).picks['seat-bob']).toBeNull()
       expect(delta.overlay).not.toHaveProperty('actionHistory')
     })
 
@@ -342,7 +342,7 @@ describe('get-game-state Edge Function', () => {
       await seedRoundOne({ hiddenInformationEnabled: false })
       const baselineClient = toClientGameState((await fullRead(ALICE)).state)
 
-      const first = await stack.applyAction(ALICE, GAME_ID, { type: 'PICK_NUMBER', playerId: 'seat-alice', value: ALICE_PICK })
+      const first = await stack.applyAction(ALICE, GAME_ID, pickAction('seat-alice', ALICE_PICK))
       if (!first.ok) throw new Error(first.error)
       await bobPicks()
 
@@ -379,7 +379,7 @@ describe('get-game-state Edge Function', () => {
       const beforeResolveClient = toClientGameState((await fullRead(ALICE)).state)
       expect(beforeResolveClient.actionHistory).toHaveLength(0)
 
-      const resolved = await stack.applyAction(ALICE, GAME_ID, { type: 'PICK_NUMBER', playerId: 'seat-alice', value: ALICE_PICK })
+      const resolved = await stack.applyAction(ALICE, GAME_ID, pickAction('seat-alice', ALICE_PICK))
       if (!resolved.ok) throw new Error(resolved.error)
 
       const delta = await stack.getGameState(ALICE, GAME_ID, beforeResolveClient.actionHistory.length)

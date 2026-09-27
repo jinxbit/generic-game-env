@@ -1,6 +1,6 @@
 // The redacted read path, opposite apply-action/undo-action/redo-action's
 // write-side enforcement: a straight reuse of redactStateForPlayer
-// (src/engine/redaction.ts, which delegates what's secret to the game's own
+// (packages/sdk/src/redaction.ts, which delegates what's secret to the game's own
 // GameDefinition.redactGame/isActionSecret) against the live state — no
 // replay needed.
 //

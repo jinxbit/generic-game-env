@@ -76,10 +76,10 @@ describe('buildGameCardSummary', () => {
     expect(buildGameCardSummary(game, makeSummary({ turn: 4 })).turnLabel).toBe('Turn 4')
   })
 
-  it('degrades the same way for a registered game at a rules version that is not', () => {
+  it('falls back to the newest version for a registered game pinned to a version that is not', () => {
     const summary = buildGameCardSummary(makeGame({}, { rulesVersion: 99 }), null)
     expect(summary.gameTitle).toBe('Unique Pick')
-    expect(summary.optionsSummary).toBeNull()
+    expect(summary.optionsSummary).toBe('First to 12 · max 10 rounds')
   })
 })
 

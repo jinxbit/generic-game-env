@@ -2,7 +2,7 @@
 // renders nothing with the kill switch off, renders nothing with no
 // session, renders the list when both hold, submits a message, and appends
 // a Realtime INSERT. No engine tests — by design (CHAT_PLAN.md §1) there is
-// nothing in src/engine/ for this feature to touch.
+// nothing in the rules framework (packages/sdk) for this feature to touch.
 
 import type { Session } from '@supabase/supabase-js'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'

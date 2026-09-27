@@ -38,7 +38,7 @@ deferred), §3 (branch topology, recommended, not yet acted on) and §7
 | Frontend deploy | Vercel | push to `production` (production), `main` and other branches (preview) |
 | Real games replayed against the deployed backend | `.github/workflows/smoke.yml` | after a successful Supabase deploy, and nightly |
 
-Test layers, innermost first: engine tests (`src/engine/__tests__/`), the
+Test layers, innermost first: SDK and game tests (`packages/*/src/__tests__/`), the
 in-process production-like stack (`src/test/supabaseStack/`), real games
 replayed through it (`src/test/__tests__/productionGames.test.ts`), and the
 same games replayed against the live project

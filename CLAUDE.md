@@ -26,7 +26,7 @@ before building or changing a game.
 ```bash
 npm install          # or npm ci
 npm run dev          # Vite dev server on :5173
-npm run test         # vitest run — ~58 files / ~540 tests, ~25s
+npm run test         # vitest run (app + packages) — ~60 files / ~600 tests, ~25s
 npm run test:watch   # vitest watch
 npm run test:smoke   # smoke-test a LIVE Supabase project (needs SMOKE_* env vars)
 npm run seed:preview # put one finished game into a LIVE project and LEAVE it there

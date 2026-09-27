@@ -29,13 +29,13 @@ Constraints from the issue, carried through this whole document:
   change shape later, but are not part of the initial execution phases.
 
 Chat is **not a game rule**. It never touches `GameState`, never goes through
-`applyAction()`, and is invisible to `src/engine/`, `replayActions`, or
+`applyAction()`, and is invisible to the rules framework (`packages/sdk`), `replayActions`, or
 either write path in `CLAUDE.md`'s "two write paths" section. It also carries
 no rule-enforcement concern — there's nothing to cheat at by posting a
 message — so unlike `game_state`, chat rows are ordinary client-writable
 tables gated by RLS, the same trust model as `players`/`games` themselves.
 This keeps the whole feature outside the four engine invariants entirely; no
-`src/engine/` change is needed anywhere in this plan.
+the rules framework (`packages/sdk`) change is needed anywhere in this plan.
 
 ## 2. Scope, proposed
 
@@ -483,7 +483,7 @@ later work, not part of the initial delivery.
   append) via `@testing-library/react`, this repo's existing pattern for
   UI components with no engine logic behind them.
 - No engine tests are needed anywhere in this feature — by design (§1), it
-  never touches `src/engine/`.
+  never touches the rules framework (`packages/sdk`).
 
 ## 13. Unread indicator (issue #579)
 

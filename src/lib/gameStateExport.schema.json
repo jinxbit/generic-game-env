@@ -23,7 +23,7 @@
       "format": "date-time"
     },
     "gameStateZipped": {
-      "description": "The game's engine.GameState (src/engine/types.ts), JSON-stringified, gzip-compressed, then base64-encoded.",
+      "description": "The game's GameState (@game-platform/sdk, packages/sdk/src/types.ts), JSON-stringified, gzip-compressed, then base64-encoded.",
       "type": "string"
     }
   }

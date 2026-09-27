@@ -124,7 +124,9 @@ export interface GameCardSummary {
  * GameCardSummary's doc comment).
  */
 export function buildGameCardSummary(game: GameRow, summary: GameStateSummary | null): GameCardSummary {
-  const definition = findGameDefinition(game.game_type, game.settings.rulesVersion)
+  // The room's pinned version when it's still registered, else the newest —
+  // the same fallback the phase and title labels use, since this is display only.
+  const definition = findGameDefinition(game.game_type, game.settings.rulesVersion) ?? findGameDefinition(game.game_type)
   return {
     gameTitle: gameTitleFor(game),
     playerRange: summary ? null : `${game.min_players}–${game.max_players} players`,

@@ -14,8 +14,9 @@
 // new one (e.g. install it under an npm alias) until no game uses it.
 
 import { registerGame } from '@game-platform/sdk'
+import { gameDefinition as incorporated } from '@game-platform/incorporated/rules'
 import { gameDefinition as uniquePick } from '@game-platform/unique-pick/rules'
 
-export const REGISTERED_GAMES = [uniquePick]
+export const REGISTERED_GAMES = [uniquePick, incorporated]
 
 for (const definition of REGISTERED_GAMES) registerGame(definition)

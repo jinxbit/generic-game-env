@@ -2,10 +2,11 @@
 // game id — browser-only, never imported by the Edge Functions.
 
 import type { AnyGameUi } from '@game-platform/sdk/ui'
+import { ui as incorporated } from '@game-platform/incorporated/view'
 import { ui as uniquePick } from '@game-platform/unique-pick/view'
 import './registry'
 
-const UIS: Record<string, AnyGameUi> = Object.fromEntries([uniquePick].map((ui) => [ui.id, ui]))
+const UIS: Record<string, AnyGameUi> = Object.fromEntries([uniquePick, incorporated].map((ui) => [ui.id, ui]))
 
 /** The UI for `gameType`, or null if this deployment doesn't ship it. */
 export function gameUiFor(gameType: string): AnyGameUi | null {

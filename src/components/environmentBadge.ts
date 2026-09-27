@@ -20,14 +20,14 @@
 //
 // The Supabase project ref alone turned out not to be enough to tell builds
 // apart: every Preview deployment — `main`'s and every `claude/*` branch's —
-// points at the same Preview project, so the badge read identically on all
-// of them. That once cost real time: a checkbox looked
-// absent because the page was an older branch's preview, not `main`'s. So the
-// badge also names the git branch and short commit it was built from, read
-// from `__GIT_COMMIT_REF__`/`__GIT_COMMIT_SHA__` (injected by
-// `vite.config.ts` from Vercel's `VERCEL_GIT_COMMIT_REF`/`VERCEL_GIT_COMMIT_SHA`
-// build-time env — see that file). Those are empty outside Vercel, in which
-// case the badge just omits them rather than showing something misleading.
+// points at the same Preview project, so the badge read identically on all of
+// them. That once cost real time: a checkbox looked absent because the page
+// was an older branch's preview, not `main`'s. So the badge also names the
+// git branch and short commit it was built from, read from
+// `__GIT_COMMIT_REF__`/`__GIT_COMMIT_SHA__` (injected by `vite.config.ts`
+// from Vercel's `VERCEL_GIT_COMMIT_REF`/`VERCEL_GIT_COMMIT_SHA` build-time
+// env — see that file). Those are empty outside Vercel, in which case the
+// badge just omits them rather than showing something misleading.
 
 import { isProductionBuild } from '../lib/environment'
 

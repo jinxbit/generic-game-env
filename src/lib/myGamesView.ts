@@ -37,7 +37,7 @@ export interface MyGameEntry {
  * value that *is* authoritative on games.status — it's checked first, ahead
  * of stateSummary.
  */
-export type MyGameStatus = 'lobby' | 'boardSetup' | 'active' | 'completed' | 'canceled'
+export type MyGameStatus = 'lobby' | 'active' | 'completed' | 'canceled'
 
 export function myGameStatus(entry: MyGameEntry): MyGameStatus {
   if (entry.game.status === 'canceled') return 'canceled'

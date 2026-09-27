@@ -1,21 +1,20 @@
 // @vitest-environment node
 //
-// Self-test for issue #478: apply-action/undo-action/redo-action's own
-// response used to hand the acting player back the full, unredacted
-// GameState — including every *other* player's still-secret selectCards
-// pick — even for a game with GameSettings.hiddenInformationEnabled on,
-// completely bypassing get-game-state's redaction (getGameState.test.ts).
-// This exercises the fix (redactedResponseState, ../../../supabase/functions
-// /_shared/gameEnforcement.ts) against the real Edge Function handlers via
-// the production-simulating stack (src/test/supabaseStack/) — see
-// supabaseStack.test.ts's own doc comment for what "production-simulating"
-// means here.
+// apply-action/undo-action/redo-action hand the acting player back the very
+// state their own write produced — so without redaction on the write path,
+// a game with GameSettings.hiddenInformationEnabled on would leak every
+// *other* player's still-secret pick straight back to the acting player's
+// browser, bypassing get-game-state's redaction (getGameState.test.ts)
+// entirely. This exercises that write-side redaction (redactedResponseState,
+// ../../../supabase/functions/_shared/gameEnforcement.ts) against the real
+// Edge Function handlers via the production-simulating stack
+// (src/test/supabaseStack/).
 //
 // Needs three seats, not two: in a two-player game, the acting player is
-// always the *last* to choose, so by the time their own submission's
-// response comes back the phase has already resolved and nothing is masked
-// — the leak only shows up while at least one other player is still
-// pending after the acting player's own submission.
+// always the *last* to pick, so by the time their own submission's response
+// comes back the round has already resolved and nothing is masked — the leak
+// only shows up while at least one other player is still pending after the
+// acting player's own submission.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { resolveHistory } from '../../engine/historyFold.ts'
@@ -23,66 +22,35 @@ import { toClientGameState, type RedactedGameState, type RedactedLoggedAction } 
 import { applyInFlightOverlay, type InFlightOverlay } from '../../engine/inFlightOverlay.ts'
 import { extendReplay, replayActions } from '../../engine/replay.ts'
 import { hashGameStateView } from '../../lib/gameStateHash.ts'
-import type { LoggedAction } from '../../engine/actions.ts'
+import type { Action, LoggedAction } from '../../engine/actions.ts'
 import type { GameState } from '../../engine/types.ts'
 import { buildGenesisState } from '../../lib/gameGenesis.ts'
-import type { GameRow, GameSettings, PlayerRow } from '../../lib/dbTypes.ts'
+import type { GameSettings } from '../../lib/dbTypes.ts'
 import { createProductionStack, type ProductionStack } from '../supabaseStack/index.ts'
-import { nextLegalAction, resolveGameContent, type GameContent } from '../supabaseStack/sampleGame.ts'
+import { testGameRow, testGameSettings, testPlayers } from '../supabaseStack/sampleGame.ts'
 
 const GAME_ID = '3f1c2d4e-0000-4000-8000-000000000003'
 const ALICE = 'auth-user-alice' // room owner, seated
 const BOB = 'auth-user-bob' // seated
 const CHARLIE = 'auth-user-charlie' // seated
 
-function settingsFor(overrides: Partial<GameSettings> = {}): GameSettings {
-  return {
-    mapTemplateId: 'classic',
-    mapPoolBoard: null,
-    mapPoolMapId: null,
-    mapPoolRandomAtStart: false,
-    soloBuildMap: false,
-    soloBuilderSelection: 'owner',
-    soloBuilderId: null,
-    soloBuilderUnitOrder: 'last',
-    soloBuilderTurnOrder: null,
-    skipHotseatPassGate: false,
-    ruleEnforcementEnabled: true,
-    hiddenInformationEnabled: true,
-    lockRevealedInformationEnabled: false,
-    activeTaleIds: [],
-    gameLength: 3,
-    ...overrides,
-  }
+const PLAYERS = testPlayers(GAME_ID, [
+  { id: 'seat-alice', userId: ALICE, name: 'Alice' },
+  { id: 'seat-bob', userId: BOB, name: 'Bob' },
+  { id: 'seat-charlie', userId: CHARLIE, name: 'Charlie' },
+])
+
+const PICKS: Record<string, number> = { 'seat-alice': 2, 'seat-bob': 4, 'seat-charlie': 5 }
+
+function pick(seat: string): Action {
+  return { type: 'PICK_NUMBER', playerId: seat, value: PICKS[seat] }
 }
 
-function gameRow(settings: GameSettings): GameRow {
-  return {
-    id: GAME_ID,
-    room_code: 'WRTST',
-    name: 'write-path redaction self-test',
-    play_mode: 'live',
-    status: 'active',
-    min_players: 3,
-    max_players: 3,
-    created_by: ALICE,
-    created_at: new Date(0).toISOString(),
-    updated_at: new Date(0).toISOString(),
-    settings,
-    config_version: 1,
-    visibility: 'private',
-  }
+function gameRow(settings: GameSettings) {
+  return testGameRow({ id: GAME_ID, createdBy: ALICE, settings, playerCount: PLAYERS.length, roomCode: 'WRTST', name: 'write-path redaction self-test' })
 }
 
-const PLAYERS: PlayerRow[] = [
-  { id: 'seat-alice', game_id: GAME_ID, user_id: ALICE, display_name: 'Alice', avatar_url: null, seat_index: 0, color: '#e11', is_active: true },
-  { id: 'seat-bob', game_id: GAME_ID, user_id: BOB, display_name: 'Bob', avatar_url: null, seat_index: 1, color: '#11e', is_active: true },
-  { id: 'seat-charlie', game_id: GAME_ID, user_id: CHARLIE, display_name: 'Charlie', avatar_url: null, seat_index: 2, color: '#1e1', is_active: true },
-] as PlayerRow[]
-
-const USER_ID_FOR_SEAT: Record<string, string> = { 'seat-alice': ALICE, 'seat-bob': BOB, 'seat-charlie': CHARLIE }
-
-describe('apply-action/undo-action/redo-action write-path redaction (issue #478)', () => {
+describe('apply-action/undo-action/redo-action write-path redaction', () => {
   let stack: ProductionStack
 
   beforeEach(async () => {
@@ -92,106 +60,99 @@ describe('apply-action/undo-action/redo-action write-path redaction (issue #478)
     stack.dispose()
   })
 
-  /** Plays board setup to completion via the real apply-action function, landing on the simultaneous selectCards phase with all three seats pending. */
-  async function reachSelectCardsPhase(settingsOverrides: Partial<GameSettings> = {}) {
-    const game = gameRow(settingsFor(settingsOverrides))
+  /** Seeds a started game on its first round, all three seats pending. */
+  async function seedRoundOne(settingsOverrides: Partial<GameSettings> = {}): Promise<GameState> {
+    const game = gameRow(testGameSettings({ hiddenInformationEnabled: true, ...settingsOverrides }))
     const genesis = buildGenesisState(game, PLAYERS)
     await stack.seedStartedGame({ game, players: PLAYERS, genesis })
-
-    const content = resolveGameContent(genesis)
-    let state = genesis
-    // roundPhase already defaults to 'selectCards' at genesis (see
-    // createGame.ts) even while status is still 'boardSetup', so the loop
-    // condition needs both: keep going until board setup has actually
-    // finished and the game has genuinely reached the simultaneous phase.
-    for (let guard = 0; state.status !== 'active' || state.roundPhase !== 'selectCards'; guard++) {
-      if (guard > 500) throw new Error('setup ran on far longer than a board-setup-to-selectCards transition should take')
-      const action = nextLegalAction(state, content)
-      if (!action?.playerId) throw new Error('setup ran out of legal actions before reaching selectCards')
-      const result = await stack.applyAction(USER_ID_FOR_SEAT[action.playerId]!, GAME_ID, action)
-      if (!result.ok) throw new Error(`setup failed: ${result.error}`)
-      state = result.state
-    }
-    expect(state.pendingPlayerIds).toEqual(expect.arrayContaining(['seat-alice', 'seat-bob', 'seat-charlie']))
-    return state
+    expect(genesis.pendingPlayerIds).toEqual(['seat-alice', 'seat-bob', 'seat-charlie'])
+    return genesis
   }
 
   /** The raw Edge Function response body, bypassing gameApi.ts/the stack's own toClientGameState collapse — this is what actually crossed the wire. */
-  async function rawApplyAction(userId: string, action: Parameters<ProductionStack['applyAction']>[2]) {
+  async function rawApplyAction(userId: string, action: Action) {
     const { data, error } = await stack.clientFor(userId).functions.invoke('apply-action', { body: { gameId: GAME_ID, action } })
     if (error) throw new Error(`apply-action rejected: ${error.message}`)
     return data as { ok: true; state: RedactedGameState; version: number }
   }
 
-  it("hides another still-pending player's secret pick from the acting player's own apply-action response, and reveals it once the phase resolves", async () => {
-    const setup = await reachSelectCardsPhase()
-    const bobCard = setup.players.find((p) => p.id === 'seat-bob')!.handCardIds[0]
-    const aliceCard = setup.players.find((p) => p.id === 'seat-alice')!.handCardIds[0]
-    const charlieCard = setup.players.find((p) => p.id === 'seat-charlie')!.handCardIds[0]
+  it("hides another still-pending player's secret pick from the acting player's own apply-action response, and reveals it once the round resolves", async () => {
+    await seedRoundOne()
 
-    // Bob chooses first — pending: Alice, Charlie.
-    const bobChose = await stack.applyAction(BOB, GAME_ID, { type: 'CHOOSE_CARD', playerId: 'seat-bob', cardId: bobCard })
+    // Bob picks first — pending: Alice, Charlie.
+    const bobChose = await stack.applyAction(BOB, GAME_ID, pick('seat-bob'))
     if (!bobChose.ok) throw new Error(bobChose.error)
-    expect(bobChose.state.pendingPlayerIds).toEqual(expect.arrayContaining(['seat-alice', 'seat-charlie']))
+    expect(bobChose.state.pendingPlayerIds).toEqual(['seat-alice', 'seat-charlie'])
 
-    // Alice submits her own pick next — pending: Charlie only, so the phase
-    // is still open. Before the fix, this response's chosenCardIdByPlayerId
-    // carried Bob's real cardId straight back to Alice's own browser.
-    const aliceResponse = await rawApplyAction(ALICE, { type: 'CHOOSE_CARD', playerId: 'seat-alice', cardId: aliceCard })
+    // Alice submits her own pick next — pending: Charlie only, so the round
+    // is still open. This response must not carry Bob's real pick back to
+    // Alice's own browser, in the state or in the log.
+    const aliceResponse = await rawApplyAction(ALICE, pick('seat-alice'))
     expect(aliceResponse.state.pendingPlayerIds).toEqual(['seat-charlie'])
-    expect(aliceResponse.state.chosenCardIdByPlayerId['seat-bob']).toEqual({ chosen: true, cardId: null })
+    expect(aliceResponse.state.game.picks['seat-bob']).toBeNull()
+    expect(aliceResponse.state.actionHistory.map((entry) => entry.action)).toEqual([
+      { type: 'HIDDEN_ACTION', playerId: 'seat-bob' },
+      pick('seat-alice'),
+    ])
     // Alice's own pick is never hidden from herself.
-    expect(aliceResponse.state.chosenCardIdByPlayerId['seat-alice']).toEqual({ chosen: true, cardId: aliceCard })
+    expect(aliceResponse.state.game.picks['seat-alice']).toBe(PICKS['seat-alice'])
 
-    // Charlie's own submission resolves the phase — nothing left pending, so
-    // this same response (still Charlie's own apply-action call) now reveals
-    // every pick, Bob's included.
-    const charlieResponse = await rawApplyAction(CHARLIE, { type: 'CHOOSE_CARD', playerId: 'seat-charlie', cardId: charlieCard })
-    expect(charlieResponse.state.roundPhase).toBe('actions')
-    expect(charlieResponse.state.chosenCardIdByPlayerId['seat-bob']).toEqual({ chosen: true, cardId: bobCard })
-    expect(charlieResponse.state.chosenCardIdByPlayerId['seat-alice']).toEqual({ chosen: true, cardId: aliceCard })
+    // Charlie's own submission resolves the round — nothing left pending, so
+    // this same response now reveals every pick, Bob's included.
+    const charlieResponse = await rawApplyAction(CHARLIE, pick('seat-charlie'))
+    expect(charlieResponse.state.turn).toBe(2)
+    expect(charlieResponse.state.game.rounds[0].picks).toEqual(PICKS)
+    expect(charlieResponse.state.actionHistory.map((entry) => entry.action)).toEqual([pick('seat-bob'), pick('seat-alice'), pick('seat-charlie')])
   })
 
-  describe('replay delta on the write path (protocol 2, issue #693)', () => {
+  it('hides a changed pick too, not just the first one', async () => {
+    await seedRoundOne()
+    const bobChose = await stack.applyAction(BOB, GAME_ID, pick('seat-bob'))
+    if (!bobChose.ok) throw new Error(bobChose.error)
+    const bobChanged = await stack.applyAction(BOB, GAME_ID, { type: 'PICK_NUMBER', playerId: 'seat-bob', value: 1 })
+    if (!bobChanged.ok) throw new Error(bobChanged.error)
+    expect(bobChanged.state.game.picks['seat-bob']).toBe(1)
+
+    const aliceResponse = await rawApplyAction(ALICE, pick('seat-alice'))
+    expect(aliceResponse.state.game.picks['seat-bob']).toBeNull()
+    expect(aliceResponse.state.actionHistory.slice(0, 2).map((entry) => entry.action.type)).toEqual(['HIDDEN_ACTION', 'HIDDEN_ACTION'])
+  })
+
+  describe('replay delta on the write path (protocol 2)', () => {
     /** Rebuilds the acting player's state the way gameApi.ts's applyReplayDelta does. */
-    function rebuild(genesis: GameState, base: GameState, delta: { actionHistoryAppend: RedactedLoggedAction[]; overlay?: InFlightOverlay }, content: GameContent) {
-      const next = extendReplay(genesis, base, delta.actionHistoryAppend as unknown as LoggedAction[], content.unitContent, content.achievementContent, content.boardGenerationContent, content.taleContent)
+    function rebuild(genesis: GameState, base: GameState, delta: { actionHistoryAppend: RedactedLoggedAction[]; overlay?: InFlightOverlay }) {
+      const next = extendReplay(genesis, base, delta.actionHistoryAppend as unknown as LoggedAction[])
       return applyInFlightOverlay(next, delta.overlay)
     }
 
     /** The acting player's own base: the state replayed up to their safe prefix. */
-    async function baseFor(userId: string, genesis: GameState, content: GameContent) {
+    async function baseFor(userId: string, genesis: GameState): Promise<GameState> {
       const full = await stack.getGameState(userId, GAME_ID)
       if (!full.ok) throw new Error(full.error)
       if ('actionHistoryAppend' in full) throw new Error('expected a full response')
       const view = toClientGameState(full.state)
-      return { ...replayActions(genesis, view.actionHistory, content.unitContent, content.achievementContent, content.boardGenerationContent, content.taleContent), actionHistory: view.actionHistory }
+      return { ...replayActions(genesis, view.actionHistory), actionHistory: view.actionHistory }
     }
 
-    it("sends no state back on a move, and the acting player rebuilds exactly what the old full response carried", async () => {
-      const setup = await reachSelectCardsPhase()
-      const genesis = buildGenesisState(gameRow(settingsFor()), PLAYERS)
-      const content = resolveGameContent(genesis)
-      const base = await baseFor(ALICE, genesis, content)
+    it('sends no state back on a move, and the acting player rebuilds exactly what the old full response carried', async () => {
+      const genesis = await seedRoundOne()
+      const base = await baseFor(ALICE, genesis)
 
-      const bobCard = setup.players.find((p) => p.id === 'seat-bob')!.handCardIds[0]
-      const bobChose = await stack.applyAction(BOB, GAME_ID, { type: 'CHOOSE_CARD', playerId: 'seat-bob', cardId: bobCard })
+      const bobChose = await stack.applyAction(BOB, GAME_ID, pick('seat-bob'))
       if (!bobChose.ok) throw new Error(bobChose.error)
 
-      const aliceCard = setup.players.find((p) => p.id === 'seat-alice')!.handCardIds[0]
-      const delta = await stack.applyAction(ALICE, GAME_ID, { type: 'CHOOSE_CARD', playerId: 'seat-alice', cardId: aliceCard }, base.actionHistory.length, 2)
+      const delta = await stack.applyAction(ALICE, GAME_ID, pick('seat-alice'), base.actionHistory.length, 2)
       if (!delta.ok) throw new Error(delta.error)
       if (!('stateHash' in delta)) throw new Error('expected a protocol-2 delta')
-      // The point of #693: a move no longer carries the board back with it.
       expect(delta).not.toHaveProperty('state')
 
-      const rebuilt = rebuild(genesis, base, delta, content)
+      const rebuilt = rebuild(genesis, base, delta)
       expect(hashGameStateView(rebuilt)).toBe(delta.stateHash)
       // Charlie is still pending, so redaction is live — and Alice rebuilding
       // the state herself is not a way around it.
       expect(rebuilt.pendingPlayerIds).toEqual(['seat-charlie'])
-      expect(rebuilt.chosenCardIdByPlayerId['seat-bob']).toBeNull()
-      expect(rebuilt.chosenCardIdByPlayerId['seat-alice']).toBe(aliceCard)
+      expect(rebuilt.game.picks['seat-bob']).toBeNull()
+      expect(rebuilt.game.picks['seat-alice']).toBe(PICKS['seat-alice'])
 
       // ...and it agrees with what a plain read would have said.
       const read = await stack.getGameState(ALICE, GAME_ID)
@@ -201,61 +162,51 @@ describe('apply-action/undo-action/redo-action write-path redaction (issue #478)
     })
 
     it('carries the entries a move made newly visible, not just the one submitted', async () => {
-      // The acting player's own submission can resolve the phase, which
+      // The acting player's own submission can resolve the round, which
       // unmasks every other player's pick at once — so the append is longer
       // than the single action they sent. respondWithState's clamp is what
       // gets this right; a naive "return the action I just applied" would not.
-      const setup = await reachSelectCardsPhase()
-      const genesis = buildGenesisState(gameRow(settingsFor()), PLAYERS)
-      const content = resolveGameContent(genesis)
-      const cardFor = (seat: string) => setup.players.find((p) => p.id === seat)!.handCardIds[0]
-
+      const genesis = await seedRoundOne()
       for (const [user, seat] of [[BOB, 'seat-bob'], [ALICE, 'seat-alice']] as const) {
-        const r = await stack.applyAction(user, GAME_ID, { type: 'CHOOSE_CARD', playerId: seat, cardId: cardFor(seat) })
-        if (!r.ok) throw new Error(r.error)
+        const result = await stack.applyAction(user, GAME_ID, pick(seat))
+        if (!result.ok) throw new Error(result.error)
       }
 
-      const base = await baseFor(CHARLIE, genesis, content)
-      const delta = await stack.applyAction(CHARLIE, GAME_ID, { type: 'CHOOSE_CARD', playerId: 'seat-charlie', cardId: cardFor('seat-charlie') }, base.actionHistory.length, 2)
+      const base = await baseFor(CHARLIE, genesis)
+      expect(base.actionHistory).toHaveLength(0)
+      const delta = await stack.applyAction(CHARLIE, GAME_ID, pick('seat-charlie'), base.actionHistory.length, 2)
       if (!delta.ok) throw new Error(delta.error)
       if (!('stateHash' in delta)) throw new Error('expected a protocol-2 delta')
 
-      expect(delta.actionHistoryAppend.length).toBeGreaterThan(1)
-      const rebuilt = rebuild(genesis, base, delta, content)
+      expect(delta.actionHistoryAppend).toHaveLength(3)
+      const rebuilt = rebuild(genesis, base, delta)
       expect(hashGameStateView(rebuilt)).toBe(delta.stateHash)
-      expect(rebuilt.roundPhase).toBe('actions')
-      expect(rebuilt.chosenCardIdByPlayerId['seat-bob']).toBe(cardFor('seat-bob'))
+      expect(rebuilt.turn).toBe(2)
+      expect(rebuilt.game.rounds[0].picks).toEqual(PICKS)
     })
 
     it('undo and redo answer in the same shape', async () => {
-      const setup = await reachSelectCardsPhase()
-      const genesis = buildGenesisState(gameRow(settingsFor()), PLAYERS)
-      const content = resolveGameContent(genesis)
-      const bobCard = setup.players.find((p) => p.id === 'seat-bob')!.handCardIds[0]
-
-      const chose = await stack.applyAction(BOB, GAME_ID, { type: 'CHOOSE_CARD', playerId: 'seat-bob', cardId: bobCard })
+      const genesis = await seedRoundOne()
+      const chose = await stack.applyAction(BOB, GAME_ID, pick('seat-bob'))
       if (!chose.ok) throw new Error(chose.error)
 
-      const undoBase = await baseFor(BOB, genesis, content)
+      const undoBase = await baseFor(BOB, genesis)
       const undone = await stack.undoAction(BOB, GAME_ID, undoBase.actionHistory.length, 2)
       if (!undone.ok) throw new Error(undone.error)
       if (!('stateHash' in undone)) throw new Error('expected a protocol-2 delta from undo-action')
       expect(undone).not.toHaveProperty('state')
-      expect(hashGameStateView(rebuild(genesis, undoBase, undone, content))).toBe(undone.stateHash)
+      expect(hashGameStateView(rebuild(genesis, undoBase, undone))).toBe(undone.stateHash)
 
-      const redoBase = await baseFor(BOB, genesis, content)
+      const redoBase = await baseFor(BOB, genesis)
       const redone = await stack.redoAction(BOB, GAME_ID, redoBase.actionHistory.length, 2)
       if (!redone.ok) throw new Error(redone.error)
       if (!('stateHash' in redone)) throw new Error('expected a protocol-2 delta from redo-action')
-      expect(hashGameStateView(rebuild(genesis, redoBase, redone, content))).toBe(redone.stateHash)
+      expect(hashGameStateView(rebuild(genesis, redoBase, redone))).toBe(redone.stateHash)
     })
 
     it('leaves a client that never asks for protocol 2 on the old full-state shape', async () => {
-      const setup = await reachSelectCardsPhase()
-      const bobCard = setup.players.find((p) => p.id === 'seat-bob')!.handCardIds[0]
-      const { data } = await stack.clientFor(BOB).functions.invoke('apply-action', {
-        body: { gameId: GAME_ID, action: { type: 'CHOOSE_CARD', playerId: 'seat-bob', cardId: bobCard } },
-      })
+      await seedRoundOne()
+      const { data } = await stack.clientFor(BOB).functions.invoke('apply-action', { body: { gameId: GAME_ID, action: pick('seat-bob') } })
       const body = data as Record<string, unknown>
       expect(body).toHaveProperty('state')
       expect(body).not.toHaveProperty('stateHash')
@@ -263,25 +214,22 @@ describe('apply-action/undo-action/redo-action write-path redaction (issue #478)
     })
   })
 
-  it("doesn't change behavior for a game without hiddenInformationEnabled — apply-action's collapsed response still carries the real pick straight through", async () => {
-    const setup = await reachSelectCardsPhase({ hiddenInformationEnabled: false })
-    const bobCard = setup.players.find((p) => p.id === 'seat-bob')!.handCardIds[0]
-    const aliceCard = setup.players.find((p) => p.id === 'seat-alice')!.handCardIds[0]
-
-    const bobChose = await stack.applyAction(BOB, GAME_ID, { type: 'CHOOSE_CARD', playerId: 'seat-bob', cardId: bobCard })
+  it("doesn't change behavior for a game without hiddenInformationEnabled — apply-action's response still carries the real pick straight through", async () => {
+    await seedRoundOne({ hiddenInformationEnabled: false })
+    const bobChose = await stack.applyAction(BOB, GAME_ID, pick('seat-bob'))
     if (!bobChose.ok) throw new Error(bobChose.error)
 
     // gameApi.ts's applyActionEnforced (and this stack's applyAction, the
     // same way) always collapses the wire response back to a plain
     // GameState — for a non-opted-in game nothing was ever masked, so the
-    // real cardId comes straight through exactly as it did before this fix.
-    const aliceChose = await stack.applyAction(ALICE, GAME_ID, { type: 'CHOOSE_CARD', playerId: 'seat-alice', cardId: aliceCard })
+    // real pick comes straight through.
+    const aliceChose = await stack.applyAction(ALICE, GAME_ID, pick('seat-alice'))
     if (!aliceChose.ok) throw new Error(aliceChose.error)
-    expect(aliceChose.state.chosenCardIdByPlayerId['seat-bob']).toBe(bobCard)
+    expect(aliceChose.state.game.picks['seat-bob']).toBe(PICKS['seat-bob'])
   })
 })
 
-describe('undo-action leaves the Redo button usable for a viewer whose actionHistory redacts the undone pick (issue #498)', () => {
+describe("undo-action leaves the Redo button usable for a viewer whose actionHistory redacts the undone pick", () => {
   let stack: ProductionStack
 
   beforeEach(async () => {
@@ -291,39 +239,20 @@ describe('undo-action leaves the Redo button usable for a viewer whose actionHis
     stack.dispose()
   })
 
-  /** Same setup as the describe block above — see reachSelectCardsPhase there for what it's doing. */
-  async function reachSelectCardsPhase(settingsOverrides: Partial<GameSettings> = {}) {
-    const game = gameRow(settingsFor(settingsOverrides))
-    const genesis = buildGenesisState(game, PLAYERS)
-    await stack.seedStartedGame({ game, players: PLAYERS, genesis })
-
-    const content = resolveGameContent(genesis)
-    let state = genesis
-    for (let guard = 0; state.status !== 'active' || state.roundPhase !== 'selectCards'; guard++) {
-      if (guard > 500) throw new Error('setup ran on far longer than a board-setup-to-selectCards transition should take')
-      const action = nextLegalAction(state, content)
-      if (!action?.playerId) throw new Error('setup ran out of legal actions before reaching selectCards')
-      const result = await stack.applyAction(USER_ID_FOR_SEAT[action.playerId]!, GAME_ID, action)
-      if (!result.ok) throw new Error(`setup failed: ${result.error}`)
-      state = result.state
-    }
-    return state
-  }
-
   it("keeps a bystander's own client-side actionHistory agreeing with the server about whether a redo is available, after another player's still-secret pick gets undone", async () => {
-    const setup = await reachSelectCardsPhase()
-    const aliceCard = setup.players.find((p) => p.id === 'seat-alice')!.handCardIds[0]
+    const game = gameRow(testGameSettings({ hiddenInformationEnabled: true }))
+    await stack.seedStartedGame({ game, players: PLAYERS, genesis: buildGenesisState(game, PLAYERS) })
 
-    // Alice picks — pending: Bob, Charlie. Nobody else has picked yet, so
-    // nothing else is secret from either of them besides Alice's own pick.
-    const aliceChose = await stack.applyAction(ALICE, GAME_ID, { type: 'CHOOSE_CARD', playerId: 'seat-alice', cardId: aliceCard })
+    // Alice picks — pending: Bob, Charlie. Nothing else is secret from either
+    // of them besides Alice's own pick.
+    const aliceChose = await stack.applyAction(ALICE, GAME_ID, pick('seat-alice'))
     if (!aliceChose.ok) throw new Error(aliceChose.error)
-    expect(aliceChose.state.pendingPlayerIds).toEqual(expect.arrayContaining(['seat-bob', 'seat-charlie']))
+    expect(aliceChose.state.pendingPlayerIds).toEqual(['seat-bob', 'seat-charlie'])
 
     // Bob undoes Alice's still-secret pick. undo-action's own response is
-    // redacted+collapsed for the caller too (issue #478), same as
-    // apply-action's — so even Bob's own undo response must agree a redo is
-    // available, despite Alice's pick still being masked from him.
+    // redacted+collapsed for the caller too, same as apply-action's — so even
+    // Bob's own undo response must agree a redo is available, despite
+    // Alice's pick still being masked from him.
     const bobUndo = await stack.undoAction(BOB, GAME_ID)
     if (!bobUndo.ok) throw new Error(bobUndo.error)
     expect(resolveHistory(bobUndo.state.actionHistory).canRedo).toBe(true)
@@ -331,11 +260,11 @@ describe('undo-action leaves the Redo button usable for a viewer whose actionHis
     // Bob's own client re-fetches through get-game-state and collapses the
     // response the same way gameApi.ts's getGameStateRedacted does
     // (toClientGameState) — the collapsed actionHistory must agree that a
-    // redo is available. Before the fix, unredactedPrefix truncated the
-    // whole raw history at Alice's still-masked CHOOSE_CARD entry, silently
-    // dropping the real UNDO_ACTION entry that came right after it too, so
-    // this read back false — permanently disabling Bob's own Redo button
-    // (GamePage.tsx's historyPointer.canRedo).
+    // redo is available. Truncating the whole raw history at Alice's
+    // still-masked (but already undone) pick would silently drop the real
+    // UNDO_ACTION entry right after it too, and read back false —
+    // permanently disabling Bob's own Redo button (GamePage.tsx's
+    // historyPointer.canRedo).
     const bobRead = await stack.getGameState(BOB, GAME_ID)
     if (!bobRead.ok) throw new Error(bobRead.error)
     if ('actionHistoryAppend' in bobRead) throw new Error('expected a full response — no sinceActionIndex was sent')

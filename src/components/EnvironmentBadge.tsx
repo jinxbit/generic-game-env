@@ -6,7 +6,7 @@ import type { EnvironmentBadgeInfo } from './environmentBadge'
  *
  * `pointer-events-none` on purpose: this is something to glance at, never
  * something to click, and it must not be able to swallow a tap meant for the
- * board underneath it on a small screen.
+ * game underneath it on a small screen.
  */
 export function EnvironmentBadge({ label, projectRef, branch, commit }: EnvironmentBadgeInfo) {
   const ariaExtras = [

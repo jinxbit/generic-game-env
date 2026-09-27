@@ -10,8 +10,8 @@ export interface AuthState {
 /**
  * Tracks the current Supabase auth session (Discord identity). Used by all
  * three play modes to answer "which player am I" — live/async clients use
- * this directly, hotseat swaps sessions between pre-authenticated players
- * (see PlayerSwitcher).
+ * this directly; hotseat seats every local player under the host's own
+ * session (see addLocalPlayer in lib/gameApi.ts).
  */
 export function useAuth(): AuthState {
   const [session, setSession] = useState<Session | null>(null)

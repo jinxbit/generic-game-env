@@ -1,17 +1,16 @@
 // Pure readiness logic for the room lifecycle's configuration versioning
-// (`games.config_version` / `players.ready_for_version`). Split out from LobbyPage.tsx so it can
-// be unit tested without a real Supabase project, same reason as
-// myGamesView.ts/seatIndex.ts.
+// (`games.config_version` / `players.ready_for_version`). Split out from
+// LobbyPage.tsx so it can be unit tested without a real Supabase project,
+// same reason as myGamesView.ts/seatIndex.ts.
 
 import type { GameRow, PlayerRow } from './dbTypes.ts'
 
 /**
- * The Owner is exempt from readiness: they always see
- * their own pending config changes, so there's nothing to acknowledge.
- * Everyone else is ready iff their ready_for_version matches the room's
- * current config_version — set automatically on join (the
- * `players_set_initial_ready_for_version` trigger)
- * and only stale once the Owner edits settings afterward.
+ * The Owner is exempt from readiness: they always see their own pending
+ * config changes, so there's nothing to acknowledge. Everyone else is ready
+ * iff their ready_for_version matches the room's current config_version —
+ * set automatically on join (the `players_set_initial_ready_for_version`
+ * trigger) and only stale once the Owner edits settings afterward.
  */
 export function isPlayerReady(game: GameRow, player: PlayerRow): boolean {
   if (player.user_id === game.created_by) return true

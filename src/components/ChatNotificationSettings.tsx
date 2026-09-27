@@ -5,12 +5,12 @@ import { saveProfileChatNotificationsEnabled } from '../lib/gameApi'
  * Lets a player opt out of a Discord webhook / Web Push notification when
  * someone posts in a game's chat — on by default (the tradeoff: a player
  * who already set up either channel for turn/lifecycle pings starts getting
- * one per chat message without having opted in). In-game chat only, and only for async games (CHAT_PLAN.md §20):
- * a live player already sees new messages over Realtime, and hotseat has
- * nobody remote to ping. Sending itself still needs a Discord webhook URL /
- * push subscription already configured above on this page — this toggle
- * only controls whether *chat* uses either channel, not whether the channel
- * exists.
+ * one per chat message without having opted in). In-game chat only, and
+ * only for async games (CHAT_PLAN.md §20): a live player already sees new
+ * messages over Realtime, and hotseat has nobody remote to ping. Sending
+ * itself still needs a Discord webhook URL / push subscription already
+ * configured above on this page — this toggle only controls whether *chat*
+ * uses either channel, not whether the channel exists.
  */
 export function ChatNotificationSettings({
   userId,

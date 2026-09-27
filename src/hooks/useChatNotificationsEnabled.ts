@@ -12,10 +12,10 @@ export interface ChatNotificationsEnabledState {
 
 /**
  * Loads a signed-in user's "notify me on chat messages" preference (see
- * src/lib/chatNotificationPreference.ts) — accepts `null` (e.g.
- * before auth has resolved) so it can be called unconditionally ahead of a
- * page's own loading/session checks, per the rules of hooks — same shape as
- * useConfirmBeforeRevealingCards.
+ * src/lib/chatNotificationPreference.ts) — accepts `null` (e.g. before auth
+ * has resolved) so it can be called unconditionally ahead of a page's own
+ * loading/session checks, per the rules of hooks — same shape as
+ * useIsAdmin/useDisplayName.
  */
 export function useChatNotificationsEnabled(user: User | null): ChatNotificationsEnabledState {
   const [value, setValue] = useState<boolean>(DEFAULT_CHAT_NOTIFICATIONS_ENABLED)

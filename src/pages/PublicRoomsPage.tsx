@@ -20,8 +20,9 @@ import {
 
 /**
  * The Public Rooms discovery screen: every room whose Owner opted into
- * 'public' visibility, grouped into three buckets — joinable (Active-Not Started), observable (Active-In
- * Progress), and read-only history (Finished). Canceled/deleted rooms never
+ * 'public' visibility, grouped into three buckets — joinable (Active-Not
+ * Started), observable (Active-In Progress), and read-only history
+ * (Finished). Canceled/deleted rooms never
  * appear here (listPublicRooms already excludes them).
  */
 export function PublicRoomsPage() {
@@ -68,7 +69,7 @@ export function PublicRoomsPage() {
   }
 
   const { notStarted, inProgress, finished } = groupPublicRooms(entries ?? [])
-  // Section 2: the viewer's own rooms first. Section 1/3: whichever rooms
+  // Not started: the viewer's own rooms first. In progress: whichever rooms
   // need the viewer's input first, oldest-waiting first, then the rest.
   const notStartedOrdered = orderNotStartedForUser(notStarted, session.user.id)
   const inProgressOrdered = orderInProgressForUser(inProgress, session.user.id)

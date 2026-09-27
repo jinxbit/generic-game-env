@@ -16,7 +16,7 @@ import type { GameState } from '../engine/types'
  * This is a **seed for a delta request, never something rendered ahead of
  * the server confirming it** — `fetchGameState` (GamePage.tsx) only ever
  * uses a `loadCachedGameState` result as `getGameStateRedacted`'s `previous`
- * parameter, exactly the same role `latestGameStateRef` already plays for a
+ * parameter, exactly the same role GamePage's `latestBaseRef` already plays for a
  * same-session refetch. Nothing here renders before that
  * fetch resolves. Also: this only ever helps a `usesRedactedReads` game —
  * `getGameState` (the client-trusted/no-hidden-information path) has no
@@ -58,7 +58,7 @@ import type { GameState } from '../engine/types'
  *   omitting it (see `getGameStateRedacted`'s doc comment).
  */
 
-const DB_NAME = 'riseAndFall'
+const DB_NAME = 'gamePlatform'
 const DB_VERSION = 1
 const STORE_NAME = 'gameStateCache'
 const SAVED_AT_INDEX = 'savedAt'

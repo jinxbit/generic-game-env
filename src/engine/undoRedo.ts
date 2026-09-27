@@ -2,6 +2,11 @@ import { resolveHistory } from './historyFold.ts'
 import { replayActions } from './replay.ts'
 import type { ActionResult, GameState } from './types.ts'
 
+/** Same `viaAdminMode` stamp applyActionWithSteps gives every other entry logged while admin mode is on. */
+function adminModeStamp(state: GameState): { viaAdminMode?: true } {
+  return state.adminModeActive ? { viaAdminMode: true } : {}
+}
+
 export type { ResolvedHistory } from './historyFold.ts'
 export { resolveHistory } from './historyFold.ts'
 
@@ -19,7 +24,7 @@ export function applyUndoAction(genesis: GameState, state: GameState, playerId: 
   if (!resolveHistory(state.actionHistory).canUndo) {
     return { ok: false, error: 'Nothing left to undo.' }
   }
-  const history = [...state.actionHistory, { action: { type: 'UNDO_ACTION' as const, playerId }, turn: state.turn, timestamp: new Date().toISOString() }]
+  const history = [...state.actionHistory, { action: { type: 'UNDO_ACTION' as const, playerId }, turn: state.turn, timestamp: new Date().toISOString(), ...adminModeStamp(state) }]
   return { ok: true, state: replayActions(genesis, history) }
 }
 
@@ -28,6 +33,6 @@ export function applyRedoAction(genesis: GameState, state: GameState, playerId: 
   if (!resolveHistory(state.actionHistory).canRedo) {
     return { ok: false, error: 'Nothing left to redo.' }
   }
-  const history = [...state.actionHistory, { action: { type: 'REDO_ACTION' as const, playerId }, turn: state.turn, timestamp: new Date().toISOString() }]
+  const history = [...state.actionHistory, { action: { type: 'REDO_ACTION' as const, playerId }, turn: state.turn, timestamp: new Date().toISOString(), ...adminModeStamp(state) }]
   return { ok: true, state: replayActions(genesis, history) }
 }

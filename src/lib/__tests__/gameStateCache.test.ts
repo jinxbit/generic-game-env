@@ -6,7 +6,7 @@ import { MAX_ENTRIES, loadCachedGameState, saveCachedGameState } from '../gameSt
 /** Reaches into the raw fake IndexedDB store to corrupt a single field of an already-saved entry — the only way to exercise loadCachedGameState's invalidation checks, since saveCachedGameState itself always writes a consistent entry. */
 async function corruptStoredEntry(gameId: string, userId: string, patch: Record<string, unknown>): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const openRequest = indexedDB.open('riseAndFall', 1)
+    const openRequest = indexedDB.open('gamePlatform', 1)
     openRequest.onsuccess = () => {
       const db = openRequest.result
       const tx = db.transaction('gameStateCache', 'readwrite')

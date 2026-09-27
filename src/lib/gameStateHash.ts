@@ -16,12 +16,12 @@
  * 1. **`actionHistory` itself.** `applyAction` stamps `new Date().toISOString()`
  *    on every entry it logs (applyAction.ts), so two independently-produced
  *    states never agree on timestamps even when every game-logic field does.
- *    Hashing the log would
- *    make the check fail *always*, which would look like the design not
- *    working rather than like a serialisation bug. Only the log's **length**
- *    is folded in, which is enough to catch a client that spliced the append
- *    at the wrong offset — an error that would otherwise pass verification
- *    silently and leave the game log and the Undo button wrong.
+ *    Hashing the log would make the check fail *always*, which would look
+ *    like the design not working rather than like a serialisation bug. Only
+ *    the log's **length** is folded in, which is enough to catch a client
+ *    that spliced the append at the wrong offset — an error that would
+ *    otherwise pass verification silently and leave the game log and the
+ *    Undo button wrong.
  *
  * 2. **Key order.** `JSON.stringify` preserves insertion order, and the two
  *    sides reach the same state by different paths (the server from a
@@ -50,7 +50,7 @@ export function fnv1a(input: string): string {
 
 /**
  * `JSON.stringify` with object keys sorted at every depth. Array order is
- * meaningful in a `GameState` (turn order, hands, the log) and is preserved;
+ * meaningful in a `GameState` (turn order, the log) and is preserved;
  * only object key order, which is not meaningful, is normalised.
  */
 export function canonicalJson(value: unknown): string {

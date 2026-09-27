@@ -1,12 +1,12 @@
 // @vitest-environment node
 //
 // Self-test for the production-simulating Supabase stack
-// (src/test/supabaseStack/). Everything the production-game replays in
-// ./productionGames.test.ts rely on is proven here against a game this file
+// (src/test/supabaseStack/). Everything the recorded-game replays in
+// ./productionGames.test.ts rely on is proven here against games this file
 // plays itself: that the real Edge Functions run, that their authorization
-// branches fire, that game_state's compare-and-swap and RLS behave the way
-// the migrations say, and that a game reconstructed from an export is the
-// same game.
+// branches fire, that game_state's compare-and-swap, RLS and triggers behave
+// the way supabase/migrations/0001_baseline.sql says, and that a game
+// reconstructed from an export is the same game.
 //
 // Runs in the `node` environment rather than the project-wide jsdom one:
 // nothing here touches the DOM, and the Edge Functions are Deno server code,
@@ -17,68 +17,33 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { Action } from '../../engine/actions.ts'
 import type { GameState } from '../../engine/types.ts'
-import { resolveBoardGenerationContent } from '../../content/resolveContent.ts'
 import { buildGenesisState } from '../../lib/gameGenesis.ts'
-import type { GameRow, GameSettings, PlayerRow } from '../../lib/dbTypes.ts'
+import type { GameSettings } from '../../lib/dbTypes.ts'
 import { encodeGameStateExport, decodeGameStateExport } from '../../lib/gameStateExport.ts'
+import type { CompressedGameState } from '../../lib/gameStateCompression.ts'
 import { buildFixture, stripTimestamps } from '../fixtures/productionGames/loadFixtures.ts'
 import { createProductionStack, type ProductionStack } from '../supabaseStack/index.ts'
-import { nextLegalAction, resolveGameContent } from '../supabaseStack/sampleGame.ts'
+import { nextLegalAction, testGameRow, testGameSettings, testPlayers } from '../supabaseStack/sampleGame.ts'
 import { normalizeForComparison, replayFixtureThroughStack } from '../supabaseStack/replayFixture.ts'
-import type { CompressedGameState } from '../../lib/gameStateCompression.ts'
 
 const GAME_ID = '3f1c2d4e-0000-4000-8000-000000000001'
-const ALICE = 'auth-user-alice'
-const BOB = 'auth-user-bob'
+const ALICE = 'auth-user-alice' // room owner, seated
+const BOB = 'auth-user-bob' // seated
+const CAROL = 'auth-user-carol' // unseated stranger
 
-function settingsFor(overrides: Partial<GameSettings> = {}): GameSettings {
-  return {
-    mapTemplateId: 'classic',
-    mapPoolBoard: null,
-    mapPoolMapId: null,
-    mapPoolRandomAtStart: false,
-    soloBuildMap: false,
-    soloBuilderSelection: 'owner',
-    soloBuilderId: null,
-    soloBuilderUnitOrder: 'last',
-    soloBuilderTurnOrder: null,
-    skipHotseatPassGate: false,
-    ruleEnforcementEnabled: true,
-    hiddenInformationEnabled: false,
-    lockRevealedInformationEnabled: false,
-    activeTaleIds: [],
-    gameLength: 3,
-    ...overrides,
-  }
-}
-
-function gameRow(settings: GameSettings): GameRow {
-  return {
-    id: GAME_ID,
-    room_code: 'TESTS',
-    name: 'Stack self-test',
-    play_mode: 'live',
-    status: 'active',
-    min_players: 2,
-    max_players: 2,
-    created_by: ALICE,
-    created_at: new Date(0).toISOString(),
-    updated_at: new Date(0).toISOString(),
-    settings,
-    config_version: 1,
-    visibility: 'private',
-  }
-}
-
-const PLAYERS: PlayerRow[] = [
-  { id: 'seat-alice', game_id: GAME_ID, user_id: ALICE, display_name: 'Alice', avatar_url: null, seat_index: 0, color: '#e11', is_active: true },
-  { id: 'seat-bob', game_id: GAME_ID, user_id: BOB, display_name: 'Bob', avatar_url: null, seat_index: 1, color: '#11e', is_active: true },
-] as PlayerRow[]
+const PLAYERS = testPlayers(GAME_ID, [
+  { id: 'seat-alice', userId: ALICE, name: 'Alice' },
+  { id: 'seat-bob', userId: BOB, name: 'Bob' },
+])
 
 const userIdForSeat: Record<string, string> = { 'seat-alice': ALICE, 'seat-bob': BOB }
 
-async function seed(stack: ProductionStack, settings = settingsFor()): Promise<GameState> {
-  const game = gameRow(settings)
+function gameRow(settings: GameSettings = testGameSettings(), playMode: 'live' | 'async' | 'hotseat' = 'live') {
+  return testGameRow({ id: GAME_ID, createdBy: ALICE, settings, playerCount: PLAYERS.length, playMode })
+}
+
+async function seed(stack: ProductionStack, settings = testGameSettings(), playMode: 'live' | 'async' | 'hotseat' = 'live'): Promise<GameState> {
+  const game = gameRow(settings, playMode)
   const genesis = buildGenesisState(game, PLAYERS)
   await stack.seedStartedGame({ game, players: PLAYERS, genesis })
   return genesis
@@ -91,14 +56,13 @@ async function seed(stack: ProductionStack, settings = settingsFor()): Promise<G
  * fixture is assembled.
  */
 async function playThroughStack(stack: ProductionStack, from: GameState, maxActions: number): Promise<{ state: GameState; version: number; actions: Action[] }> {
-  const content = resolveGameContent(from)
   let state = from
   let version = 0
   const actions: Action[] = []
   for (let i = 0; i < maxActions; i++) {
-    const action = nextLegalAction(state, content)
+    const action = nextLegalAction(state)
     if (!action) break
-    // nextLegalAction only ever returns seat-owned actions, never the
+    // nextLegalAction only ever returns seat-owned picks, never the
     // nullable-playerId pointer moves.
     const result = await stack.applyAction(userIdForSeat[action.playerId ?? ''], GAME_ID, action)
     if (!result.ok) throw new Error(`apply-action rejected ${action.type} by ${action.playerId}: ${result.error}`)
@@ -122,14 +86,12 @@ describe('production Supabase stack', () => {
 
   it('plays a whole game through the real Edge Functions, and the stored state stays the authority', async () => {
     const genesis = await seed(stack)
-    const { state, version, actions } = await playThroughStack(stack, genesis, 60)
+    const { state, version, actions } = await playThroughStack(stack, genesis, 200)
 
-    // Board setup finished and the round cycle actually got going.
-    // Board setup ran to completion (three starting units each) and the round
-    // cycle then carried on for several rounds — every one of those actions a
-    // separate authenticated call into apply-action.
-    expect(actions.filter((action) => action.type === 'PLACE_UNIT')).toHaveLength(PLAYERS.length * 3)
-    expect(state.status).toBe('active')
+    // Every one of those actions a separate authenticated call into
+    // apply-action, and the game actually reached its end.
+    expect(state.status).toBe('completed')
+    expect(state.winnerPlayerIds.length).toBeGreaterThan(0)
     expect(state.turn).toBeGreaterThanOrEqual(2)
     expect(state.actionHistory).toHaveLength(actions.length)
 
@@ -141,26 +103,33 @@ describe('production Supabase stack', () => {
 
   it('stores an enforced game gzipped, with the plaintext keys game_state_sync_meta reads', async () => {
     const genesis = await seed(stack)
-    const { state, version } = await playThroughStack(stack, genesis, 12)
+    const { state, version } = await playThroughStack(stack, genesis, 3)
+    expect(state.status).toBe('active')
 
-    // Written by writeGameStateCAS, so compressed — issue #451's plaintext
+    // Written by writeGameStateCAS, so compressed — the plaintext
     // duplication has to survive, or the meta trigger goes blind.
     const stored = stack.db.table<{ state: CompressedGameState }>('game_state')[0].state
     expect(stored.__gz).toBeTypeOf('string')
-    expect(stored.status).toBe(state.status)
-    expect(stored.turn).toBe(state.turn)
+    expect(stored).toMatchObject({ status: state.status, phase: state.phase, turn: state.turn, pendingPlayerIds: state.pendingPlayerIds })
 
-    const meta = stack.db.table<{ status: string; turn: number; version: number; pending_player_ids: string[] }>('game_state_meta')[0]
-    expect(meta.version).toBe(version)
-    expect(meta.status).toBe(state.status)
-    expect(meta.turn).toBe(state.turn)
+    const meta = stack.db.table<{ status: string; phase: string | null; turn: number; version: number; pending_player_ids: string[] }>('game_state_meta')[0]
+    expect(meta).toMatchObject({ version, status: 'active', phase: state.phase, turn: state.turn, pending_player_ids: state.pendingPlayerIds })
     // Never 'unknown' — that was the symptom when the trigger couldn't read a gzipped state.
     expect(meta.status).not.toBe('unknown')
   })
 
+  it('projects no pending players into game_state_meta once the game is over', async () => {
+    const genesis = await seed(stack)
+    const { state } = await playThroughStack(stack, genesis, 200)
+    expect(state.status).toBe('completed')
+
+    const meta = stack.db.table<{ status: string; phase: string | null; pending_player_ids: string[] }>('game_state_meta')[0]
+    expect(meta).toMatchObject({ status: 'completed', phase: null, pending_player_ids: [] })
+  })
+
   it("refuses one player's attempt to act on another's behalf", async () => {
     const genesis = await seed(stack)
-    const action = nextLegalAction(genesis, resolveGameContent(genesis))!
+    const action = nextLegalAction(genesis)!
     expect(action.playerId).toBe('seat-alice')
 
     const result = await stack.applyAction(BOB, GAME_ID, action)
@@ -170,7 +139,7 @@ describe('production Supabase stack', () => {
 
   it('refuses an unauthenticated caller', async () => {
     const genesis = await seed(stack)
-    const action = nextLegalAction(genesis, resolveGameContent(genesis))!
+    const action = nextLegalAction(genesis)!
 
     const { error } = await stack.anonClient().functions.invoke('apply-action', { body: { gameId: GAME_ID, action } })
     expect((error as { context?: Response }).context?.status).toBe(401)
@@ -178,61 +147,26 @@ describe('production Supabase stack', () => {
 
   it('rejects an illegal action with the engine’s own message, and leaves the row untouched', async () => {
     await seed(stack)
-    // A starting unit on a hex that does not exist on the board.
-    const result = await stack.applyAction(ALICE, GAME_ID, { type: 'PLACE_UNIT', playerId: 'seat-alice', unitKind: 'city', coord: { q: 999, r: 999 } })
-    expect(result.ok).toBe(false)
-    expect(result.status).toBe(400)
+    const result = await stack.applyAction(ALICE, GAME_ID, { type: 'PICK_NUMBER', playerId: 'seat-alice', value: 99 })
+    expect(result).toMatchObject({ ok: false, status: 400 })
+    if (!result.ok) expect(result.error).toMatch(/whole number from 1 to/)
     expect((await stack.readGameState(ALICE, GAME_ID))?.version).toBe(0)
   })
 
   it('serializes concurrent submissions of the same action with a 409, not a lost update', async () => {
     const genesis = await seed(stack)
-    const action = nextLegalAction(genesis, resolveGameContent(genesis))!
+    const action = nextLegalAction(genesis)!
 
-    const [first, second] = await Promise.all([
-      stack.applyAction(ALICE, GAME_ID, action),
-      stack.applyAction(ALICE, GAME_ID, action),
-    ])
+    const [first, second] = await Promise.all([stack.applyAction(ALICE, GAME_ID, action), stack.applyAction(ALICE, GAME_ID, action)])
     const statuses = [first.status, second.status].sort()
     expect(statuses).toEqual([200, 409])
     // Exactly one of them landed.
     expect((await stack.readGameState(ALICE, GAME_ID))?.version).toBe(1)
   })
 
-  // issue #519: a reported 2-player game's boardSetup.tilesRemainingInTier
-  // for its second tile tier ended up permanently set to the *3*-player
-  // pool size, even though the game only ever had 2 seated players — the
-  // `players` table had picked up a stray extra row somehow, and apply-action
-  // used its live row count (ctx.players.length) instead of the genesis
-  // roster already fixed on GameState.players. Reproduces exactly that: a
-  // 2-player genesis, but a `players` table with 3 rows.
-  it("a stray extra players-table row doesn't corrupt board-generation content (issue #519)", async () => {
-    const game = gameRow(settingsFor({ mapTemplateId: null }))
-    const genesis = buildGenesisState(game, PLAYERS)
-    const strayPlayer: PlayerRow = {
-      id: 'seat-stray',
-      game_id: GAME_ID,
-      user_id: 'auth-user-stray',
-      display_name: 'Stray',
-      avatar_url: null,
-      seat_index: 2,
-      color: '#1e1',
-      is_active: true,
-    } as PlayerRow
-    await stack.seedStartedGame({ game, players: [...PLAYERS, strayPlayer], genesis })
-
-    const waterPoolSize = resolveBoardGenerationContent(PLAYERS.length).tiers.find((t) => t.terrain === 'water')!.poolSize
-    const { state } = await playThroughStack(stack, genesis, waterPoolSize)
-
-    // The water tier (genesis's own doing, unaffected by this bug) should
-    // have exhausted its 2-player pool and moved on to plain.
-    expect(state.boardSetup?.tileTierQueue[0]).toBe('plain')
-    expect(state.boardSetup?.tilesRemainingInTier).toBe(resolveBoardGenerationContent(PLAYERS.length).tiers.find((t) => t.terrain === 'plain')!.poolSize)
-  })
-
   it('undoes and redoes through the real undo-action/redo-action functions', async () => {
     const genesis = await seed(stack)
-    const { state, version } = await playThroughStack(stack, genesis, 4)
+    const { state, version } = await playThroughStack(stack, genesis, 3)
 
     const undone = await stack.undoAction(BOB, GAME_ID)
     if (!undone.ok) throw new Error(undone.error)
@@ -247,8 +181,23 @@ describe('production Supabase stack', () => {
     expect(stripTimestamps({ ...redone.state, actionHistory: state.actionHistory })).toEqual(stripTimestamps(state))
   })
 
+  it('takes a concede from the conceding seat, and ends a two-player game on the spot', async () => {
+    await seed(stack)
+    // Bob can't concede on Alice's behalf...
+    const refused = await stack.applyAction(BOB, GAME_ID, { type: 'CONCEDE', playerId: 'seat-alice' })
+    expect(refused).toMatchObject({ ok: false, status: 403 })
+
+    // ...but can for himself, and with one player left the game is over.
+    const conceded = await stack.applyAction(BOB, GAME_ID, { type: 'CONCEDE', playerId: 'seat-bob' })
+    expect(conceded.ok).toBe(true)
+
+    const read = await stack.readGameState(BOB, GAME_ID)
+    expect(read?.state).toMatchObject({ status: 'completed', winnerPlayerIds: ['seat-alice'] })
+    expect(read?.state.players.find((player) => player.id === 'seat-bob')).toMatchObject({ eliminated: true, conceded: true })
+  })
+
   describe('row level security', () => {
-    it('blocks a seated player from writing an enforced game’s state directly (0026)', async () => {
+    it('blocks a seated player from writing an enforced game’s state directly (section 7)', async () => {
       const genesis = await seed(stack)
       const { state, version } = await playThroughStack(stack, genesis, 3)
 
@@ -268,7 +217,7 @@ describe('production Supabase stack', () => {
     })
 
     it('still allows a direct write when the game did not opt into enforcement', async () => {
-      const genesis = await seed(stack, settingsFor({ ruleEnforcementEnabled: false }))
+      const genesis = await seed(stack, testGameSettings({ ruleEnforcementEnabled: false }))
 
       const { data, error } = await stack
         .clientFor(ALICE)
@@ -279,27 +228,28 @@ describe('production Supabase stack', () => {
         .select('version')
       expect(error).toBeNull()
       expect(data).toEqual([{ version: 1 }])
+      expect(stack.db.table<{ turn: number }>('game_state_meta')[0].turn).toBe(7)
     })
 
-    it('lets a signed-in stranger read a started game’s state, but not a lobby one (0021)', async () => {
+    it('lets a signed-in stranger read a started game’s state, but not a lobby one (section 8)', async () => {
       await seed(stack)
-      stack.addUser('auth-user-carol')
-      // 0021_remove_observers.sql: any signed-in user may read a non-lobby
-      // game's state, seated or not — that is what makes a room spectatable.
-      expect(await stack.readGameState('auth-user-carol', GAME_ID)).not.toBeNull()
+      stack.addUser(CAROL)
+      // Any signed-in user may read a non-lobby game's state, seated or not —
+      // that is what makes a room spectatable.
+      expect(await stack.readGameState(CAROL, GAME_ID)).not.toBeNull()
 
       // The same row is invisible to that stranger while the room is still in
       // the lobby, and stays readable for the players seated in it.
       const lobbyGame = stack.db.table<{ id: string; status: string }>('games').find((row) => row.id === GAME_ID)!
       lobbyGame.status = 'lobby'
       stack.db.replaceRow('games', lobbyGame)
-      expect(await stack.readGameState('auth-user-carol', GAME_ID)).toBeNull()
+      expect(await stack.readGameState(CAROL, GAME_ID)).toBeNull()
       expect(await stack.readGameState(ALICE, GAME_ID)).not.toBeNull()
     })
 
-    it('blocks direct game_state reads entirely for a hiddenInformationEnabled game — seated player included (0028, issue #488)', async () => {
-      await seed(stack, settingsFor({ hiddenInformationEnabled: true }))
-      stack.addUser('auth-user-carol')
+    it('blocks direct game_state reads entirely for a hiddenInformationEnabled game — seated player included (section 8)', async () => {
+      await seed(stack, testGameSettings({ hiddenInformationEnabled: true }))
+      stack.addUser(CAROL)
       stack.addUser('auth-user-admin', { isAdmin: true })
 
       // A seated player gets nothing beyond what get-game-state would give
@@ -307,220 +257,226 @@ describe('production Supabase stack', () => {
       // everyone but the service role, not just to a non-seated stranger.
       expect(await stack.readGameState(ALICE, GAME_ID)).toBeNull()
       expect(await stack.readGameState(BOB, GAME_ID)).toBeNull()
-      expect(await stack.readGameState('auth-user-carol', GAME_ID)).toBeNull()
+      expect(await stack.readGameState(CAROL, GAME_ID)).toBeNull()
 
       // The redacted read path is untouched — it's the service role client
       // underneath, which bypasses RLS regardless of this policy.
       const viaRedactedPath = await stack.getGameState(ALICE, GAME_ID)
       expect(viaRedactedPath.ok).toBe(true)
 
-      // 0024_admin_read_all_game_state.sql's admin policy is a separate,
-      // additive permissive policy — untouched by this lockdown.
+      // "admins can read any game state" is a separate, additive permissive
+      // policy — untouched by this lockdown.
       expect(await stack.readGameState('auth-user-admin', GAME_ID)).not.toBeNull()
     })
 
     it('leaves direct game_state reads unchanged for a game that has not opted into hidden information', async () => {
-      await seed(stack, settingsFor({ hiddenInformationEnabled: false }))
-      stack.addUser('auth-user-carol')
+      await seed(stack, testGameSettings({ hiddenInformationEnabled: false }))
+      stack.addUser(CAROL)
 
       expect(await stack.readGameState(ALICE, GAME_ID)).not.toBeNull()
-      expect(await stack.readGameState('auth-user-carol', GAME_ID)).not.toBeNull()
+      expect(await stack.readGameState(CAROL, GAME_ID)).not.toBeNull()
+    })
+
+    it('keeps profiles own-row only', async () => {
+      await seed(stack)
+      const { data } = await stack.clientFor(ALICE).from('profiles').select('user_id')
+      expect(data).toEqual([{ user_id: ALICE }])
+    })
+  })
+
+  describe('triggers (0001_baseline.sql)', () => {
+    it('never lets a signed-in user grant themselves is_admin, on insert or update (profiles_enforce_is_admin_unchanged)', async () => {
+      stack.addUser(CAROL)
+      stack.addUser('auth-user-dave')
+      // addUser seeds a profile row directly; drop Dave's so the insert path can be exercised.
+      stack.db.deleteProfileFor('auth-user-dave')
+
+      const insert = await stack.clientFor('auth-user-dave').from('profiles').insert({ user_id: 'auth-user-dave', is_admin: true })
+      expect(insert.error?.message).toMatch(/is_admin can only be granted by an administrator/)
+      expect(stack.db.table<{ user_id: string }>('profiles').some((row) => row.user_id === 'auth-user-dave')).toBe(false)
+
+      // An ordinary own-row insert, without the flag, is still fine.
+      const plainInsert = await stack.clientFor('auth-user-dave').from('profiles').insert({ user_id: 'auth-user-dave', display_name: 'Dave' })
+      expect(plainInsert.error).toBeNull()
+
+      const update = await stack.clientFor(CAROL).from('profiles').update({ is_admin: true }).eq('user_id', CAROL)
+      expect(update.error?.message).toMatch(/is_admin can only be changed by an administrator/)
+      expect(stack.db.table<{ user_id: string; is_admin: boolean }>('profiles').find((row) => row.user_id === CAROL)?.is_admin).toBe(false)
+
+      // Other own-row edits are unaffected, as is the service role.
+      const rename = await stack.clientFor(CAROL).from('profiles').update({ display_name: 'Carol' }).eq('user_id', CAROL)
+      expect(rename.error).toBeNull()
+      stack.db.update({ role: 'service_role', userId: null }, 'profiles', (row) => row.user_id === CAROL, { is_admin: true })
+      expect(stack.db.table<{ user_id: string; is_admin: boolean }>('profiles').find((row) => row.user_id === CAROL)?.is_admin).toBe(true)
+    })
+
+    it('polices room status transitions, names and config (games triggers, section 3)', async () => {
+      stack.addUser(ALICE)
+      const owner = stack.clientFor(ALICE)
+      const { data: room, error } = await owner
+        .from('games')
+        .insert({ room_code: 'TRIG01', name: 'Trigger room', play_mode: 'live', created_by: ALICE, settings: testGameSettings() })
+        .select()
+        .single()
+      expect(error).toBeNull()
+      expect(room).toMatchObject({ status: 'lobby', config_version: 0 })
+
+      // Editing settings in the lobby bumps config_version.
+      const edited = await owner.from('games').update({ settings: testGameSettings({ hiddenInformationEnabled: true }) }).eq('id', room.id).select('config_version').single()
+      expect(edited.data).toEqual({ config_version: 1 })
+
+      // The name is immutable.
+      const renamed = await owner.from('games').update({ name: 'Another name' }).eq('id', room.id)
+      expect(renamed.error?.message).toMatch(/Room name cannot be changed/)
+
+      // A rule-enforced room can't be started by a direct client write.
+      const started = await owner.from('games').update({ status: 'active' }).eq('id', room.id)
+      expect(started.error?.message).toMatch(/start-game Edge Function/)
+
+      // lobby -> canceled is legal; canceled -> lobby is not.
+      expect((await owner.from('games').update({ status: 'canceled' }).eq('id', room.id)).error).toBeNull()
+      const reopened = await owner.from('games').update({ status: 'lobby' }).eq('id', room.id)
+      expect(reopened.error?.message).toMatch(/Invalid room status transition: canceled -> lobby/)
+
+      // Config can't change outside the lobby.
+      const lateEdit = await owner.from('games').update({ max_players: 3 }).eq('id', room.id)
+      expect(lateEdit.error?.message).toMatch(/Configuration can only change/)
+    })
+
+    it('only lets the owner delete a room once it is canceled, unless they are an admin (section 3)', async () => {
+      await seed(stack)
+      stack.addUser('auth-user-admin', { isAdmin: true })
+
+      // An active room is not in a deletable state for its owner: RLS filters
+      // it out of the DELETE, silently.
+      const early = await stack.clientFor(ALICE).from('games').delete().eq('id', GAME_ID).select('id')
+      expect(early.data).toEqual([])
+      expect(stack.db.table('games')).toHaveLength(1)
+
+      // Cancel first, then it goes — and takes its rows with it.
+      expect((await stack.clientFor(ALICE).from('games').update({ status: 'canceled' }).eq('id', GAME_ID)).error).toBeNull()
+      const deleted = await stack.clientFor(ALICE).from('games').delete().eq('id', GAME_ID).select('id')
+      expect(deleted.data).toEqual([{ id: GAME_ID }])
+      expect(stack.db.table('game_state')).toEqual([])
+      expect(stack.db.table('game_state_meta')).toEqual([])
+      expect(stack.db.table('players')).toEqual([])
+
+      // An admin may delete a room in any state.
+      await seed(stack)
+      const byAdmin = await stack.clientFor('auth-user-admin').from('games').delete().eq('id', GAME_ID).select('id')
+      expect(byAdmin.data).toEqual([{ id: GAME_ID }])
+    })
+
+    it('stamps a new seat ready for the current config, and only accepts readiness for the current one (players triggers, section 4)', async () => {
+      stack.addUser(ALICE)
+      stack.addUser(BOB)
+      const { data: room } = await stack
+        .clientFor(ALICE)
+        .from('games')
+        .insert({ room_code: 'TRIG02', name: 'Readiness room', play_mode: 'live', created_by: ALICE, settings: testGameSettings() })
+        .select()
+        .single()
+      await stack.clientFor(ALICE).from('games').update({ settings: testGameSettings({ skipHotseatPassGate: true }) }).eq('id', room.id)
+
+      const { data: seat } = await stack
+        .clientFor(BOB)
+        .from('players')
+        .insert({ game_id: room.id, user_id: BOB, display_name: 'Bob', seat_index: 1, color: '#2563eb', ready_for_version: 42 })
+        .select()
+        .single()
+      expect(seat.ready_for_version).toBe(1)
+
+      const stale = await stack.clientFor(BOB).from('players').update({ ready_for_version: 0 }).eq('id', seat.id)
+      expect(stale.error?.message).toMatch(/ready_for_version must match/)
     })
   })
 
   /**
-   * Found by replaying blue-beats-red (a real hotseat game) under server-side
-   * enforcement: it used to be refused at its second-to-last action.
-   *
-   * §4.1 deliberately scopes hotseat out of the enforcement model — one shared
-   * `auth.uid()` covers every local seat, so `isAuthorizedToActAs`
-   * (supabase/functions/_shared/gameEnforcement.ts) lets any seated player act
-   * for any seat in a hotseat game. §4.4/§4.5's owner-override check used to
-   * have no such carve-out, even though it exists only to protect one *human*
-   * from another human discarding their undone move — in hotseat there is
-   * only one human, so it had nothing to protect and instead blocked ordinary
-   * play: undo a seat's pick during a simultaneous phase, then act for the
-   * other seat, and the submission was refused unless room admin mode
-   * happened to be on.
-   *
-   * Fixed by issue #486: apply-action/index.ts now skips the owner-override
-   * check entirely for a hotseat game (`ctx.game.play_mode === 'hotseat'`),
-   * the same condition `isAuthorizedToActAs` and `redactedResponseState`
-   * already key their own hotseat carve-outs on. This test now pins the fix
-   * — invert it again if this game (or hotseat in general) should ever need
-   * the override back.
+   * Hotseat is scoped out of the owner-override check: one shared
+   * `auth.uid()` covers every local seat, so undoing one seat's pick and then
+   * acting for the other is ordinary hotseat play, not one human discarding
+   * another's undone move. apply-action/index.ts skips requiresOwnerOverride
+   * for a hotseat game (`ctx.game.play_mode === 'hotseat'`) — the same
+   * condition isAuthorizedToActAs and redactedResponseState key their own
+   * hotseat carve-outs on.
    */
   it('lets a hotseat player act for their other seat after undoing the first one’s pick', async () => {
-    const genesis = await seed(stack, settingsFor({ mapTemplateId: 'classic' }))
     // Both seats belong to one signed-in human, which is what hotseat means.
-    const hotseat = { ...gameRow(settingsFor()), play_mode: 'hotseat' as const }
-    stack.db.replaceRow('games', hotseat as unknown as Record<string, unknown>)
+    const hotseatPlayers = PLAYERS.map((player) => ({ ...player, user_id: ALICE }))
+    const game = gameRow(testGameSettings(), 'hotseat')
+    const genesis = buildGenesisState(game, hotseatPlayers)
+    await stack.seedStartedGame({ game, players: hotseatPlayers, genesis })
 
-    // Board setup, then the simultaneous card-selection phase both seats are
-    // pending in at once.
-    const { state: afterSetup } = await playThroughStack(stack, genesis, PLAYERS.length * 3)
-    expect(afterSetup.roundPhase).toBe('selectCards')
-    expect(afterSetup.pendingPlayerIds).toEqual(expect.arrayContaining(['seat-alice', 'seat-bob']))
-
-    const chose = await stack.applyAction(ALICE, GAME_ID, {
-      type: 'CHOOSE_CARD',
-      playerId: 'seat-alice',
-      cardId: afterSetup.players.find((player) => player.id === 'seat-alice')!.handCardIds[0],
-    })
-    if (!chose.ok) throw new Error(chose.error)
+    const picked = await stack.applyAction(ALICE, GAME_ID, { type: 'PICK_NUMBER', playerId: 'seat-alice', value: 3 })
+    if (!picked.ok) throw new Error(picked.error)
 
     const undone = await stack.undoAction(ALICE, GAME_ID)
     if (!undone.ok) throw new Error(undone.error)
 
     // The same human, now playing their other seat. Nobody else's move is
     // being discarded — there is nobody else.
-    const bob = undone.state.players.find((player) => player.id === 'seat-bob')!
-    const bobCardId = bob.handCardIds[0]
-    const accepted = await stack.applyAction(ALICE, GAME_ID, { type: 'CHOOSE_CARD', playerId: 'seat-bob', cardId: bobCardId })
+    const accepted = await stack.applyAction(ALICE, GAME_ID, { type: 'PICK_NUMBER', playerId: 'seat-bob', value: 2 })
     if (!accepted.ok) throw new Error(accepted.error)
-    expect(accepted.state.chosenCardIdByPlayerId['seat-bob']).toBe(bobCardId)
-    expect(accepted.state.pendingPlayerIds).not.toContain('seat-bob')
+    expect(accepted.state.game.picks['seat-bob']).toBe(2)
+    expect(accepted.state.pendingPlayerIds).toEqual(['seat-alice'])
   })
 
   /**
-   * The gap GameSettings.lockRevealedInformationEnabled (issue #529) closes:
-   * requiresOwnerOverride (../../../supabase/functions/_shared/
-   * gameEnforcement.ts) only required the room-owner/admin override when a
-   * branch would discard *another* player's action — so the player who
-   * resolves a simultaneous selectCards phase (the last one pending) could
-   * always undo straight back to before their own now-revealed pick and
-   * resubmit a different one, since only their own entry sits in the
-   * discarded tail. Bob picks first (doesn't resolve, Alice still pending),
-   * Alice picks second (resolves it — both picks are now visible).
-   *
-   * Issue #534 extended the same override requirement to the *undo* itself
-   * (undoWouldReopenRevealedPick, ../../engine/historyFold.ts) — left
-   * ungated, the undo alone already succeeded and reopened the phase, and it
-   * was only the *next* action attempt that failed, leaving the game stuck
-   * mid-reveal with no visible way forward. `reachAliceResolvingPick` below
-   * stops right after the phase resolves; each test drives the undo (and,
-   * where relevant, the resubmission after it) itself, since whether either
-   * step is allowed is exactly what's under test.
+   * requiresOwnerOverride (supabase/functions/_shared/gameEnforcement.ts):
+   * submitting a new action while the undo pointer sits behind another
+   * player's undone move would discard that move for good, which takes the
+   * room owner or an admin *with* room admin mode switched on.
    */
-  describe('locking a revealed pick against undo (issues #529, #534)', () => {
-    /**
-     * `adminModeOnFromStart` switches admin mode on right *before* either
-     * player picks a card, rather than right before the undo attempt, purely
-     * so Alice's pick — not the toggle — is the tip these tests care about
-     * undoing. It doesn't matter which order any more (issue #545:
-     * SET_ADMIN_MODE is kept out of resolveHistory's undo/redo pointer walk,
-     * so a bare Undo always reaches the real entry underneath it regardless
-     * of where the toggle sits) — see the "switched on reactively right
-     * before the undo" test below, which toggles it after Alice's pick has
-     * already resolved the phase and gets the same result.
-     */
-    async function reachAliceResolvingPick(settings: GameSettings, { adminModeOnFromStart = false } = {}) {
-      const genesis = await seed(stack, settings)
-      const { state: afterSetup } = await playThroughStack(stack, genesis, PLAYERS.length * 3)
-      expect(afterSetup.roundPhase).toBe('selectCards')
-
-      let stateBeforeBob = afterSetup
-      if (adminModeOnFromStart) {
-        const adminOn = await stack.applyAction(ALICE, GAME_ID, { type: 'SET_ADMIN_MODE', playerId: null, enabled: true })
-        if (!adminOn.ok) throw new Error(adminOn.error)
-        stateBeforeBob = adminOn.state
-      }
-
-      const bob = stateBeforeBob.players.find((player) => player.id === 'seat-bob')!
-      const bobChose = await stack.applyAction(BOB, GAME_ID, { type: 'CHOOSE_CARD', playerId: 'seat-bob', cardId: bob.handCardIds[0] })
-      if (!bobChose.ok) throw new Error(bobChose.error)
-      expect(bobChose.state.roundPhase).toBe('selectCards')
-
-      const alice = bobChose.state.players.find((player) => player.id === 'seat-alice')!
-      const aliceOriginalCardId = alice.handCardIds[0]
-      const aliceOtherCardId = alice.handCardIds[1]
-      const aliceChose = await stack.applyAction(ALICE, GAME_ID, { type: 'CHOOSE_CARD', playerId: 'seat-alice', cardId: aliceOriginalCardId })
-      if (!aliceChose.ok) throw new Error(aliceChose.error)
-      // The phase actually resolved — both picks are revealed.
-      expect(aliceChose.state.roundPhase).not.toBe('selectCards')
-      expect(aliceChose.state.chosenCardIdByPlayerId['seat-bob']).toBe(bob.handCardIds[0])
-
-      return { aliceOtherCardId, bobCardId: bob.handCardIds[0] }
+  describe("discarding another player's undone move", () => {
+    async function bobPicksThenAliceUndoes() {
+      await seed(stack)
+      const bobPicked = await stack.applyAction(BOB, GAME_ID, { type: 'PICK_NUMBER', playerId: 'seat-bob', value: 4 })
+      if (!bobPicked.ok) throw new Error(bobPicked.error)
+      const undone = await stack.undoAction(ALICE, GAME_ID)
+      if (!undone.ok) throw new Error(undone.error)
+      expect(undone.state.pendingPlayerIds).toEqual(['seat-alice', 'seat-bob'])
     }
 
-    it('refuses an ordinary player from even undoing their own already-revealed pick when the setting is on', async () => {
-      await reachAliceResolvingPick(settingsFor({ lockRevealedInformationEnabled: true }))
-
-      const result = await stack.undoAction(ALICE, GAME_ID)
+    it('is refused without room admin mode, even for the room owner', async () => {
+      await bobPicksThenAliceUndoes()
+      const result = await stack.applyAction(ALICE, GAME_ID, { type: 'PICK_NUMBER', playerId: 'seat-alice', value: 2 })
       expect(result).toMatchObject({ ok: false, status: 403 })
     })
 
-    it('still allows the undo, and the resubmission after it, with room admin mode already on', async () => {
-      const { aliceOtherCardId, bobCardId } = await reachAliceResolvingPick(settingsFor({ lockRevealedInformationEnabled: true }), {
-        adminModeOnFromStart: true,
-      })
-
-      const undone = await stack.undoAction(ALICE, GAME_ID)
-      if (!undone.ok) throw new Error(undone.error)
-      // Only Alice's own pick was undone — Bob's stays intact and in effect.
-      expect(undone.state.roundPhase).toBe('selectCards')
-      expect(undone.state.pendingPlayerIds).toEqual(['seat-alice'])
-      expect(undone.state.chosenCardIdByPlayerId['seat-bob']).toBe(bobCardId)
-
-      const result = await stack.applyAction(ALICE, GAME_ID, { type: 'CHOOSE_CARD', playerId: 'seat-alice', cardId: aliceOtherCardId })
-      if (!result.ok) throw new Error(result.error)
-      expect(result.state.chosenCardIdByPlayerId['seat-alice']).toBe(aliceOtherCardId)
-    })
-
-    it('still allows the undo, and the resubmission after it, with room admin mode switched on reactively right before the undo (issue #545)', async () => {
-      const { aliceOtherCardId, bobCardId } = await reachAliceResolvingPick(settingsFor({ lockRevealedInformationEnabled: true }))
-
-      // Unlike adminModeOnFromStart above, this switches admin mode on
-      // *after* Alice's pick has already resolved the phase — making
-      // SET_ADMIN_MODE the new tip. Before issue #545's fix, a bare Undo at
-      // this point reverted the toggle itself (silently switching admin mode
-      // back off) rather than ever reaching Alice's pick underneath it, so
-      // the undo below would have failed the same 403 the "off" test above
-      // gets. Now it reaches straight through to Alice's pick instead.
+    it('is allowed for the owner once room admin mode is on — and admin mode itself is never reverted by a bare Undo', async () => {
+      await bobPicksThenAliceUndoes()
       const adminOn = await stack.applyAction(ALICE, GAME_ID, { type: 'SET_ADMIN_MODE', playerId: null, enabled: true })
       if (!adminOn.ok) throw new Error(adminOn.error)
       expect(adminOn.state.adminModeActive).toBe(true)
 
-      const undone = await stack.undoAction(ALICE, GAME_ID)
-      if (!undone.ok) throw new Error(undone.error)
-      expect(undone.state.adminModeActive).toBe(true)
-      expect(undone.state.roundPhase).toBe('selectCards')
-      expect(undone.state.pendingPlayerIds).toEqual(['seat-alice'])
-      expect(undone.state.chosenCardIdByPlayerId['seat-bob']).toBe(bobCardId)
-
-      const result = await stack.applyAction(ALICE, GAME_ID, { type: 'CHOOSE_CARD', playerId: 'seat-alice', cardId: aliceOtherCardId })
+      const result = await stack.applyAction(ALICE, GAME_ID, { type: 'PICK_NUMBER', playerId: 'seat-alice', value: 2 })
       if (!result.ok) throw new Error(result.error)
-      expect(result.state.chosenCardIdByPlayerId['seat-alice']).toBe(aliceOtherCardId)
+      expect(result.state.game.picks).toEqual({ 'seat-alice': 2, 'seat-bob': null })
+      expect(result.state.actionHistory.at(-1)?.viaAdminMode).toBe(true)
     })
 
-    it('allows both the undo and the resubmission when the setting is off (unchanged pre-#529/#534 behavior)', async () => {
-      const { aliceOtherCardId, bobCardId } = await reachAliceResolvingPick(settingsFor({ lockRevealedInformationEnabled: false }))
-
-      const undone = await stack.undoAction(ALICE, GAME_ID)
-      if (!undone.ok) throw new Error(undone.error)
-      expect(undone.state.roundPhase).toBe('selectCards')
-      expect(undone.state.pendingPlayerIds).toEqual(['seat-alice'])
-      expect(undone.state.chosenCardIdByPlayerId['seat-bob']).toBe(bobCardId)
-
-      const result = await stack.applyAction(ALICE, GAME_ID, { type: 'CHOOSE_CARD', playerId: 'seat-alice', cardId: aliceOtherCardId })
-      if (!result.ok) throw new Error(result.error)
-      expect(result.state.chosenCardIdByPlayerId['seat-alice']).toBe(aliceOtherCardId)
+    it('refuses SET_ADMIN_MODE from anyone but the owner or an admin', async () => {
+      await seed(stack)
+      const result = await stack.applyAction(BOB, GAME_ID, { type: 'SET_ADMIN_MODE', playerId: null, enabled: true })
+      expect(result).toMatchObject({ ok: false, status: 403 })
     })
   })
 
   describe('fixture reconstruction', () => {
-    it('rebuilds a preset-board game’s room and genesis from nothing but its export', async () => {
-      const genesis = await seed(stack)
-      const { state } = await playThroughStack(stack, genesis, 20)
+    it('rebuilds a game’s room and genesis from nothing but its export, options included', async () => {
+      const settings = testGameSettings({ gameOptions: { targetScore: 7, maxRounds: 4 } })
+      const genesis = await seed(stack, settings)
+      const { state } = await playThroughStack(stack, genesis, 3)
 
-      const fixture = buildFixture('self-test-preset', await decodeGameStateExport(await encodeGameStateExport(state)))
-      expect(fixture.game.settings.mapPoolBoard).not.toBeNull()
+      const fixture = buildFixture('self-test-rebuild', await decodeGameStateExport(await encodeGameStateExport(state)))
+      expect(fixture.game.settings.gameOptions).toEqual({ targetScore: 7, maxRounds: 4 })
+      expect(fixture.players.map((player) => [player.id, player.user_id])).toEqual(PLAYERS.map((player) => [player.id, player.user_id]))
       expect(stripTimestamps(fixture.genesis)).toEqual(stripTimestamps(genesis))
     })
 
-    it('replays a game from its own export, exactly as a production fixture is replayed', async () => {
+    it('replays a game from its own export, exactly as a recorded fixture is replayed', async () => {
       const genesis = await seed(stack)
-      const { state } = await playThroughStack(stack, genesis, 24)
+      const { state } = await playThroughStack(stack, genesis, 5)
       // Put a pointer move in the history too, so the replay exercises
       // undo-action/redo-action and not just apply-action.
       const undone = await stack.undoAction(ALICE, GAME_ID)
@@ -537,13 +493,10 @@ describe('production Supabase stack', () => {
       stack.dispose()
       const replay = await createProductionStack()
       try {
-        await replay.seedStartedGame({ game: fixture.game, players: fixture.players, genesis: fixture.genesis, admins: [fixture.game.created_by] })
+        await replay.seedStartedGame({ game: fixture.game, players: fixture.players, genesis: fixture.genesis })
         const outcome = await replayFixtureThroughStack(replay, fixture)
-        // A game played by this file is played against today's engine, so
-        // nothing in its log is a stale forced follow-up — every entry is a
-        // real submission.
-        expect(outcome.foldedEntryIndices).toEqual([])
         expect(outcome.version).toBe(finalState.actionHistory.length)
+        expect(outcome.actionDurationsMs).toHaveLength(finalState.actionHistory.length)
         const stored = await replay.readGameState(fixture.players[0].user_id, fixture.game.id)
         expect(normalizeForComparison(stored!.state)).toEqual(normalizeForComparison(finalState))
       } finally {
@@ -551,16 +504,11 @@ describe('production Supabase stack', () => {
       }
     })
 
-    it('rebuilds an interactively-built game’s room and genesis from its export', async () => {
-      const genesis = await seed(stack, settingsFor({ mapTemplateId: null }))
-      expect(genesis.boardSetup?.tileTierQueue.length).toBeGreaterThan(0)
-      const { state } = await playThroughStack(stack, genesis, 6)
-      expect(state.actionHistory.some((entry) => entry.action.type === 'PLACE_TILE')).toBe(true)
-
-      const fixture = buildFixture('self-test-interactive', await decodeGameStateExport(await encodeGameStateExport(state)))
-      expect(fixture.game.settings.mapPoolBoard).toBeNull()
-      expect(fixture.game.settings.soloBuildMap).toBe(false)
-      expect(stripTimestamps(fixture.genesis)).toEqual(stripTimestamps(genesis))
+    it('refuses to load an export whose history no longer replays to itself', async () => {
+      const genesis = await seed(stack)
+      const { state } = await playThroughStack(stack, genesis, 2)
+      const tampered: GameState = { ...state, game: { ...state.game, scores: { ...state.game.scores, 'seat-alice': 99 } } }
+      expect(() => buildFixture('self-test-tampered', { exportedAt: new Date(0).toISOString(), gameState: tampered })).toThrow(/disagrees on game/)
     })
   })
 })

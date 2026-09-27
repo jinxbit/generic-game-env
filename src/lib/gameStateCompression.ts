@@ -16,15 +16,16 @@ import type { GameState } from '../engine/types.ts'
  * `decompressGameStateFromStorage` unchanged.
  *
  * Duplicates `status`/`phase`/`turn`/`pendingPlayerIds`/`activePlayerId`/
- * `turnOrder` in plaintext alongside the gzip blob: the `game_state_sync_meta`
- * DB trigger (the baseline migration) reads these fields straight off `new.state`
- * with `->>`/`->` — it has no way to gunzip `__gz` first, so without them a
- * rule-enforced game's `game_state_meta` projection (which every listing
- * screen's "finished"/"your turn" classification reads — see
- * gameCardView.ts) would read `status: 'unknown'`. No new information
- * exposure: these fields already sit inside the same `state` column, visible
- * to the same RLS-gated audience, just gzipped — duplicating a few of them
- * in plaintext doesn't reveal anything a reader couldn't already decompress.
+ * `turnOrder` in plaintext alongside the gzip blob: the
+ * `game_state_sync_meta` DB trigger (the baseline migration) reads these
+ * fields straight off `new.state` with `->>`/`->` — it has no way to gunzip
+ * `__gz` first, so without them a rule-enforced game's `game_state_meta`
+ * projection (which every listing screen's "finished"/"your turn"
+ * classification reads — see gameCardView.ts) would read `status: 'unknown'`.
+ * No new information exposure: these fields already sit inside the same
+ * `state` column, visible to the same RLS-gated audience, just gzipped —
+ * duplicating a few of them in plaintext doesn't reveal anything a reader
+ * couldn't already decompress.
  */
 export interface CompressedGameState {
   __gz: string

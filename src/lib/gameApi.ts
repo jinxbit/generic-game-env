@@ -287,16 +287,16 @@ function summariesFromMetaRows(rows: GameStateSummaryRow[]): {
  * `roomEntriesForGames` (`listMyGames` below runs its own bounded variant of
  * this same query instead). Deliberately never touches `game_state` itself:
  * that table denies direct SELECT outright for a `hiddenInformationEnabled`
- * game (the baseline migration's hidden-information lockdown), including to
- * a viewer with no seat — exactly the case `listPublicRooms`/`listAllRooms`
- * hit — and even where it's still readable, `state` is the compressed full
+ * game (the baseline migration's hidden-information lockdown), including to a
+ * viewer with no seat — exactly the case `listPublicRooms`/`listAllRooms` hit
+ * — and even where it's still readable, `state` is the compressed full
  * GameState blob, and downloading+decompressing one per game on every
- * listing-screen visit is a real bandwidth cost.
- * `game_state_meta` is kept in sync with `game_state` by a DB trigger
- * (`game_state_sync_meta`) on every insert/update, so it's always as fresh
- * as `state` would be, and its own RLS is not narrowed by the
- * hidden-information lockdown since none of this is hidden information. See GameStateSummary's doc comment (gameCardView.ts) for
- * what this can't tell you compared to the full state.
+ * listing-screen visit is a real bandwidth cost. `game_state_meta` is kept in
+ * sync with `game_state` by a DB trigger (`game_state_sync_meta`) on every
+ * insert/update, so it's always as fresh as `state` would be, and its own RLS
+ * is not narrowed by the hidden-information lockdown since none of this is
+ * hidden information. See GameStateSummary's doc comment (gameCardView.ts)
+ * for what this can't tell you compared to the full state.
  */
 async function fetchGameStateSummaries(
   gameIds: string[],
@@ -429,11 +429,11 @@ export async function listMyGames(userId: string, excludeGameId?: string): Promi
 
 /**
  * Every room currently listed on the Public Rooms screen: visibility
- * 'public', excluding 'canceled' (canceled and deleted rooms never appear
- * in the listing — deleted rows don't exist to query at all). Shaped like listMyGames's MyGameEntry
- * (game/players/stateSummary) minus the caller-specific `myPlayerIds`, since
- * this list isn't scoped to any one user — see publicRoomsView.ts for the
- * grouping/status logic built on top of it.
+ * 'public', excluding 'canceled' (canceled and deleted rooms never appear in
+ * the listing — deleted rows don't exist to query at all). Shaped like
+ * listMyGames's MyGameEntry (game/players/stateSummary) minus the
+ * caller-specific `myPlayerIds`, since this list isn't scoped to any one user
+ * — see publicRoomsView.ts for the grouping/status logic built on top of it.
  */
 export async function listPublicRooms(): Promise<PublicRoomEntry[]> {
   const { data: games, error: gamesError } = await supabase
@@ -541,11 +541,10 @@ export async function joinGame(params: {
 
 /**
  * Hotseat's answer to joinGame(): the one signed-in host seats another
- * *local* player under their own user_id — the baseline migration's
- * players section deliberately has no `unique (game_id, user_id)`, so that
- * doesn't collide. No
- * separate auth identity needed per seat, which is the whole point of
- * pass-and-play on a single device.
+ * *local* player under their own user_id — the baseline migration's players
+ * section deliberately has no `unique (game_id, user_id)`, so that doesn't
+ * collide. No separate auth identity needed per seat, which is the whole
+ * point of pass-and-play on a single device.
  */
 export async function addLocalPlayer(params: { game: GameRow; hostUserId: string; displayName: string }): Promise<PlayerRow> {
   if (params.game.play_mode !== 'hotseat') {
@@ -731,8 +730,8 @@ export async function setGameStatus(gameId: string, status: GameRow['status']): 
  * Owner-only (RLS's "room owner can update their game" policy): toggles
  * whether the room is listed on the Public Rooms screen. Deliberately
  * separate from updateGameSettings — visibility isn't part of the game's
- * rules configuration, so changing it does not bump
- * `config_version` or reset player readiness.
+ * rules configuration, so changing it does not bump `config_version` or reset
+ * player readiness.
  */
 export async function setGameVisibility(gameId: string, visibility: GameRow['visibility']): Promise<void> {
   const { error } = await supabase.from('games').update({ visibility }).eq('id', gameId)
@@ -780,10 +779,10 @@ export async function cancelGame(gameId: string): Promise<void> {
 }
 
 /**
- * Owner-only, and only from a deletable state ('lobby' or 'canceled' —
- * the "room owner can delete their room in a deletable state" policy
- * enforces both). Cascades remove
- * the room's `players`/`game_state` rows via their existing FKs.
+ * Owner-only, and only from a deletable state ('lobby' or 'canceled' — the
+ * "room owner can delete their room in a deletable state" policy enforces
+ * both). Cascades remove the room's `players`/`game_state` rows via their
+ * existing FKs.
  */
 export async function deleteGame(gameId: string): Promise<void> {
   const { error } = await supabase.from('games').delete().eq('id', gameId)
@@ -868,14 +867,13 @@ export async function insertGameState(gameId: string, state: EngineGameState): P
 /**
  * LobbyPage's Start Game button.
  *
- * A `ruleEnforcementEnabled` game routes through the start-game Edge
- * Function instead (see its own doc comment), making the server
- * authoritative for genesis too, not just every action after it; the
- * baseline migration's start-game lockdown (the
- * `enforce_game_status_transition` trigger plus the enforcement-off-only
- * `game_state` INSERT policy) blocks this function's own direct
- * `game_state` INSERT / `games` UPDATE for such a game, so calling it here
- * would just fail RLS instead of silently doing the wrong thing.
+ * A `ruleEnforcementEnabled` game routes through the start-game Edge Function
+ * instead (see its own doc comment), making the server authoritative for
+ * genesis too, not just every action after it; the baseline migration's
+ * start-game lockdown (the `enforce_game_status_transition` trigger plus the
+ * enforcement-off-only `game_state` INSERT policy) blocks this function's own
+ * direct `game_state` INSERT / `games` UPDATE for such a game, so calling it
+ * here would just fail RLS instead of silently doing the wrong thing.
  *
  * For every other game, deliberately re-fetches the seated roster here
  * rather than trusting whatever `players` list the caller already had in

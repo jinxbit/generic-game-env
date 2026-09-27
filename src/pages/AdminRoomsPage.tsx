@@ -18,7 +18,7 @@ import {
 } from '../lib/publicRoomsView'
 
 /**
- * Admin "all rooms" screen (issue #361) — same three-bucket layout as
+ * Admin "all rooms" screen — same three-bucket layout as
  * PublicRoomsPage.tsx, but sourced from listAllRooms() so private rooms
  * show up too, with a visibility tag since that's otherwise invisible here.
  * Gated by useIsAdmin; listAllRooms()'s

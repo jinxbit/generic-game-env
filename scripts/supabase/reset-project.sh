@@ -12,7 +12,7 @@
 #
 # WHY A RESET IS EVER WANTED: pre-production accumulates state that no
 # migration describes — throwaway smoke users and rooms, hand-run SQL, and
-# (the case this was written for, todo.md #139) a migration applied on the
+# (the case this was written for) a migration applied on the
 # project that has since been reverted out of the repository, leaving a
 # `supabase_migrations.schema_migrations` row with no file behind it. Rather
 # than reconcile that by hand, rebuild from the migrations and let the repo

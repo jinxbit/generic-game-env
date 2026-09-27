@@ -27,10 +27,10 @@ import type { DeltaReplayContext } from './deltaReplayContext'
 import { applyReplayDelta, deriveBaseFromView, type ReplayDeltaFailure, type ReplayDeltaResponse } from './replayDelta'
 
 /**
- * Reads a user's Discord webhook URL (supabase/migrations/0005_discord_webhooks.sql).
- * Used both for a player loading their own settings and for a co-player's
- * client looking up who to notify when it becomes their turn — RLS allows
- * both (own row, or a row belonging to someone seated in a shared game).
+ * Reads a user's Discord webhook URL (`profiles.discord_webhook_url`, see
+ * the baseline migration's profiles section). Used by a player loading their
+ * own settings — the row is own-row readable only; notifications are sent
+ * server-side by the notify-discord-* Edge Functions under the service role.
  * `null` covers both "no profile row yet" and "profile row with no webhook set".
  */
 export async function getDiscordWebhookUrl(userId: string): Promise<string | null> {
@@ -45,7 +45,7 @@ export async function saveDiscordWebhookUrl(userId: string, webhookUrl: string |
 }
 
 /**
- * Web Push subscriptions saved for this user (0020_push_subscriptions.sql) —
+ * Web Push subscriptions saved for this user (`push_subscriptions`) —
  * used by src/lib/pushNotify.ts to know whether the *current* browser
  * already has one, so PushNotificationSettings.tsx can show on/off state.
  */
@@ -77,7 +77,7 @@ export async function deletePushSubscription(endpoint: string): Promise<void> {
 }
 
 /**
- * Reads a user's custom display name (0015_profile_display_name.sql), if
+ * Reads a user's custom display name (`profiles.display_name`), if
  * they've set one — `null` covers both "no profile row yet" and "profile
  * row with no custom name set", both of which mean "fall back to the
  * Discord name" (see resolveDisplayName in lib/displayName.ts).
@@ -252,7 +252,7 @@ export async function listPlayers(gameId: string): Promise<PlayerRow[]> {
 /**
  * Every `game_state_meta` column a `GameStateSummary` is built from — shared
  * by `fetchGameStateSummaries` (below) and `listMyGames`'s own bounded
- * queries (issue #687), which need the same columns but split across two
+ * queries, which need the same columns but split across two
  * separate status-filtered requests rather than one unfiltered one.
  */
 const GAME_STATE_SUMMARY_COLUMNS = 'game_id, status, phase, turn, pending_player_ids, active_player_id, updated_at'
@@ -284,20 +284,18 @@ function summariesFromMetaRows(rows: GameStateSummaryRow[]): {
 /**
  * Fetches the cheap `game_state_meta` columns for a batch of games and
  * assembles a `GameStateSummary` per game — the shared plumbing behind
- * `roomEntriesForGames` (issue #441; `listMyGames` below runs its own
- * bounded variant of this same query instead, issue #687). Deliberately
- * never touches `game_state` itself: that table now denies direct SELECT
- * outright for a `hiddenInformationEnabled` game
- * (`0028_hidden_information_rls_lockdown.sql`, issue #488), including to a
- * viewer with no seat — exactly the case `listPublicRooms`/`listAllRooms`
+ * `roomEntriesForGames` (`listMyGames` below runs its own bounded variant of
+ * this same query instead). Deliberately never touches `game_state` itself:
+ * that table denies direct SELECT outright for a `hiddenInformationEnabled`
+ * game (the baseline migration's hidden-information lockdown), including to
+ * a viewer with no seat — exactly the case `listPublicRooms`/`listAllRooms`
  * hit — and even where it's still readable, `state` is the compressed full
- * GameState blob whose per-game download+decompression on every
- * listing-screen visit was issue #441's actual bandwidth cost.
- * `game_state_meta` (`0025_game_state_meta.sql`, `active_player_id` added by
- * `0028`) is kept in sync with `game_state` by a DB trigger on every
- * insert/update, so it's always as fresh as `state` would be, and its own
- * RLS was never tightened by `0028` since none of this is hidden
- * information. See GameStateSummary's doc comment (gameCardView.ts) for
+ * GameState blob, and downloading+decompressing one per game on every
+ * listing-screen visit is a real bandwidth cost.
+ * `game_state_meta` is kept in sync with `game_state` by a DB trigger
+ * (`game_state_sync_meta`) on every insert/update, so it's always as fresh
+ * as `state` would be, and its own RLS is not narrowed by the
+ * hidden-information lockdown since none of this is hidden information. See GameStateSummary's doc comment (gameCardView.ts) for
  * what this can't tell you compared to the full state.
  */
 async function fetchGameStateSummaries(
@@ -322,7 +320,7 @@ const GAME_LIST_COLUMNS = 'id, room_code, name, play_mode, status, min_players, 
  * Every `players` column a listing screen's player chips need (see
  * PlayerListRow in dbTypes.ts) — `id, game_id, user_id, display_name,
  * seat_index`. Dropping `avatar_url`/`color`/`is_active`/`joined_at`/
- * `ready_for_version` here is issue #622: those five columns were going out
+ * `ready_for_version` here is deliberate: those five columns would go out
  * for every seat of every game on screen (My games/Public Rooms/Home/Admin
  * Rooms) despite nothing in the listing views reading them. A single game's
  * full roster (LobbyPage.tsx/GamePage.tsx, via listPlayers below) still
@@ -332,8 +330,8 @@ const PLAYER_LIST_COLUMNS = 'id, game_id, user_id, display_name, seat_index'
 
 /**
  * Every game the given user is seated in — for the "My games" screen
- * (MyGamesPage.tsx). Includes each game's cheap GameStateSummary (issue
- * #441 — see fetchGameStateSummaries/gameCardView.ts's GameStateSummary) so
+ * (MyGamesPage.tsx). Includes each game's cheap GameStateSummary (see
+ * fetchGameStateSummaries/gameCardView.ts's GameStateSummary) so
  * myGamesView.ts can classify turn/finished status without downloading and
  * decompressing every game's full GameState; games.status alone can't tell
  * 'completed' apart from 'active' (see dbTypes.ts's GameRow
@@ -347,8 +345,7 @@ const PLAYER_LIST_COLUMNS = 'id, game_id, user_id, display_name, seat_index'
  * games out of this list (see nextGameNeedingInput).
  *
  * The `players.game_id` list above is every game the user has *ever* been
- * seated in — issue #687 found this growing without bound, ~46 games deep
- * on one account already and rising for the life of the account, since a
+ * seated in — it grows without bound for the life of the account, since a
  * finished game never leaves it. Active/lobby/canceled games are each
  * naturally bounded (how many a person plausibly has in flight, or has
  * opened and abandoned), so only the completed bucket needs capping:
@@ -431,10 +428,9 @@ export async function listMyGames(userId: string, excludeGameId?: string): Promi
 }
 
 /**
- * Every room currently listed on the Public Rooms screen (issue #40
- * sections 4-5): visibility 'public', excluding 'canceled' (issue section 5:
- * "Canceled and Deleted rooms do not appear in the listing" — deleted rows
- * don't exist to query at all). Shaped like listMyGames's MyGameEntry
+ * Every room currently listed on the Public Rooms screen: visibility
+ * 'public', excluding 'canceled' (canceled and deleted rooms never appear
+ * in the listing — deleted rows don't exist to query at all). Shaped like listMyGames's MyGameEntry
  * (game/players/stateSummary) minus the caller-specific `myPlayerIds`, since
  * this list isn't scoped to any one user — see publicRoomsView.ts for the
  * grouping/status logic built on top of it.
@@ -456,19 +452,17 @@ export async function listPublicRooms(): Promise<PublicRoomEntry[]> {
  * same reason listPublicRooms excludes it (canceled rooms have no
  * stateSummary to distinguish "in progress" from "finished" — see
  * publicRoomBucket). Used by AdminRoomsPage.tsx (gated by useIsAdmin) for
- * its "Joinable" bucket too, and by HomePage.tsx (issue #363) for its
+ * its "Joinable" bucket too, and by HomePage.tsx for its
  * in-progress/finished sections only — a private room's not-started/lobby
  * state must still never be surfaced as joinable outside "Your games" or the
  * room's own link, so HomePage filters this list down before rendering. Not
- * an RLS boundary either way, since 0001_init_schema.sql's "games are
- * readable by any signed-in user" policy already lets any authenticated user
- * select any game row, and 0021_remove_observers.sql's game_state policy
- * (mirrored onto game_state_meta by 0025_game_state_meta.sql) already lets
- * any signed-in user read a non-lobby game's state regardless of
- * visibility — so a private room's phase/finished status resolves here the
- * same way it does for public rooms. Per-game full-state reads used to also
- * power a score summary here (issue #204); that's gone as of issue #441 —
- * see GameStateSummary's doc comment (gameCardView.ts).
+ * an RLS boundary either way, since the "games are readable by any
+ * signed-in user" policy already lets any authenticated user select any game
+ * row, and game_state_meta's read policy already lets any signed-in user
+ * read a non-lobby game's meta regardless of visibility — so a private
+ * room's phase/finished status resolves here the same way it does for public
+ * rooms. No per-game full-state read happens here — see GameStateSummary's
+ * doc comment (gameCardView.ts).
  */
 export async function listAllRooms(): Promise<PublicRoomEntry[]> {
   const { data: games, error: gamesError } = await supabase
@@ -547,8 +541,9 @@ export async function joinGame(params: {
 
 /**
  * Hotseat's answer to joinGame(): the one signed-in host seats another
- * *local* player under their own user_id — see 0003_hotseat_local_players.sql
- * for why that no longer collides with `unique (game_id, user_id)`. No
+ * *local* player under their own user_id — the baseline migration's
+ * players section deliberately has no `unique (game_id, user_id)`, so that
+ * doesn't collide. No
  * separate auth identity needed per seat, which is the whole point of
  * pass-and-play on a single device.
  */
@@ -584,8 +579,8 @@ export async function addLocalPlayer(params: { game: GameRow; hostUserId: string
 }
 
 /**
- * "Duplicate as hot seat" (issue #414, GamePage.tsx's hamburger menu):
- * snapshots a game's CURRENT state — mid-round, still in board setup, or
+ * "Duplicate as hot seat" (GamePage.tsx's hamburger menu):
+ * snapshots a game's CURRENT state — mid-turn, mid-phase, or
  * even finished — into a brand-new hotseat room owned by the clicking
  * player, with every seat converted to a local pass-and-play player under
  * their own account (mirrors addLocalPlayer, just for a whole roster at
@@ -652,7 +647,7 @@ export async function duplicateGameAsHotseat(params: {
 }
 
 /**
- * Site-admin-only "Import game export" (issue #676): takes a pasted game
+ * Site-admin-only "Import game export": takes a pasted game
  * state export (GamePage.tsx's "Copy game export", `gameStateExport.ts`) —
  * typically one attached to a bug report — and creates a brand-new hotseat
  * room from it, owned by the importing admin, every seat turned into a
@@ -721,7 +716,7 @@ export async function importGameExportAsHotseat(params: { exportText: string; ho
   return game as GameRow
 }
 
-/** Removes a seated player — used pre-start to undo a mis-added hotseat local player (LobbyPage.tsx). RLS only allows deleting your own row (0003_hotseat_local_players.sql), which for hotseat covers every local player the host added. */
+/** Removes a seated player — used pre-start to undo a mis-added hotseat local player (LobbyPage.tsx). RLS only allows deleting your own row ("users can delete their own player row"), which for hotseat covers every local player the host added. */
 export async function removePlayer(playerId: string): Promise<void> {
   const { error } = await supabase.from('players').delete().eq('id', playerId)
   if (error) throw error
@@ -734,10 +729,9 @@ export async function setGameStatus(gameId: string, status: GameRow['status']): 
 
 /**
  * Owner-only (RLS's "room owner can update their game" policy): toggles
- * whether the room is listed on the Public Rooms screen (issue #40 sections
- * 4-5, 0011_room_visibility.sql). Deliberately separate from
- * updateGameSettings — visibility isn't part of the game's rules
- * configuration (issue section 7), so changing it does not bump
+ * whether the room is listed on the Public Rooms screen. Deliberately
+ * separate from updateGameSettings — visibility isn't part of the game's
+ * rules configuration, so changing it does not bump
  * `config_version` or reset player readiness.
  */
 export async function setGameVisibility(gameId: string, visibility: GameRow['visibility']): Promise<void> {
@@ -747,11 +741,10 @@ export async function setGameVisibility(gameId: string, visibility: GameRow['vis
 
 /**
  * Owner-only (RLS's "room owner can update their game" policy), and only
- * while the room is still in the lobby (0009_config_versioning.sql's
- * `games_bump_config_version` trigger rejects it otherwise). Bumps
- * `config_version` server-side, which is what makes every non-Owner seated
- * player Not Ready again — see the room lifecycle spec's sections 7 (player
- * count is configuration too) and 9, and roomReadiness.ts.
+ * while the room is still in the lobby (the `games_bump_config_version`
+ * trigger rejects it otherwise). Bumps `config_version` server-side, which
+ * is what makes every non-Owner seated player Not Ready again — player count
+ * is configuration too; see roomReadiness.ts.
  */
 export async function updateGameSettings(
   gameId: string,
@@ -776,11 +769,10 @@ export async function markReady(playerId: string, configVersion: number): Promis
 }
 
 /**
- * Owner-only (0008_room_lifecycle.sql's RLS policy silently drops the write
- * for anyone else): moves a room from 'lobby' or 'active' to 'canceled'.
- * Disables further `game_state` writes and blocks new joins (joinGame
- * already rejects any `status !== 'lobby'`) — see the room lifecycle spec's
- * section 11.
+ * Owner-only (the "room owner can update their game" RLS policy silently
+ * drops the write for anyone else): moves a room from 'lobby' or 'active' to
+ * 'canceled'. Disables further `game_state` writes and blocks new joins
+ * (joinGame already rejects any `status !== 'lobby'`).
  */
 export async function cancelGame(gameId: string): Promise<void> {
   const { error } = await supabase.from('games').update({ status: 'canceled' }).eq('id', gameId)
@@ -789,7 +781,8 @@ export async function cancelGame(gameId: string): Promise<void> {
 
 /**
  * Owner-only, and only from a deletable state ('lobby' or 'canceled' —
- * 0008_room_lifecycle.sql's delete policy enforces both). Cascades remove
+ * the "room owner can delete their room in a deletable state" policy
+ * enforces both). Cascades remove
  * the room's `players`/`game_state` rows via their existing FKs.
  */
 export async function deleteGame(gameId: string): Promise<void> {
@@ -809,7 +802,7 @@ export function subscribeToPlayers(gameId: string, onChange: () => void): () => 
 }
 
 /**
- * Fires with `payload.new` on every `games` row UPDATE (issue #533's fix).
+ * Fires with `payload.new` on every `games` row UPDATE.
  * That's Postgres's logical-replication view of the new row, not a fresh
  * `select()` — a column that's unchanged by this particular UPDATE *and*
  * stored out-of-line (TOASTed — a large `settings` can qualify) is omitted from it entirely rather than sent
@@ -876,20 +869,21 @@ export async function insertGameState(gameId: string, state: EngineGameState): P
  * LobbyPage's Start Game button.
  *
  * A `ruleEnforcementEnabled` game routes through the start-game Edge
- * Function instead (see its own doc comment) — issue #519's follow-up
- * ("perhaps start game should be an edge function?") settled on making the
- * server authoritative for genesis too, not just every action after it;
- * `0029_start_game_edge_function.sql` blocks this function's own direct
+ * Function instead (see its own doc comment), making the server
+ * authoritative for genesis too, not just every action after it; the
+ * baseline migration's start-game lockdown (the
+ * `enforce_game_status_transition` trigger plus the enforcement-off-only
+ * `game_state` INSERT policy) blocks this function's own direct
  * `game_state` INSERT / `games` UPDATE for such a game, so calling it here
  * would just fail RLS instead of silently doing the wrong thing.
  *
  * For every other game, deliberately re-fetches the seated roster here
  * rather than trusting whatever `players` list the caller already had in
  * React state: that state is only as fresh as the last `listPlayers()` call
- * or Realtime event the host's browser happened to receive, and issue #519
- * was exactly this going stale — a 2-player GameState got built for a room
- * with 3 people seated because the host clicked Start in the gap before
- * their client's copy of `players` had picked up the third join. Re-running
+ * or Realtime event the host's browser happened to receive, and that can
+ * go stale — a 2-player GameState can get built for a room
+ * with 3 people seated if the host clicks Start in the gap before
+ * their client's copy of `players` has picked up the third join. Re-running
  * `canStartGame` against the freshly-fetched roster closes that gap: if the
  * room's shape changed since the caller last saw it (someone joined, left,
  * or went un-ready), this throws instead of silently building genesis from
@@ -935,7 +929,7 @@ export async function getGameState(gameId: string): Promise<GameStateSnapshot | 
 }
 
 /**
- * HIDDEN_INFORMATION_PLAN.md §8 phase 8's redacted read path: reads via the
+ * The redacted read path for hidden-information games: reads via the
  * `get-game-state` Edge Function instead of the raw `game_state` row, so a
  * still-secret pick never reaches this browser's network stack in the first
  * place — see that function's own doc comment for exactly which callers get
@@ -950,9 +944,9 @@ export async function getGameState(gameId: string): Promise<GameStateSnapshot | 
  * `previous`, when given, is a state this caller already applied (GamePage.tsx
  * threads through the last `gameState` it rendered) — its `actionHistory.length`
  * is sent as `sinceActionIndex`, and get-game-state/index.ts responds with just
- * the entries logged since then instead of the whole array (issue #647: that
- * array is 60-70% of a full GameState's bytes, and every move only ever adds
- * one entry to it — see the issue for measurements). `applyRedactedGameStateDelta`
+ * the entries logged since then instead of the whole array (that array
+ * dominates a full GameState's bytes, and every move only ever adds one
+ * entry to it). `applyRedactedGameStateDelta`
  * (redaction.ts) does the actual splice-and-verify against `previous.actionHistory`
  * and is the pure, testable half of this; a `null` from it (a stale/foreign
  * `previous`, or any other inconsistency) falls back to an ordinary full fetch
@@ -982,7 +976,7 @@ export async function getGameStateRedacted(
     | { ok: false; error: string }
   if (!result.ok) return null
 
-  // Protocol 2 (issue #648): no materialised state on the wire at all. Rebuild
+  // Protocol 2: no materialised state on the wire at all. Rebuild
   // it from the actions and verify — any failure is a cache miss, answered by
   // one full fetch.
   if ('stateHash' in result && 'actionHistoryAppend' in result && replay && previous) {
@@ -1007,7 +1001,7 @@ export async function getGameStateRedacted(
 
 /**
  * Writes a new GameState produced by applyAction(), guarded by the row's
- * `version` (see 0001_init_schema.sql's game_state comment) so two clients
+ * `version` (see the baseline migration's game_state section) so two clients
  * racing to submit an action can't silently clobber each other — returns
  * false (no rows updated) when `expectedVersion` is stale, in which case the
  * caller should refetch via getGameState and let the player retry.
@@ -1027,7 +1021,7 @@ export async function writeGameState(gameId: string, state: EngineGameState, exp
 export type GameEnforcementResult = { ok: true; state: EngineGameState; base?: EngineGameState; version: number } | { ok: false; error: string }
 
 /**
- * Invokes one of the RULE_ENFORCEMENT_PLAN.md §8 phase 6 Edge Functions and
+ * Invokes one of the rule-enforcement write Edge Functions and
  * normalizes its response into GameEnforcementResult either way. Used only
  * for games with GameSettings.ruleEnforcementEnabled on — see gameApi.ts
  * callers below and GamePage.tsx's branch in submitAction/handleUndo/
@@ -1038,8 +1032,8 @@ export type GameEnforcementResult = { ok: true; state: EngineGameState; base?: E
  * FunctionsError message if that response body isn't there or isn't JSON.
  *
  * A success response's `state` is `RedactedGameState`-shaped, same as
- * `getGameStateRedacted` below (issue #478: the write endpoints redact their
- * response the same way `get-game-state` redacts a read) — `toClientGameState`
+ * `getGameStateRedacted` below (the write endpoints redact their response
+ * the same way `get-game-state` redacts a read) — `toClientGameState`
  * collapses it back to a plain `GameState` here, at the network boundary, so
  * `GamePage.tsx`'s submitAction/handleUndo/handleRedo keep consuming
  * `GameEnforcementResult.state` exactly as before. This is a lossless round
@@ -1053,8 +1047,8 @@ async function invokeGameFunction(
   previous?: EngineGameState | null,
   replay?: DeltaReplayContext,
 ): Promise<GameEnforcementResult> {
-  // Issue #693: a move's own response used to carry the whole state back,
-  // which for the player actually playing is the most frequent read there is.
+  // A move's own response would otherwise carry the whole state back, and
+  // for the player actually playing that is the most frequent read there is.
   // Same protocol-2 contract as the read path (respondWithState builds both).
   const useDelta = Boolean(previous && replay)
   const { data, error } = await supabase.functions.invoke(name, {
@@ -1119,24 +1113,24 @@ async function invokeStartGame(gameId: string): Promise<{ ok: true } | { ok: fal
   return { ok: false, error: error.message }
 }
 
-/** §4.1-enforced action submission for a ruleEnforcementEnabled game — see supabase/functions/apply-action/index.ts. */
+/** Server-enforced action submission for a ruleEnforcementEnabled game — see supabase/functions/apply-action/index.ts. */
 export async function applyActionEnforced(gameId: string, action: Action, previous?: EngineGameState | null, replay?: DeltaReplayContext): Promise<GameEnforcementResult> {
   return invokeGameFunction('apply-action', { gameId, action }, previous, replay)
 }
 
-/** §4.4 pointer-move undo for a ruleEnforcementEnabled game — see supabase/functions/undo-action/index.ts. */
+/** Server-enforced undo (a logged pointer move, see historyFold.ts) for a ruleEnforcementEnabled game — see supabase/functions/undo-action/index.ts. */
 export async function undoActionEnforced(gameId: string, previous?: EngineGameState | null, replay?: DeltaReplayContext): Promise<GameEnforcementResult> {
   return invokeGameFunction('undo-action', { gameId }, previous, replay)
 }
 
-/** §4.4 pointer-move redo for a ruleEnforcementEnabled game — see supabase/functions/redo-action/index.ts. */
+/** Server-enforced redo (a logged pointer move, see historyFold.ts) for a ruleEnforcementEnabled game — see supabase/functions/redo-action/index.ts. */
 export async function redoActionEnforced(gameId: string, previous?: EngineGameState | null, replay?: DeltaReplayContext): Promise<GameEnforcementResult> {
   return invokeGameFunction('redo-action', { gameId }, previous, replay)
 }
 
 /**
- * Subscribes to `game_state_meta` (`0025_game_state_meta.sql`) rather than
- * `game_state` itself (issue #448): Realtime's `postgres_changes` broadcasts
+ * Subscribes to `game_state_meta` rather than `game_state` itself:
+ * Realtime's `postgres_changes` broadcasts
  * the entire new row over the websocket on every event, so subscribing
  * directly to `game_state` meant every move pushed the full `GameState` JSON
  * (including the whole `actionHistory`) uncompressed to every client on
@@ -1147,9 +1141,8 @@ export async function redoActionEnforced(gameId: string, previous?: EngineGameSt
  * from the `getGameState` REST call below, which (unlike the websocket) goes
  * over plain HTTP and gets normal gzip transport compression.
  *
- * This is deliberately just the read-side subscription swap this table was
- * already landed for (see its migration's doc comment and
- * `HIDDEN_INFORMATION_PLAN.md` §5.2/§6) — it doesn't touch `game_state`'s
+ * This is deliberately just a read-side subscription swap (see the baseline
+ * migration's game_state_meta section) — it doesn't touch `game_state`'s
  * RLS or writes.
  *
  * `redacted` (default false) swaps the refetch onto getGameStateRedacted
@@ -1159,12 +1152,12 @@ export async function redoActionEnforced(gameId: string, previous?: EngineGameSt
  *
  * `getAppliedVersion`, when given, is consulted before paying for that HTTP
  * round trip: `game_state_meta`'s row (kept in sync with `game_state` by the
- * same trigger that projects it, `0025_game_state_meta.sql`) carries the new
+ * same `game_state_sync_meta` trigger that projects it) carries the new
  * `version` in the realtime payload itself, so if it's `<=` whatever the
  * caller already has applied — same comparison GamePage.tsx's
  * applyGameStateSnapshot uses, so this can never skip a fetch that guard
  * would have accepted — the fetch can only come back with what's already
- * showing and is skipped outright (issue #646). This is the common case
+ * showing and is skipped outright. This is the common case
  * right after this client's own write: it already applied the result
  * locally, then the trigger's own `game_state_meta` update echoes back over
  * the socket. Any other client on the same game still has a lower applied
@@ -1176,8 +1169,8 @@ export async function redoActionEnforced(gameId: string, previous?: EngineGameSt
  *
  * `getAppliedState`, when given and `redacted` is true, is handed to
  * getGameStateRedacted as its `previous` — the per-move refetch this
- * subscription drives is exactly the hot path issue #647's incremental
- * actionHistory targets, so the same last-applied state
+ * subscription drives is exactly the hot path the incremental
+ * actionHistory delta targets, so the same last-applied state
  * `getAppliedVersion` reads the version off of is reused here to also avoid
  * re-downloading the whole log on every move. Ignored when `redacted` is
  * false: getGameState has no equivalent parameter.

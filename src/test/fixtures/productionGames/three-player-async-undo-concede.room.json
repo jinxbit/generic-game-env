@@ -1,0 +1,13 @@
+{
+  "name": "Three-way async game — A concedes, B takes it",
+  "expected": {
+    "winners": [
+      "Player B"
+    ],
+    "finalScores": {
+      "Player A": 8,
+      "Player B": 12,
+      "Player C": 5
+    }
+  }
+}

@@ -21,7 +21,7 @@
 // The Supabase project ref alone turned out not to be enough to tell builds
 // apart: every Preview deployment — `main`'s and every `claude/*` branch's —
 // points at the same Preview project, so the badge read identically on all
-// of them. That cost real time on 2026-09-09 (issue #496): a checkbox looked
+// of them. That once cost real time: a checkbox looked
 // absent because the page was an older branch's preview, not `main`'s. So the
 // badge also names the git branch and short commit it was built from, read
 // from `__GIT_COMMIT_REF__`/`__GIT_COMMIT_SHA__` (injected by

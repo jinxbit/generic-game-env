@@ -5,8 +5,8 @@ import { simpleError, toAppError, type AppError } from '../lib/errors'
 type Mode = 'signIn' | 'signUp' | 'forgotPassword'
 
 /**
- * Email/password sign-in and registration (issue #384), plus "forgot
- * password" (issue #386) — an alternative to Discord/Google OAuth for
+ * Email/password sign-in and registration, plus "forgot
+ * password" — an alternative to Discord/Google OAuth for
  * players who'd rather not link a third-party account. Toggles between
  * modes in place; sign-up additionally collects a username, which becomes
  * the account's display name (see signUpWithEmail). Forgot-password only

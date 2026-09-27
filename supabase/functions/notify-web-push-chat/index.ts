@@ -1,8 +1,8 @@
-// Sends a Web Push notification when someone posts in a game's chat (issue
-// #658, CHAT_PLAN.md §20). Structurally identical to notify-discord-chat
+// Sends a Web Push notification when someone posts in a game's chat
+// (CHAT_PLAN.md §20). Structurally identical to notify-discord-chat
 // (see that function's doc comment for the full trigger/scope rationale —
 // in-game only, async games only, gated via `profiles.preferences.
-// chatNotificationsEnabled`, default on as of issue #668); deliberately a
+// chatNotificationsEnabled`, default on); deliberately a
 // near-duplicate rather than a shared module, same as the other
 // push/Discord pairs in this repo: the delivery code differs and the rest is
 // small. The title comes from src/game/display.ts.

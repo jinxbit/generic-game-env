@@ -13,7 +13,7 @@
 //             game_state_sync_meta trigger, version compare-and-swap)
 //
 // The only things replaced by a double are Postgres itself and the Deno Edge
-// Runtime. Every line of rule enforcement, authorization, content resolution,
+// Runtime. Every line of rule enforcement, authorization, redaction,
 // state compression and optimistic concurrency in between is the code that
 // ships. Covering those last two would mean a local `supabase start` stack,
 // which needs Docker — deliberately not a requirement here, since
@@ -31,7 +31,6 @@ import type { GameState } from '../../engine/types.ts'
 import type { GameRow, PlayerRow } from '../../lib/dbTypes.ts'
 import { decompressGameStateFromStorage, type StoredGameState } from '../../lib/gameStateCompression.ts'
 import { Database, type GameStateRow, type ProfileRow } from './database.ts'
-import type { GameContent } from './sampleGame.ts'
 import { loadEdgeFunctions, type EdgeFunctionName } from './edgeFunctions.ts'
 import { ANON_KEY, SERVICE_ROLE_KEY, STACK_URL, serveStackRequest, type AccountRegistry, type EdgeFunctionHandler, type ServerOptions, type TokenRegistry } from './httpServer.ts'
 
@@ -113,18 +112,19 @@ export interface ProductionStack {
   /**
    * Puts an already-started game into the database: the `games`/`players`/
    * `profiles` rows the lobby would have created, then the genesis
-   * `game_state` row written the way LobbyPage.tsx's handleStart does it —
-   * through the owner's own authenticated client, so 0001_init_schema.sql's
-   * insert policy is exercised rather than bypassed.
+   * `game_state` row written the way a real start writes it — a client-
+   * trusted game through a seated player's own authenticated client, so
+   * 0001_baseline.sql's section 7 insert policy is exercised rather than
+   * bypassed; a rule-enforced one as the service role, the way the
+   * start-game Edge Function does.
    */
   seedStartedGame(options: { game: GameRow; players: PlayerRow[]; genesis: GameState; admins?: string[] }): Promise<void>
-  /** gameApi.ts's getGameState, as `userId` — decompressed, RLS-gated, null if the row isn't readable or doesn't exist. This is the raw, unredacted direct-table read every game still uses unless it's both ruleEnforcementEnabled and hiddenInformationEnabled (see usesRedactedReads, GamePage.tsx), in which case gameApi.ts calls getGameStateRedacted (below) instead. Since 0028_hidden_information_rls_lockdown.sql (issue #488), a hiddenInformationEnabled game's row is RLS-invisible through this path entirely — seated player and stranger alike get `null`, same as a missing row — because that's exactly the game type get-game-state exists to replace this call for; an admin still sees it (0024_admin_read_all_game_state.sql). */
+  /** gameApi.ts's getGameState, as `userId` — decompressed, RLS-gated, null if the row isn't readable or doesn't exist. This is the raw, unredacted direct-table read every game uses unless it's both ruleEnforcementEnabled and hiddenInformationEnabled (see usesRedactedReads, GamePage.tsx), in which case gameApi.ts calls getGameStateRedacted (below) instead. A hiddenInformationEnabled game's row is RLS-invisible through this path entirely (0001_baseline.sql section 8) — seated player and stranger alike get `null`, same as a missing row — because that's exactly the game type get-game-state exists to replace this call for; an admin still sees it ("admins can read any game state"). */
   readGameState(userId: string, gameId: string): Promise<{ state: GameState; version: number } | null>
   /**
    * Calls the real get-game-state Edge Function as `userId` — gameApi.ts's
-   * getGameStateRedacted, the read path HIDDEN_INFORMATION_PLAN.md §8 phase 8
-   * wired in. `sinceActionIndex`, when given, is sent the same way
-   * getGameStateRedacted sends it (issue #647): a valid index gets back
+   * getGameStateRedacted. `sinceActionIndex`, when given, is sent the same
+   * way getGameStateRedacted sends it: a valid index gets back
    * GameStateDeltaReadResult; an omitted or out-of-range one falls back to
    * GameStateReadResult, same as a real client would see. A test that passes
    * `sinceActionIndex` and needs the delta fields narrows via
@@ -153,9 +153,9 @@ export interface ProductionStack {
    * Functions (which such a game's RLS would let write, but whose enforcement
    * it was never played under).
    */
-  applyActionClientTrusted(userId: string, gameId: string, action: Action, content: GameContent): Promise<EnforcedCallResult>
-  undoActionClientTrusted(userId: string, gameId: string, playerId: string | null, genesis: GameState, content: GameContent): Promise<EnforcedCallResult>
-  redoActionClientTrusted(userId: string, gameId: string, playerId: string | null, genesis: GameState, content: GameContent): Promise<EnforcedCallResult>
+  applyActionClientTrusted(userId: string, gameId: string, action: Action): Promise<EnforcedCallResult>
+  undoActionClientTrusted(userId: string, gameId: string, playerId: string | null, genesis: GameState): Promise<EnforcedCallResult>
+  redoActionClientTrusted(userId: string, gameId: string, playerId: string | null, genesis: GameState): Promise<EnforcedCallResult>
   /** Restores the global `fetch` this stack patched. Call from `afterEach`. */
   dispose(): void
 }
@@ -238,9 +238,9 @@ export async function createProductionStack(): Promise<ProductionStack> {
   const clients = new Map<string, SupabaseClient>()
   // Same shape as an Edge Function's own serviceRoleClient() (gameEnforcement.ts)
   // — used only by seedStartedGame below, to seed an enforced game's genesis
-  // the way start-game/index.ts actually writes it (0029_start_game_edge_function.sql
-  // narrows game_state's INSERT policy to require enforcement off, so a
-  // seated player's own client can no longer do this for such a game).
+  // the way start-game/index.ts actually writes it (0001_baseline.sql section
+  // 7's INSERT policy requires enforcement off, so a seated player's own
+  // client cannot do this for such a game).
   const serviceClient = createClient(STACK_URL, SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false, storageKey: 'sb-test-service-role' },
   })
@@ -403,7 +403,8 @@ export async function createProductionStack(): Promise<ProductionStack> {
     if (error) return { ok: false, error: error.message, status: 500 }
     if ((data?.length ?? 0) === 0) {
       // Zero rows changed is either a lost race or RLS refusing the write —
-      // indistinguishable to a client, which is exactly what 0026 relies on.
+      // indistinguishable to a client, which is exactly what 0001_baseline.sql
+      // section 7's update policy relies on.
       return { ok: false, error: 'Game state changed concurrently, or this game is not writable directly — refetch and retry.', status: 409 }
     }
     return { ok: true, state: result.state, version: expectedVersion + 1, status: 200 }
@@ -428,10 +429,10 @@ export async function createProductionStack(): Promise<ProductionStack> {
 
       // gameApi.ts's insertGameState, verbatim in shape — an uncompressed
       // GameState written directly. A non-enforced game really is written
-      // this way by a seated player (0001_init_schema.sql's INSERT policy);
-      // an enforced game's genesis now comes from start-game/index.ts's
-      // service-role client instead (0029_start_game_edge_function.sql), so
-      // this uses whichever actor a real one of each kind would.
+      // this way by a seated player (0001_baseline.sql section 7's INSERT
+      // policy); an enforced game's genesis comes from start-game/index.ts's
+      // service-role client instead, so this uses whichever actor a real one
+      // of each kind would.
       const insertingClient = game.settings.ruleEnforcementEnabled ? serviceClient : clientFor(players[0].user_id)
       const { error } = await insertingClient
         .from('game_state')
@@ -469,18 +470,9 @@ export async function createProductionStack(): Promise<ProductionStack> {
       invokeEnforced('redo-action', userId, { gameId, ...deltaFields(sinceActionIndex, protocol) })) as ProductionStack['redoAction'],
     startGame: (userId, gameId) => invoke<{ ok: true }>('start-game', userId, { gameId }),
 
-    applyActionClientTrusted: (userId, gameId, action, content) =>
-      writeClientTrusted(userId, gameId, (state) =>
-        applyAction(state, action, content.unitContent, content.achievementContent, content.boardGenerationContent, content.taleContent),
-      ),
-    undoActionClientTrusted: (userId, gameId, playerId, genesis, content) =>
-      writeClientTrusted(userId, gameId, (state) =>
-        applyUndoAction(genesis, state, playerId, content.unitContent, content.achievementContent, content.boardGenerationContent, content.taleContent),
-      ),
-    redoActionClientTrusted: (userId, gameId, playerId, genesis, content) =>
-      writeClientTrusted(userId, gameId, (state) =>
-        applyRedoAction(genesis, state, playerId, content.unitContent, content.achievementContent, content.boardGenerationContent, content.taleContent),
-      ),
+    applyActionClientTrusted: (userId, gameId, action) => writeClientTrusted(userId, gameId, (state) => applyAction(state, action)),
+    undoActionClientTrusted: (userId, gameId, playerId, genesis) => writeClientTrusted(userId, gameId, (state) => applyUndoAction(genesis, state, playerId)),
+    redoActionClientTrusted: (userId, gameId, playerId, genesis) => writeClientTrusted(userId, gameId, (state) => applyRedoAction(genesis, state, playerId)),
 
     dispose: restoreFetch,
   }

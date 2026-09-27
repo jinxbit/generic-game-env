@@ -1,0 +1,13 @@
+{
+  "name": "Three-way live game with secret picks",
+  "expected": {
+    "winners": [
+      "Player B"
+    ],
+    "finalScores": {
+      "Player A": 8,
+      "Player B": 9,
+      "Player C": 4
+    }
+  }
+}

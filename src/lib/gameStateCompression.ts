@@ -17,7 +17,7 @@ import type { GameState } from '../engine/types.ts'
  *
  * Duplicates `status`/`phase`/`turn`/`pendingPlayerIds`/`activePlayerId`/
  * `turnOrder` in plaintext alongside the gzip blob: the `game_state_sync_meta`
- * DB trigger (0001_baseline.sql) reads these fields straight off `new.state`
+ * DB trigger (the baseline migration) reads these fields straight off `new.state`
  * with `->>`/`->` — it has no way to gunzip `__gz` first, so without them a
  * rule-enforced game's `game_state_meta` projection (which every listing
  * screen's "finished"/"your turn" classification reads — see

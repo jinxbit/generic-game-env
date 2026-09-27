@@ -1,5 +1,5 @@
 // Sends "it's your turn" Web Push notifications for async games — the
-// notification-half of PWA support (issue #250). Structurally identical to
+// notification-half of PWA support. Structurally identical to
 // notify-discord-turn (see that function's doc comment for the full
 // rationale on why this runs server-side). Who to ping is decided by
 // ../_shared/turnNotify.ts, shared with notify-discord-turn; only the

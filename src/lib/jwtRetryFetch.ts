@@ -3,7 +3,7 @@
  * issued at future") when there's a brief clock-skew race between the Auth
  * and database servers — the same token is valid again a moment later.
  * Retrying once after a short delay clears it instead of surfacing a
- * confusing raw error to players (issue #291).
+ * confusing raw error to players.
  */
 export function createJwtRetryFetch(
   baseFetch: typeof fetch,

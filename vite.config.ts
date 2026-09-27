@@ -6,14 +6,14 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
-// Unique per build so the client can detect a newer deploy is live (issue #247).
+// Unique per build so the client can detect a newer deploy is live.
 const buildId = Date.now().toString(36)
 
 // Vercel populates these in `process.env` for every Build Step automatically —
 // no "Automatically expose System Environment Variables" toggle needed, since
 // that setting only governs Serverless/Edge Function *runtime* env, not the
 // build. Empty outside Vercel (local dev, CI, tests), which the environment
-// badge already treats as "nothing to show" (issue #496).
+// badge already treats as "nothing to show".
 const gitCommitRef = process.env.VERCEL_GIT_COMMIT_REF ?? ''
 const gitCommitSha = process.env.VERCEL_GIT_COMMIT_SHA ?? ''
 
@@ -47,7 +47,7 @@ export default defineConfig({
       filename: 'sw.ts',
       injectManifest: {
         // Only the hashed, content-addressed build output — never index.html
-        // or version.json, which must always be fetched fresh (issue #247).
+        // or version.json, which must always be fetched fresh.
         globPatterns: ['assets/**/*.{js,css,woff2}'],
       },
       registerType: 'autoUpdate',

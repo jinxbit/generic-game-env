@@ -19,9 +19,8 @@ import {
 } from '../lib/publicRoomsView'
 
 /**
- * The Public Rooms discovery screen (issue #40 section 5): every room whose
- * Owner opted into 'public' visibility, grouped into the three buckets the
- * spec lists — joinable (Active-Not Started), observable (Active-In
+ * The Public Rooms discovery screen: every room whose Owner opted into
+ * 'public' visibility, grouped into three buckets — joinable (Active-Not Started), observable (Active-In
  * Progress), and read-only history (Finished). Canceled/deleted rooms never
  * appear here (listPublicRooms already excludes them).
  */

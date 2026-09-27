@@ -1,33 +1,36 @@
 // The Postgres half of the production-simulating Supabase stack (see
-// ./index.ts for the whole picture): the five tables the game write path
-// actually touches, plus the parts of their server-side behavior that a test
+// ./index.ts for the whole picture): the tables the game write path and chat
+// actually touch, plus the parts of their server-side behavior that a test
 // replaying a real game would otherwise silently lose — Row Level Security,
-// the `game_state_sync_meta` trigger, and `game_state.version`'s
+// the triggers that police room lifecycle and readiness, the
+// `game_state_sync_meta` projection trigger, and `game_state.version`'s
 // compare-and-swap contract.
 //
-// Everything here is transcribed from supabase/migrations/*.sql rather than
-// invented, and each rule below cites the migration it comes from. That's the
-// whole point: these tests exist to catch the class of bug that only shows up
-// once a real client, a real Edge Function and a real database policy are all
-// in play, so a test double that quietly permits what production forbids
-// would be worse than no test at all. Where a behavior is deliberately NOT
-// modeled (Realtime, storage, Postgres types/constraints beyond primary keys)
-// the request path throws loudly instead of guessing — see ./postgrestServer.ts.
+// Everything here is transcribed from supabase/migrations/0001_baseline.sql
+// rather than invented, and each rule below cites the section of that
+// migration (and the policy/trigger/function by name) it comes from. That's
+// the whole point: these tests exist to catch the class of bug that only
+// shows up once a real client, a real Edge Function and a real database
+// policy are all in play, so a test double that quietly permits what
+// production forbids would be worse than no test at all. Where a behavior is
+// deliberately NOT modeled (Realtime, storage, push_subscriptions, Postgres
+// types/constraints beyond the few modeled below) the request path throws
+// loudly instead of guessing — see ./httpServer.ts.
 
-import type { AppConfigRow, GameRow, PlayerRow } from '../../lib/dbTypes.ts'
+import type { AppConfigRow, GameRow, GameStateMetaRow, PlayerRow } from '../../lib/dbTypes.ts'
 import type { StoredGameState } from '../../lib/gameStateCompression.ts'
 
 export type Row = Record<string, unknown>
 
-/** Only the tables the game write path touches, plus chat (0031_chat_messages.sql, 0032_chat_read_status.sql) — anything else is a loud 404 from ./postgrestServer.ts. */
+/** Only the tables the game write path touches, plus chat (0001_baseline.sql section 10) — anything else is a loud 404 from ./httpServer.ts. */
 export type TableName = 'profiles' | 'games' | 'players' | 'game_state' | 'game_state_meta' | 'app_config' | 'chat_messages' | 'chat_read_status'
 
 /**
  * Who a request runs as. `service_role` bypasses RLS entirely (Supabase's
  * usual behavior, and the reason the Edge Functions can write a
- * `ruleEnforcementEnabled` game's state at all — see
- * 0026_rule_enforcement_flag.sql); `authenticated` is a signed-in user whose
- * id is `auth.uid()` in every policy below.
+ * `ruleEnforcementEnabled` game's state at all — 0001_baseline.sql section
+ * 7); `authenticated` is a signed-in user whose id is `auth.uid()` in every
+ * policy below.
  */
 export interface Actor {
   role: 'service_role' | 'authenticated' | 'anon'
@@ -49,16 +52,7 @@ export interface GameStateRow {
   updated_at: string
 }
 
-export interface GameStateMetaRow {
-  game_id: string
-  status: string
-  round_phase: string | null
-  turn: number
-  version: number
-  pending_player_ids: string[]
-  active_player_id: string | null
-  updated_at: string
-}
+export type { GameStateMetaRow }
 
 /** Thrown for anything the double deliberately doesn't model, so a test fails loudly instead of passing against a fiction. */
 export class UnsupportedQueryError extends Error {}
@@ -79,6 +73,11 @@ export class DatabaseError extends Error {
   }
 }
 
+/** What a plpgsql `raise exception` in a trigger surfaces as through PostgREST: a 400 with SQLSTATE P0001. */
+function raiseException(message: string): DatabaseError {
+  return new DatabaseError(400, 'P0001', message)
+}
+
 const PRIMARY_KEY: Record<TableName, string> = {
   profiles: 'user_id',
   games: 'id',
@@ -90,7 +89,23 @@ const PRIMARY_KEY: Record<TableName, string> = {
   chat_read_status: 'id',
 }
 
+/** Tables that carry a `set_updated_at` BEFORE UPDATE trigger (0001_baseline.sql section 1). */
+const SETS_UPDATED_AT = new Set<TableName>(['profiles', 'games', 'game_state'])
+
 export type SqlCommand = 'select' | 'insert' | 'update' | 'delete'
+
+/** jsonb's `is distinct from`: structural, key order irrelevant. */
+function jsonbDistinct(left: unknown, right: unknown): boolean {
+  const canonical = (value: unknown): string => {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value ?? null)
+    if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
+    const entries = Object.entries(value as Row)
+      .filter(([, nested]) => nested !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    return `{${entries.map(([key, nested]) => `${JSON.stringify(key)}:${canonical(nested)}`).join(',')}}`
+  }
+  return canonical(left) !== canonical(right)
+}
 
 export class Database {
   private rows: Record<TableName, Row[]> = {
@@ -99,17 +114,17 @@ export class Database {
     players: [],
     game_state: [],
     game_state_meta: [],
-    // 0031_chat_messages.sql seeds exactly one row on migration; every fresh
-    // stack starts post-migration, same as a real project would.
+    // 0001_baseline.sql section 10 seeds exactly one app_config row, chat
+    // off; every fresh stack starts post-migration, same as a real project.
     app_config: [{ id: true, chat_enabled: false }],
     chat_messages: [],
     chat_read_status: [],
   }
 
-  /** `generated always as identity` (0031_chat_messages.sql) — the next chat_messages.id. */
+  /** `generated always as identity` on chat_messages.id (0001_baseline.sql section 10). */
   private nextChatMessageId = 1
 
-  /** Direct, RLS-free access for arranging a test's starting fixture — the equivalent of seeding via `psql`, not via the API. */
+  /** Direct, RLS-free, trigger-free access for arranging a test's starting fixture — the equivalent of seeding a known end state, not going through the API. */
   seed(table: TableName, row: Row): void {
     this.rows[table].push(structuredClone(row))
   }
@@ -119,7 +134,7 @@ export class Database {
     return structuredClone(this.rows[table]) as T[]
   }
 
-  /** Direct, RLS-free write of a whole row, matched on its primary key — for arranging a state the API itself cannot reach (a room moved back to the lobby, say). */
+  /** Direct, RLS-free, trigger-free write of a whole row, matched on its primary key — for arranging a state the API itself cannot reach (a room moved back to the lobby, say). */
   replaceRow(table: TableName, row: Row): void {
     const key = PRIMARY_KEY[table]
     const existing = this.rows[table].find((candidate) => candidate[key] === row[key])
@@ -128,13 +143,15 @@ export class Database {
   }
 
   // ---------------------------------------------------------------------------
-  // Row Level Security, transcribed from the migrations.
+  // Row Level Security, transcribed from 0001_baseline.sql.
   //
-  // Only the policies that matter to the game write path are modeled. Every
-  // one is *permissive* (Postgres OR's multiple permissive policies for the
-  // same command together), matching how the migrations are written; a
-  // command with no policy at all is denied for `authenticated`, exactly like
-  // a real RLS-enabled table.
+  // Every policy there is *permissive* (Postgres OR's multiple permissive
+  // policies for the same command together), and every one is `to
+  // authenticated`, so `anon` is denied everything. A command with no policy
+  // at all is denied for `authenticated` too, exactly like a real
+  // RLS-enabled table. For UPDATE, a policy with no WITH CHECK reuses its
+  // USING expression against the new row — `update()` below applies this to
+  // both the old and the new row.
   // ---------------------------------------------------------------------------
   private visible(actor: Actor, table: TableName, command: SqlCommand, row: Row): boolean {
     if (actor.role === 'service_role') return true
@@ -142,49 +159,57 @@ export class Database {
     const uid = actor.userId
 
     switch (table) {
-      // 0001_init_schema.sql: any signed-in user can read games/players and
-      // create a game of their own (`created_by = auth.uid()`); only the
-      // owner may change or delete it afterwards (0008_room_lifecycle.sql).
+      // Section 2: own row only — "users can read/insert/update their own
+      // profile". No delete policy (rows go with auth.users' cascade), and
+      // deliberately no admin read: other users' names are only exposed
+      // through chat_sender_display_names() below.
+      case 'profiles':
+        return command !== 'delete' && row.user_id === uid
+
+      // Section 3: "games are readable by any signed-in user" (that's how
+      // join-by-code works); "signed-in users can create a game" and "room
+      // owner can update their game" both key on created_by = auth.uid();
+      // "room owner can delete their room in a deletable state" (lobby or
+      // canceled only) plus the additive "admins can delete any game".
       case 'games':
-        return command === 'select' || row.created_by === uid
+        if (command === 'select') return true
+        if (command === 'delete') return (row.created_by === uid && (row.status === 'lobby' || row.status === 'canceled')) || this.isAdmin(uid)
+        return row.created_by === uid
+
+      // Section 4: readable by any signed-in user; "users can seat
+      // themselves", and update/delete only their own row.
       case 'players':
         return command === 'select' || row.user_id === uid
-      case 'profiles':
-        return row.user_id === uid || this.isAdmin(uid)
 
       case 'game_state': {
         const gameId = row.game_id as string
         const seated = this.isSeated(uid, gameId)
         if (command === 'select') {
-          // 0021_remove_observers.sql + 0024_admin_read_all_game_state.sql,
-          // narrowed by 0028_hidden_information_rls_lockdown.sql: a
-          // hiddenInformationEnabled game denies direct SELECT outright, to
-          // a seated player and a stranger alike — RLS can't redact within a
-          // row, so get-game-state (service role, unaffected here) is the
-          // only read path once this is on. An admin is untouched either
-          // way, same as production's separate, additive admin policy.
+          // Section 8: "read game state when hidden information is off" —
+          // seated, or any signed-in user once the game has left the lobby —
+          // and a hiddenInformationEnabled game denies direct SELECT
+          // outright, to a seated player and a stranger alike (RLS can't
+          // redact within a row, so get-game-state, service role and
+          // unaffected here, is the only read path). "admins can read any
+          // game state" is a separate, additive policy.
           if (this.isAdmin(uid)) return true
           if (this.hiddenInformationEnabled(gameId)) return false
           const game = this.game(gameId)
           return seated || (game !== undefined && game.status !== 'lobby')
         }
-        // 0001_init_schema.sql's genesis insert, narrowed by
-        // 0029_start_game_edge_function.sql the same way 0026 already
-        // narrowed the UPDATE below: a rule-enforced game's genesis is
-        // service-role-write-only too now (start-game/index.ts), so a direct
-        // client insert only succeeds for a non-enforced game.
-        if (command === 'insert') return seated && !this.ruleEnforcementEnabled(gameId)
-        if (command === 'update') {
-          // 0026_rule_enforcement_flag.sql: a rule-enforced game's state is
-          // service-role-write-only, i.e. only the Edge Functions may write it.
-          return seated && !this.ruleEnforcementEnabled(gameId)
-        }
+        // Section 7: "seated players can insert/update game state when
+        // enforcement is off". A rule-enforced game's state (genesis
+        // included — start-game/index.ts) is service-role-write-only, i.e.
+        // only the Edge Functions may write it. No delete policy.
+        if (command === 'insert' || command === 'update') return seated && !this.ruleEnforcementEnabled(gameId)
         return false
       }
 
-      // 0025_game_state_meta.sql: readable by the same audience as
-      // game_state; never writable by `authenticated` — only the security
-      // definer trigger writes it (see syncGameStateMeta below).
+      // Section 6: "seated players and viewers of started games can read
+      // meta" plus "admins can read any game state meta". Deliberately not
+      // narrowed by hiddenInformationEnabled; never writable by
+      // `authenticated` — only the security definer trigger writes it (see
+      // syncGameStateMeta below).
       case 'game_state_meta': {
         if (command !== 'select') return false
         const gameId = row.game_id as string
@@ -192,12 +217,16 @@ export class Database {
         return this.isSeated(uid, gameId) || (game !== undefined && game.status !== 'lobby') || this.isAdmin(uid)
       }
 
-      // 0031_chat_messages.sql: readable by any signed-in user; no
-      // insert/update/delete policy at all, so nothing `authenticated` does
-      // can flip the kill switch.
+      // Section 10: "anyone can read app_config"; no insert/update/delete
+      // policy at all, so nothing `authenticated` does can flip the kill
+      // switch.
       case 'app_config':
         return command === 'select'
 
+      // Section 10: "read site-wide chat" / "read game chat" (seated, or any
+      // visitor of a public room) and "post chat" (site-wide needs only a
+      // session, in-game needs a seat) — every one gated on chat_enabled().
+      // Append-only: no update/delete policy.
       case 'chat_messages': {
         const gameId = row.game_id as string | null
         if (!this.chatEnabled()) return false
@@ -209,15 +238,13 @@ export class Database {
         return false
       }
 
-      // 0032_chat_read_status.sql: a user's own read cursor, one row per
-      // (user, game) — in-game chat only, never the site-wide channel.
-      // Readable/writable only by its own user_id; insert is additionally
-      // gated on chat_enabled() and the same read-audience chat_messages
-      // itself uses for that game — there's no point letting a client
-      // create a read cursor for a game's chat it couldn't read messages
-      // from anyway. Update isn't chat_enabled()-gated (matching the
-      // migration): advancing an existing cursor after the switch flips off
-      // is harmless, since nothing reads chat_messages with it off anyway.
+      // Section 10: a user's own read cursor, one row per (user, game) — in-
+      // game chat only. "read own"/"update own chat read status" key only on
+      // user_id (update deliberately not chat_enabled()-gated: advancing an
+      // existing cursor after the switch flips off is harmless); "insert own
+      // chat read status" additionally requires chat_enabled() and the same
+      // read audience chat_messages itself uses for that game. No delete
+      // policy — rows go with their game via on delete cascade.
       case 'chat_read_status': {
         if (row.user_id !== uid) return false
         if (command === 'select') return true
@@ -230,7 +257,7 @@ export class Database {
     }
   }
 
-  /** Shared by `chat_messages`' "read" policies and `chat_read_status`' insert policy — same audience, same rule. */
+  /** Shared by `chat_messages`' "read game chat" policy and `chat_read_status`' insert policy — same audience, same rule. */
   private canReadChatChannel(userId: string, gameId: string | null): boolean {
     if (gameId === null) return true
     const game = this.game(gameId)
@@ -253,37 +280,94 @@ export class Database {
     return Boolean(this.game(gameId)?.settings?.ruleEnforcementEnabled)
   }
 
-  /**
-   * 0029_start_game_edge_function.sql's addition to
-   * `enforce_game_status_transition`, transcribed: an *authenticated* write
-   * that would flip an enforced game's status from 'lobby' to 'active'
-   * directly is rejected — only the start-game Edge Function (service role)
-   * may do that now. Deliberately keyed on `patch.status` (the transition
-   * actually being attempted) rather than `visible()`'s row-level check,
-   * since the real restriction lives in a trigger that sees both the old and
-   * new row, not in a WITH CHECK clause that only ever sees the new one (see
-   * that migration's comment) — a settings/visibility update the owner makes
-   * while an enforced game is already 'active' must keep working.
-   */
-  private blocksDirectGameStart(actor: Actor, row: GameRow, patch: Row): boolean {
-    if (actor.role === 'service_role') return false
-    if (row.status !== 'lobby' || patch.status !== 'active') return false
-    return Boolean(row.settings?.ruleEnforcementEnabled)
-  }
-
   private hiddenInformationEnabled(gameId: string): boolean {
     return Boolean(this.game(gameId)?.settings?.hiddenInformationEnabled)
   }
 
-  /** `public.chat_enabled()` (0031_chat_messages.sql) — the chat kill switch. */
+  /** `public.chat_enabled()` (0001_baseline.sql section 10) — the chat kill switch. */
   private chatEnabled(): boolean {
     return Boolean((this.rows.app_config as unknown as AppConfigRow[])[0]?.chat_enabled)
   }
 
+  // ---------------------------------------------------------------------------
+  // BEFORE triggers, transcribed from 0001_baseline.sql. Each either rewrites
+  // the new row or raises, exactly as the plpgsql does. They fire for every
+  // role, service role included — only `seed`/`replaceRow` (the test's own
+  // direct access) skip them.
+  // ---------------------------------------------------------------------------
+
   /**
-   * `public.chat_sender_display_names` (0035_chat_sender_display_names.sql,
-   * issue #684): a `security definer` function granted to `authenticated`
-   * only, deliberately narrower than `profiles`' own RLS — it returns
+   * The BEFORE UPDATE triggers on `games` (section 3), in the order Postgres
+   * fires them (alphabetical by trigger name):
+   *
+   * - `games_bump_config_version`: a change to settings or the player-count
+   *   bounds is only allowed while the room is in the lobby, and bumps
+   *   config_version.
+   * - `games_enforce_name_immutable`: the name never changes.
+   * - `games_enforce_status_transition`: only lobby -> active, lobby ->
+   *   canceled and active -> canceled are legal; and for a rule-enforced game
+   *   lobby -> active may only be made by the service role (the start-game
+   *   Edge Function). That last rule is a trigger rather than a policy
+   *   because it needs the old and new status in one check — a settings or
+   *   visibility update the owner makes while an enforced game is already
+   *   'active' has to keep working.
+   */
+  private beforeUpdateGames(actor: Actor, old: GameRow, next: Row): void {
+    if (
+      jsonbDistinct(old.settings, next.settings) ||
+      old.min_players !== next.min_players ||
+      old.max_players !== next.max_players
+    ) {
+      if (old.status !== 'lobby') throw raiseException('Configuration can only change while the room is Active - Not Started')
+      next.config_version = old.config_version + 1
+    }
+    if (old.name !== next.name) throw raiseException('Room name cannot be changed after creation')
+    if (old.status !== next.status) {
+      const legal = [
+        ['lobby', 'active'],
+        ['lobby', 'canceled'],
+        ['active', 'canceled'],
+      ].some(([from, to]) => old.status === from && next.status === to)
+      if (!legal) throw raiseException(`Invalid room status transition: ${old.status} -> ${String(next.status)}`)
+      const enforced = Boolean((next.settings as GameRow['settings'] | undefined)?.ruleEnforcementEnabled)
+      if (old.status === 'lobby' && next.status === 'active' && enforced && actor.role !== 'service_role') {
+        throw raiseException('An enforced game can only be started via the start-game Edge Function.')
+      }
+    }
+  }
+
+  /**
+   * `profiles_enforce_is_admin_unchanged` (section 2), BEFORE INSERT OR
+   * UPDATE: the own-row insert/update policies would otherwise let any user
+   * grant themselves is_admin, so a signed-in PostgREST session (role
+   * 'authenticated' or 'anon') may never set it on insert or change it on
+   * update. The service role is unaffected.
+   */
+  private enforceProfilesIsAdminUnchanged(actor: Actor, old: ProfileRow | null, next: Row): void {
+    if (actor.role !== 'authenticated' && actor.role !== 'anon') return
+    if (old === null && next.is_admin === true) throw raiseException('is_admin can only be granted by an administrator')
+    if (old !== null && Boolean(next.is_admin) !== Boolean(old.is_admin)) throw raiseException('is_admin can only be changed by an administrator')
+  }
+
+  /** `players_set_initial_ready_for_version` (section 4): a new seat is implicitly ready for the config as it stands, whatever the insert said. */
+  private beforeInsertPlayers(row: Row): void {
+    const game = this.game(row.game_id as string)
+    row.ready_for_version = game?.config_version ?? null
+  }
+
+  /** `players_enforce_ready_for_version` (section 4): a player may only mark themselves ready for the room's *current* config_version. */
+  private beforeUpdatePlayers(old: PlayerRow, next: Row): void {
+    if (old.ready_for_version === next.ready_for_version) return
+    const current = this.game(old.game_id)?.config_version
+    if (next.ready_for_version !== current) {
+      throw raiseException(`ready_for_version must match the room's current config_version (${String(current)}), got ${String(next.ready_for_version)}`)
+    }
+  }
+
+  /**
+   * `public.chat_sender_display_names` (section 10): a `security definer`
+   * function granted to `authenticated` only (execute is revoked from
+   * public), deliberately narrower than `profiles`' own RLS — it returns
    * `(user_id, display_name)` for any signed-in caller (not just the row's
    * owner), and never `discord_webhook_url` no matter what's asked for,
    * since the query itself only ever selects those two columns.
@@ -305,7 +389,7 @@ export class Database {
   }
 
   // ---------------------------------------------------------------------------
-  // The three statements PostgREST turns a request into.
+  // The statements PostgREST turns a request into.
   // ---------------------------------------------------------------------------
 
   select(actor: Actor, table: TableName, match: (row: Row) => boolean): Row[] {
@@ -316,24 +400,24 @@ export class Database {
     const inserted: Row[] = []
     for (const values_ of values) {
       const row = { ...this.defaults(table), ...structuredClone(values_) }
+      if (table === 'players') this.beforeInsertPlayers(row)
+      if (table === 'profiles') this.enforceProfilesIsAdminUnchanged(actor, null, row)
       const key = PRIMARY_KEY[table]
       if (this.rows[table].some((existing) => existing[key] === row[key])) {
         throw new DatabaseError(409, '23505', `duplicate key value violates unique constraint "${table}_pkey"`)
       }
-      // 0031_chat_messages.sql's `check (char_length(body) between 1 and
-      // 2000)` — the one column CHECK constraint a test in this repo actually
-      // needs modeled (everything else in this class-level comment's "not
-      // modeled" list stays unmodeled).
+      // chat_messages' `check (char_length(body) between 1 and 2000)`
+      // (section 10) — the one column CHECK constraint a test in this repo
+      // actually needs modeled.
       if (table === 'chat_messages') {
         const body = row.body as string | undefined
         if (body === undefined || body.length < 1 || body.length > 2000) {
           throw new DatabaseError(400, '23514', 'new row for relation "chat_messages" violates check constraint "chat_messages_body_check"')
         }
       }
-      // 0034_chat_rate_limit.sql's `chat_messages_rate_limit_trigger`: a
-      // sender who already has 10+ rows in the trailing 10 seconds (site-wide
-      // and in-game combined) is rejected. Modeled here rather than left
-      // unenforced, same as the check constraint above.
+      // `chat_messages_rate_limit_trigger` (section 10): a sender who already
+      // has 10+ rows in the trailing 10 seconds (site-wide and in-game
+      // combined) is rejected.
       if (table === 'chat_messages') {
         const senderId = row.sender_id as string | undefined
         const createdAt = row.created_at as string
@@ -342,17 +426,26 @@ export class Database {
           (existing) => existing.sender_id === senderId && new Date(existing.created_at).getTime() > windowStart,
         ).length
         if (recentCount >= 10) {
-          throw new DatabaseError(400, 'P0001', 'You are sending messages too fast. Wait a few seconds and try again.')
+          throw raiseException('You are sending messages too fast. Wait a few seconds and try again.')
         }
       }
-      // 0032_chat_read_status.sql's unique(user_id, game_id) index: at most
-      // one row per (user, game). chatApi.ts's markChatRead is written to
-      // update an existing row rather than insert a second one in the normal
-      // case; this only fires if two writers race past that check at once.
+      // `chat_read_status_game_uidx`, the unique (user_id, game_id) index
+      // (section 10): at most one row per (user, game). chatApi.ts's
+      // markChatRead updates an existing row rather than inserting a second
+      // one in the normal case; this only fires if two writers race past
+      // that check at once.
       if (table === 'chat_read_status') {
         const clash = this.rows.chat_read_status.some((existing) => existing.user_id === row.user_id && existing.game_id === row.game_id)
         if (clash) {
           throw new DatabaseError(409, '23505', 'duplicate key value violates unique constraint "chat_read_status_game_uidx"')
+        }
+      }
+      // `unique (game_id, seat_index)` on players (section 4) — the only
+      // thing keeping hotseat's several seats per user_id distinct.
+      if (table === 'players') {
+        const clash = this.rows.players.some((existing) => existing.game_id === row.game_id && existing.seat_index === row.seat_index)
+        if (clash) {
+          throw new DatabaseError(409, '23505', 'duplicate key value violates unique constraint "players_game_id_seat_index_key"')
         }
       }
       // A row RLS rejects is `new row violates row-level security policy`, a
@@ -371,18 +464,24 @@ export class Database {
    * PostgREST's UPDATE: rows the filter doesn't select, and rows RLS hides,
    * are simply not updated — no error, an empty result set. That silence is
    * exactly what `writeGameStateCAS` (and gameApi.ts's `writeGameState`)
-   * read as "someone else got there first", so it has to stay silent here too.
+   * read as "someone else got there first", so it has to stay silent here
+   * too. A new row the policy's WITH CHECK (or, absent one, its USING)
+   * rejects is an error, though, as is anything a BEFORE trigger raises.
    */
   update(actor: Actor, table: TableName, match: (row: Row) => boolean, patch: Row): Row[] {
     const updated: Row[] = []
     for (const row of this.rows[table]) {
       if (!match(row)) continue
       if (!this.visible(actor, table, 'update', row)) continue
-      if (table === 'games' && this.blocksDirectGameStart(actor, row as unknown as GameRow, patch)) {
-        throw new DatabaseError(400, '42501', 'An enforced game can only be started via the start-game Edge Function.')
+      const next: Row = { ...structuredClone(row), ...structuredClone(patch) }
+      if (table === 'games') this.beforeUpdateGames(actor, row as unknown as GameRow, next)
+      if (table === 'players') this.beforeUpdatePlayers(row as unknown as PlayerRow, next)
+      if (table === 'profiles') this.enforceProfilesIsAdminUnchanged(actor, row as unknown as ProfileRow, next)
+      if (SETS_UPDATED_AT.has(table)) next.updated_at = new Date().toISOString()
+      if (!this.visible(actor, table, 'update', next)) {
+        throw new DatabaseError(403, '42501', `new row violates row-level security policy for table "${table}"`)
       }
-      Object.assign(row, structuredClone(patch))
-      if (table === 'games' || table === 'game_state') row.updated_at = new Date().toISOString()
+      Object.assign(row, next)
       updated.push(structuredClone(row))
       this.afterWrite(table, row)
     }
@@ -402,10 +501,11 @@ export class Database {
   }
 
   /**
-   * `on delete cascade` from `games` (0001_init_schema.sql for players and
-   * game_state, 0025_game_state_meta.sql for the meta projection). Deleting a
-   * room really does take its rows with it — without this, anything that
-   * cleans up after itself by deleting the room (the production smoke runner,
+   * `on delete cascade` from `games` — players, game_state, game_state_meta,
+   * chat_messages and chat_read_status all reference `games (id)` with it
+   * (0001_baseline.sql sections 4, 5, 6 and 10). Deleting a room really does
+   * take its rows with it — without this, anything that cleans up after
+   * itself by deleting the room (the production smoke runner,
    * ../productionSmoke/) would look like it worked while leaving orphans.
    */
   private cascadeFromGame(gameId: string): void {
@@ -414,26 +514,37 @@ export class Database {
     }
   }
 
-  /** `on delete cascade` from `auth.users` to `profiles` (0005_discord_webhooks.sql). */
+  /** `on delete cascade` from `auth.users` to `profiles` (0001_baseline.sql section 2). */
   deleteProfileFor(userId: string): void {
     this.rows.profiles = this.rows.profiles.filter((row) => row.user_id !== userId)
   }
 
+  /** Column defaults, from each table's `create table` in 0001_baseline.sql. */
   private defaults(table: TableName): Row {
     const now = new Date().toISOString()
     switch (table) {
       case 'game_state':
         return { turn: 0, active_player_id: null, version: 0, updated_at: now }
       case 'game_state_meta':
-        return { round_phase: null, turn: 0, version: 0, pending_player_ids: [], active_player_id: null, updated_at: now }
-      // `gen_random_uuid()` on the primary key (0001_init_schema.sql) — a row
-      // inserted through the API supplies no id, only a seeded fixture does.
+        return { phase: null, turn: 0, version: 0, pending_player_ids: [], active_player_id: null, updated_at: now }
+      // `gen_random_uuid()` on the primary key — a row inserted through the
+      // API supplies no id, only a seeded fixture does.
       case 'games':
-        return { id: globalThis.crypto.randomUUID(), created_at: now, updated_at: now, config_version: 1, visibility: 'private', status: 'lobby' }
+        return {
+          id: globalThis.crypto.randomUUID(),
+          created_at: now,
+          updated_at: now,
+          config_version: 0,
+          visibility: 'private',
+          status: 'lobby',
+          min_players: 2,
+          max_players: 4,
+          settings: {},
+        }
       case 'players':
-        return { id: globalThis.crypto.randomUUID(), avatar_url: null, is_active: true, joined_at: now }
+        return { id: globalThis.crypto.randomUUID(), avatar_url: null, is_active: true, ready_for_version: 0, joined_at: now }
       case 'profiles':
-        return { display_name: null, is_admin: false }
+        return { discord_webhook_url: null, display_name: null, is_admin: false, preferences: {}, updated_at: now }
       case 'chat_messages':
         return { id: this.nextChatMessageId++, game_id: null, created_at: now }
       case 'chat_read_status':
@@ -448,44 +559,33 @@ export class Database {
   }
 
   /**
-   * `game_state_sync_meta`, the after-insert-or-update trigger from
-   * 0028_hidden_information_rls_lockdown.sql (which replaced
-   * 0027_game_state_meta_pending_players.sql, which replaced
-   * 0025_game_state_meta.sql's simpler version).
+   * `game_state_sync_meta`, the security-definer after-insert-or-update
+   * trigger on `game_state` (0001_baseline.sql section 6), transcribed field
+   * for field.
    *
-   * Transcribed field for field, including the detail that makes it worth
-   * modeling at all: it reads `status`/`roundPhase`/`turn`/`pendingPlayerIds`/
-   * `turnOrder`/`boardSetup` straight off the stored JSON with `->>`/`->`,
-   * so it can only see them if they're in plaintext. A rule-enforced game's
-   * state column is gzipped (gameStateCompression.ts), which is why that
-   * encoding duplicates exactly these keys alongside the blob — issue #451.
-   * Reading the stored row here rather than a decompressed GameState is what
-   * lets a test notice if that duplication ever regresses.
+   * What makes it worth modeling at all: it reads `status`/`phase`/`turn`/
+   * `pendingPlayerIds` straight off the stored JSON with `->>`/`->`, so it
+   * can only see them if they're in plaintext. A rule-enforced game's state
+   * column is gzipped (gameStateCompression.ts), which is why that encoding
+   * duplicates exactly these keys alongside the blob. Reading the stored row
+   * here rather than a decompressed GameState is what lets a test notice if
+   * that duplication ever regresses (status would read 'unknown').
+   *
+   * `pending_player_ids` is `state.pendingPlayerIds` while the game is
+   * active (and only if it's a JSON array), `[]` otherwise;
+   * `active_player_id` mirrors the `game_state` column, not the JSON.
    */
   private syncGameStateMeta(row: GameStateRow): void {
     const state = row.state as unknown as Record<string, unknown>
-    const status = (state.status as string | undefined) ?? 'unknown'
-    const roundPhase = (state.roundPhase as string | undefined) ?? null
-    const turnOrder = (state.turnOrder as string[] | undefined) ?? []
-    const boardSetup = state.boardSetup as Record<string, unknown> | null | undefined
-
-    let pending: string[] = []
-    if (status === 'boardSetup') {
-      if (boardSetup && ((boardSetup.tileTierQueue as unknown[] | undefined) ?? []).length > 0) {
-        const builderId = boardSetup.builderId as string | null | undefined
-        if (builderId != null) pending = [builderId]
-        else if (turnOrder.length > 0) pending = [turnOrder[Number(boardSetup.tilePlacerIndex ?? 0) % turnOrder.length]]
-      } else if (boardSetup && Object.keys((boardSetup.unitsRemainingByPlayerId as Record<string, unknown> | undefined) ?? {}).length > 0) {
-        if (turnOrder.length > 0) pending = [turnOrder[Number(boardSetup.unitPlacerIndex ?? 0) % turnOrder.length]]
-      }
-    } else if (status === 'active' && (roundPhase === 'selectCards' || roundPhase === 'decline')) {
-      pending = ((state.pendingPlayerIds as string[] | undefined) ?? []).slice()
-    }
+    const status = typeof state.status === 'string' ? state.status : 'unknown'
+    const pendingPlayerIds = state.pendingPlayerIds
+    const pending = status === 'active' && Array.isArray(pendingPlayerIds) ? (structuredClone(pendingPlayerIds) as string[]) : []
+    const phase = state.phase === undefined || state.phase === null ? null : String(state.phase)
 
     const meta: GameStateMetaRow = {
       game_id: row.game_id,
       status,
-      round_phase: roundPhase,
+      phase,
       turn: Number(state.turn ?? 0),
       version: row.version,
       pending_player_ids: pending,

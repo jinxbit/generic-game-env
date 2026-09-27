@@ -9,8 +9,8 @@
 //
 // The fourth lifecycle event, **game finished**, is not here: it is a
 // `game_state` UPDATE, exactly what notify-discord-turn's own webhook
-// already delivers, so it lives there (todo.md #100). Watching that table
-// from here too meant a second hook and a second function invocation on
+// already delivers, so it lives there. Watching that table
+// from here too would mean a second hook and a second function invocation on
 // every action write in every game, to catch the one write per game that
 // completes it.
 //

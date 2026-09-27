@@ -253,8 +253,7 @@ async function handleRest(req: Request, url: URL, options: ServerOptions): Promi
 
 /**
  * `POST /rest/v1/rpc/:name` — the one function this stack models is
- * `chat_sender_display_names` (0035_chat_sender_display_names.sql, issue
- * #684): PostgREST exposes every `public` schema function this way, and
+ * `chat_sender_display_names` (0001_baseline.sql section 10): PostgREST exposes every `public` schema function this way, and
  * `chatApi.ts`'s `getChatDisplayNames` is the first client call in this repo
  * to use `supabase.rpc()` rather than `.from()`.
  */

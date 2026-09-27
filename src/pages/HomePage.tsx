@@ -157,7 +157,7 @@ export function HomePage() {
     }
   }
 
-  // The four groups from issue #364, in priority order:
+  // The four groups, in priority order:
   //  1. My in-progress games — needing my input first (longest-waiting
   //     first), then the rest most-recently-updated first.
   //  2. Rooms not started — mine first, then other public joinable rooms.
@@ -350,7 +350,7 @@ export function HomePage() {
   )
 }
 
-/** Renders a room from the mixed public+private list (issue #363) — notStartedRooms is filtered to public-or-mine before it gets here, so only the in-progress/finished buckets ever need the "Private" tag. */
+/** Renders a room from the mixed public+private list — notStartedRooms is filtered to public-or-mine before it gets here, so only the in-progress/finished buckets ever need the "Private" tag. */
 function RoomRow({
   entry,
   userId,

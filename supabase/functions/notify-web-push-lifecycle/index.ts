@@ -2,8 +2,8 @@
 // away from the board — a player joining the lobby, the game starting, or
 // the game being canceled — for async games. The fourth, **game finished**,
 // is a `game_state` UPDATE and so is sent by notify-web-push, off the
-// webhook it already has (see notify-discord-lifecycle's doc comment, and
-// todo.md #100). Structurally identical to notify-discord-lifecycle (see that
+// webhook it already has (see notify-discord-lifecycle's doc comment).
+// Structurally identical to notify-discord-lifecycle (see that
 // function's doc comment for the full trigger/dispatch rationale, and
 // notify-web-push's doc comment for why this is a near-duplicate of the
 // Discord version rather than a shared module): these are small enough that

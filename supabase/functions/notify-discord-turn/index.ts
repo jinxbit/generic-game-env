@@ -17,17 +17,17 @@
 // That one webhook feeds two different pings. Besides "it's your turn", this
 // function also sends the **game finished** lifecycle ping, because a game
 // finishing *is* a `game_state` UPDATE — same table, same event, same
-// payload. It lived in notify-discord-lifecycle at first (issue #77), which
-// meant a second hook and a second function invocation on every action write
-// in every game to catch the one write per game that completes it. The other
-// three lifecycle events are on other tables and are still that function's;
-// see its doc comment, and todo.md #100 for the fold.
+// payload. Watching it from notify-discord-lifecycle instead would mean a
+// second hook and a second function invocation on every action write in
+// every game to catch the one write per game that completes it. The other
+// three lifecycle events are on other tables and are that function's; see
+// its doc comment.
 //
 // `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` are provided automatically
 // in the Edge Function runtime — the service-role key is what lets this
 // read any player's `profiles.discord_webhook_url` regardless of RLS
-// (0013_discord_notify_backend.sql drops the old co-player-read policy,
-// since browsers no longer need that access), and lets it call
+// (`profiles` is own-row readable only, since no browser needs another
+// player's webhook URL), and lets it call
 // `auth.admin.getUserById` to resolve each player's Discord snowflake ID
 // (from their Discord OAuth identity) so the ping can `@mention` them —
 // a plain name in a webhook message doesn't actually notify anyone.

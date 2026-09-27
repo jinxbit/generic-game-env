@@ -1,6 +1,6 @@
 // "Duplicate as hot seat" / "import a game export": the new room's players
 // rows get brand-new ids (players.id is a globally-unique PK, not scoped per
-// game — see 0001_baseline.sql), so every reference to a source-game player
+// game — see the baseline migration's players table), so every reference to a source-game player
 // id inside its GameState has to be rewritten onto the new roster before the
 // state can be seeded into the new room. Kept here as a
 // small, DB-free module (mirrors gameGenesis.ts) so it can be unit-tested

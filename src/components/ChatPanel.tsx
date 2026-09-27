@@ -1,13 +1,10 @@
-// Chat, phase 2 (issue #564, CHAT_PLAN.md §6), phase 3 (issue #565,
-// §6/§11.3), the unread indicator (issue #579, CHAT_PLAN.md §13, in-game
-// chat only), its position/size (issue #580, §14), name coloring (issue
-// #581, §15), its typewriter look + older-history paging (issue #587,
-// §16), the content text size increase (issue #593, §17), per-message
-// timestamps/date separators/bold names (issue #594, §18), the removal
-// of the panel's own heading/badge (issue #631, §14 — that chrome was
-// redundant with GamePage's own external toggle button and unnecessary
-// for site-wide chat), and extending the same in-game surface to the
-// pre-start lobby screen (issue #650, §11.10). One shared component for
+// Chat (CHAT_PLAN.md §6, §11.3), the unread indicator (§13, in-game chat
+// only), its position/size (§14), name coloring (§15), its typewriter look
+// + older-history paging (§16), the content text size (§17), per-message
+// timestamps/date separators/bold names (§18), no heading/badge of the
+// panel's own (§14 — that chrome was redundant with GamePage's own
+// external toggle button and unnecessary for site-wide chat), and the same
+// in-game surface on the pre-start lobby screen (§11.10). One shared component for
 // both surfaces: site-wide (`gameId: null`, wired into HomePage.tsx,
 // permanently expanded) and in-game (a real `gameId`, wired into both
 // LobbyPage.tsx and GamePage.tsx — the same `gameId` and message history
@@ -34,10 +31,10 @@ import type { ChatMessageRow, PlayerRow } from '../lib/dbTypes'
 import { toAppError, type AppError } from '../lib/errors'
 import { ErrorBanner } from './ErrorBanner'
 
-/** Scrolled within this many pixels of the top triggers an older-history fetch; of the bottom counts as "still following the conversation" for the auto-scroll-to-bottom below (issue #587, CHAT_PLAN.md §16). */
+/** Scrolled within this many pixels of the top triggers an older-history fetch; of the bottom counts as "still following the conversation" for the auto-scroll-to-bottom below (CHAT_PLAN.md §16). */
 const SCROLL_EDGE_THRESHOLD_PX = 40
 
-/** Minute-resolution local time (issue #594, CHAT_PLAN.md §18) — same "no seconds, nothing rather than Invalid Date" rule as RoundView.tsx's game-log formatLogTimestamp. */
+/** Minute-resolution local time (CHAT_PLAN.md §18) — no seconds, and an empty string rather than "Invalid Date" for an unparseable timestamp. */
 function formatChatTimestamp(timestamp: string): string {
   const date = new Date(timestamp)
   if (Number.isNaN(date.getTime())) return ''
@@ -45,11 +42,10 @@ function formatChatTimestamp(timestamp: string): string {
 }
 
 /**
- * Calendar date for the chat's date separators (issue #594, CHAT_PLAN.md
- * §18) — same "once per day, not per line" idea as RoundView.tsx's
- * formatLogDate/LogPanel, except chat messages render oldest-first, so
- * showing a date header is just "does this message's date differ from the
- * previous one's" rather than that panel's reversed walk.
+ * Calendar date for the chat's date separators (CHAT_PLAN.md §18) — once
+ * per day, not per line. Chat messages render oldest-first, so showing a
+ * date header is just "does this message's date differ from the previous
+ * one's".
  */
 function formatChatDate(timestamp: string): string {
   const date = new Date(timestamp)
@@ -73,9 +69,9 @@ interface ChatPanelProps {
    */
   gameId: string | null
   /**
-   * This game's seated players (issue #581, CHAT_PLAN.md §15) — used only to
+   * This game's seated players (CHAT_PLAN.md §15) — used only to
    * color a sender's name with their seat's `PlayerRow.color`, the same
-   * lookup RoundView.tsx's PlayerColorName/LogPlayerName already use.
+   * lookup the game log (GameLogPanel.tsx) uses.
    * Omitted for site-wide chat (`gameId: null`), which has no seats and
    * colors names by a hash of the display name instead (chatColors.ts).
    */
@@ -90,7 +86,7 @@ interface ChatPanelProps {
    */
   canPost?: boolean
   /**
-   * Externally-controlled visibility (issue #580) — when passed, the panel
+   * Externally-controlled visibility (CHAT_PLAN.md §14) — when passed, the panel
    * renders nothing at all while `open` is false, on the assumption the
    * caller renders its own toggle button (with its own badge, fed by
    * `onUnreadCountChange`) somewhere else in the page. The component stays
@@ -100,7 +96,7 @@ interface ChatPanelProps {
    */
   open?: boolean
   /**
-   * Fires whenever the unread count changes (issue #580) — lets a caller
+   * Fires whenever the unread count changes — lets a caller
    * that supplies `open` show a matching badge on its own external toggle
    * button. Never called for site-wide chat, which never has an unread
    * count (§13).
@@ -130,7 +126,7 @@ export function ChatPanel({ gameId, players, canPost = true, open, onUnreadCount
   const collapsed = controlled ? !open : false
   const listRef = useRef<HTMLDivElement>(null)
 
-  // Older-history paging (issue #587, CHAT_PLAN.md §16) — `listChatMessages`
+  // Older-history paging (CHAT_PLAN.md §16) — `listChatMessages`
   // only ever loads the most recent CHAT_PAGE_SIZE rows; scrolling to the top
   // of the list fetches the page before whatever's currently oldest.
   // `hasOlder` starts optimistic (true) and flips false as soon as a page —
@@ -164,9 +160,9 @@ export function ChatPanel({ gameId, players, canPost = true, open, onUnreadCount
   // message id were at the moment the panel most recently transitioned
   // from closed/hidden to open+visible (see the boundary-snapshot effect
   // below), not just once at mount — `GamePage` keeps this component
-  // mounted across many open/close cycles (issue #580), so a one-time
+  // mounted across many open/close cycles, so a one-time
   // snapshot would go stale after the first cycle. Capping at
-  // `readBoundaryTopId` (issue #586) is what keeps a message that arrives
+  // `readBoundaryTopId` is what keeps a message that arrives
   // *after* that transition — while the panel is still open and being
   // watched live — from also being flagged new.
   const [lastReadId, setLastReadId] = useState<number | null>(null)
@@ -276,7 +272,7 @@ export function ChatPanel({ gameId, players, canPost = true, open, onUnreadCount
   }, [])
 
   // Snapshots the "new messages" divider's bounds on the closed/hidden →
-  // open+visible edge (issue #586) — `readBoundaryId` (the pre-existing read
+  // open+visible edge — `readBoundaryId` (the pre-existing read
   // cursor) and `readBoundaryTopId` (the newest message id already loaded)
   // together bracket exactly the backlog that was unread *before* this
   // viewing started. Declared ahead of the read-cursor-advance effect below
@@ -336,8 +332,8 @@ export function ChatPanel({ gameId, players, canPost = true, open, onUnreadCount
     })
   }, [enabled, userId, gameId])
 
-  // Keeps the message list usable while scrolled up reading history (issue
-  // #587): an older page spliced onto the front holds the viewport on the
+  // Keeps the message list usable while scrolled up reading history
+  // (CHAT_PLAN.md §16): an older page spliced onto the front holds the viewport on the
   // same messages (restored from the pre-splice scrollHeight recorded by
   // `loadOlderMessages` below) instead of jumping; anything else — the
   // initial load, a new message arriving — only snaps to the bottom if the
@@ -386,18 +382,17 @@ export function ChatPanel({ gameId, players, canPost = true, open, onUnreadCount
 
   // Unread count (numeric, capped at "9+" per CHAT_PLAN.md §13 via
   // `onUnreadCountChangeRef` below) — how many loaded messages, excluding
-  // the viewer's own (issue #586: a message you wrote yourself is never
+  // the viewer's own (a message you wrote yourself is never
   // "new" to you), are newer than the live read cursor. Unread messages are
   // always among the most recent ones, which the initial `listChatMessages`
   // load already covers regardless of whether older history has since been
-  // paged in (issue #587, CHAT_PLAN.md §16) — paging only ever prepends
+  // paged in (CHAT_PLAN.md §16) — paging only ever prepends
   // messages older than anything already loaded, so it can't add to this
   // count. `lastReadId` stays null forever for site-wide chat (gameId ===
   // null, see the load effect above), so this is always 0 there.
   const unreadCount = messages === null || lastReadId === null ? 0 : messages.filter((message) => message.sender_id !== userId && message.id > lastReadId).length
 
-  // Bubbles the count to a caller controlling `open` externally (issue #580)
-  // so it can badge its own toggle button — computed above, not gated behind
+  // Bubbles the count to a caller controlling `open` externally so it can badge its own toggle button — computed above, not gated behind
   // the `enabled`/`session` early return below, so hooks stay unconditional.
   const onUnreadCountChangeRef = useRef(onUnreadCountChange)
   onUnreadCountChangeRef.current = onUnreadCountChange
@@ -406,7 +401,7 @@ export function ChatPanel({ gameId, players, canPost = true, open, onUnreadCount
   }, [unreadCount])
 
   if (!enabled || !session || !userId) return null
-  // Externally-controlled and told to hide (issue #580) — stay mounted (the
+  // Externally-controlled and told to hide — stay mounted (the
   // effects above keep tracking messages/unread state) but render nothing;
   // the caller's own toggle button is the only visible chat affordance.
   if (controlled && !open) return null
@@ -415,11 +410,11 @@ export function ChatPanel({ gameId, players, canPost = true, open, onUnreadCount
   /**
    * In-game, prefer the sender's seat (`PlayerRow.display_name`), which is
    * already broadly readable to any co-player via `players`' own RLS
-   * ("players are readable by any signed-in user", 0001_init_schema.sql) —
+   * (the "players are readable by any signed-in user" policy) —
    * cheaper than the `names` RPC lookup below when a seat is available.
    * Site-wide chat has no seats to fall back to, so it depends on `names`
    * (`getChatDisplayNames`, backed by the `chat_sender_display_names` RPC,
-   * issue #684, CHAT_PLAN.md §10.5) resolving a sender the viewer has never
+   * CHAT_PLAN.md §10.5) resolving a sender the viewer has never
    * shared a game with — which it now does, since that RPC is readable by
    * any signed-in user, not just the sender themselves.
    */
@@ -457,12 +452,12 @@ export function ChatPanel({ gameId, players, canPost = true, open, onUnreadCount
   }
 
   // "New messages" divider position — the first loaded message, not sent by
-  // the viewer (issue #586), whose id falls in `(readBoundaryId,
+  // the viewer, whose id falls in `(readBoundaryId,
   // readBoundaryTopId]`: newer than the cursor as it stood before this
   // viewing session started, but no newer than what was already loaded when
   // it started. The upper bound is what keeps the divider from chasing a
   // message that arrives — from anyone — while the panel is still open and
-  // being watched live (issue #586); the lower bound is what keeps it from
+  // being watched live; the lower bound is what keeps it from
   // chasing the cursor as the viewer reads further within the same session.
   const dividerIndex =
     messages !== null && readBoundaryId !== null && readBoundaryTopId !== null

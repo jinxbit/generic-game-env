@@ -9,7 +9,7 @@
 //
 // Deliberately does NOT precache/serve index.html or intercept navigations:
 // the app already has its own "a newer build is live" detector
-// (src/hooks/useAppUpdateAvailable.ts, issue #247) that depends on
+// (src/hooks/useAppUpdateAvailable.ts) that depends on
 // `/version.json` and the document always coming straight from the network.
 // Letting Workbox own navigation requests here would fight that mechanism.
 import { precacheAndRoute, cleanupOutdatedCaches, type PrecacheEntry } from 'workbox-precaching'
@@ -65,7 +65,7 @@ self.addEventListener('notificationclick', (event: NotificationEvent) => {
           // The tab was already open, possibly backgrounded long enough for
           // its Supabase Realtime socket to drop — `focus()` alone doesn't
           // tell the page anything changed, so nudge it to refetch rather
-          // than trust the page to notice on its own (issue #405).
+          // than trust the page to notice on its own.
           client.postMessage({ type: 'REFRESH_DATA' })
           return
         }

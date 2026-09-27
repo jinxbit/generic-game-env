@@ -1,4 +1,4 @@
-// Admin screen (issue #676) for importing a pasted game state export
+// Admin screen for importing a pasted game state export
 // (src/lib/gameStateExport.ts, GamePage.tsx's "Copy game export") into a
 // brand-new hotseat room the importing admin owns — lets an admin reproduce
 // a reported game without direct Supabase access or the reporter's account.

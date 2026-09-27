@@ -3,7 +3,7 @@
 // The React view contract is a separate entry point (`@game-platform/sdk/ui`)
 // and test helpers another (`@game-platform/sdk/testing`), so neither ever
 // reaches the Edge Functions. Imported unmodified by the app
-// and by the Supabase Edge Functions (via supabase/functions/import_map.json),
+// and by the Supabase Edge Functions (via supabase/functions/deno.json),
 // so every relative import here carries an explicit `.ts` extension.
 
 export * from './types.ts'

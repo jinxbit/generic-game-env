@@ -71,7 +71,7 @@ What the platform gives a game for free:
   `undo-action`, `redo-action` and `get-game-state`, which enforce the rules
   and redact hidden information server-side, plus the `notify-*` turn,
   lifecycle and chat notifiers. They import the SDK and every registered
-  game's rules unmodified, through `supabase/functions/import_map.json` —
+  game's rules unmodified, through `supabase/functions/deno.json` —
   there is no second copy of the rules.
 - `src/test/` — vitest setup, an in-process Supabase stack that behaves like
   production (`supabaseStack/`), and real games replayed as regression tests
@@ -759,7 +759,7 @@ do it.
 entry. To add one — from this repo's `packages/` or installed from another
 repo — add it to `package.json`, register its rules in
 `src/games/registry.ts` and its view in `src/games/ui.ts`, and map its
-`rules` entry in `supabase/functions/import_map.json` so the Edge Functions
+`rules` entry in `supabase/functions/deno.json` so the Edge Functions
 can load it (a test fails if you forget). No migration is needed.
 [`packages/unique-pick/README.md`](packages/unique-pick/README.md) covers the
 contract, the rules every game must follow, and starting a game in its own

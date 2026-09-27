@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { hashGameStateView } from '../../lib/gameStateHash'
 import { applyInFlightOverlay, buildInFlightOverlay, needsInFlightOverlay } from '../inFlightOverlay'
 import { redactStateForPlayer, toClientGameState } from '../redaction'
 import { replayActions } from '../replay'
@@ -47,18 +46,17 @@ describe('buildInFlightOverlay / applyInFlightOverlay', () => {
     expect(overlay.pendingPlayerIds).toEqual(['p3'])
   })
 
-  it("closes the gap between the viewer's own replay and their view, hash and all", () => {
+  it("closes the gap between the viewer's own replay and their view", () => {
     const { genesis, state } = midRound()
     const view = viewFor(state, 'p1')
     // What the client can reach unaided: only its safe prefix (p1's own pick).
     const base = replayActions(genesis, view.actionHistory)
     expect(base.pendingPlayerIds).toEqual(['p2', 'p3'])
-    expect(hashGameStateView(base)).not.toBe(hashGameStateView(view))
+    expect(base).not.toEqual(view)
 
     const rebuilt = applyInFlightOverlay(base, buildInFlightOverlay(view))
 
     expect(rebuilt).toEqual(view)
-    expect(hashGameStateView(rebuilt)).toBe(hashGameStateView(view))
   })
 
   it("keeps the base's own log", () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyAction, redactStateForPlayer, type LoggedAction, type GameState } from '@game-platform/sdk'
 import { act, newGame, pick, pickAll } from '@game-platform/unique-pick/testing'
-import { DEFAULT_GAME_OPTIONS, gameDefinition, MAX_PICK, MAX_ROUNDS_RANGE, normalizeGameOptions, PICK_PHASE, TARGET_SCORE_RANGE } from '../rules'
+import { type GameState as UniquePickState, DEFAULT_GAME_OPTIONS, gameDefinition, MAX_PICK, MAX_ROUNDS_RANGE, normalizeGameOptions, PICK_PHASE, TARGET_SCORE_RANGE } from '../rules'
 
 const pickAction = (playerId: string, value: number) => ({ type: 'PICK_NUMBER' as const, playerId, value })
 
@@ -227,7 +227,7 @@ describe('redactGame / isActionSecret', () => {
     for (const viewer of ['p1', 'p2', 'p3', 'p4', null]) {
       const view = redactStateForPlayer(state, viewer)
       const leaked = view.actionHistory.filter((logged) => logged.action.type === 'PICK_NUMBER').map((logged) => logged.action.playerId)
-      const unmasked = Object.entries(view.game.picks).filter(([, value]) => value !== null).map(([id]) => id)
+      const unmasked = Object.entries((view.game as UniquePickState['game']).picks).filter(([, value]) => value !== null).map(([id]) => id)
       expect(leaked.every((id) => unmasked.includes(id!))).toBe(true)
     }
   })

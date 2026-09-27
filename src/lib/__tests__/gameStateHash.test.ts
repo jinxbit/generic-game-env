@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { canonicalJson, hashGameStateView } from '../gameStateHash'
-import { newGame } from '@game-platform/unique-pick/testing'
-import type { GameState } from '@game-platform/sdk'
+import { applyInFlightOverlay, buildInFlightOverlay, redactStateForPlayer, replayActions, toClientGameState, type GameState } from '@game-platform/sdk'
+import { newGame, pick } from '@game-platform/unique-pick/testing'
 // This file cares about serialisation, not about room configuration, so a
 // plain genesis of the example game is enough.
 const genesis: GameState = newGame({ players: 3 })
@@ -53,5 +53,23 @@ describe('hashGameStateView', () => {
   it('agrees when the same state is rebuilt with its keys in a different order', () => {
     const shuffled = Object.fromEntries(Object.entries(genesis).reverse()) as unknown as GameState
     expect(hashGameStateView(shuffled)).toBe(hashGameStateView(genesis))
+  })
+})
+
+describe('hashGameStateView with an in-flight overlay', () => {
+  // The client's hash check compares its own rebuild against the server's
+  // view; for a hidden-information viewer that rebuild is a replay of the
+  // safe prefix plus the in-flight overlay (@game-platform/sdk's
+  // inFlightOverlay), so the two must hash identically.
+  it('hashes a replayed safe prefix plus overlay the same as the view it was built from', () => {
+    const hidden = newGame({ players: 3, hiddenInformationEnabled: true })
+    const state = pick(pick(hidden, 'p1', 3), 'p2', 4)
+    const view = toClientGameState(redactStateForPlayer(state, 'p1'))
+    const base = replayActions(hidden, view.actionHistory)
+    expect(hashGameStateView(base)).not.toBe(hashGameStateView(view))
+
+    const rebuilt = applyInFlightOverlay(base, buildInFlightOverlay(view))
+
+    expect(hashGameStateView(rebuilt)).toBe(hashGameStateView(view))
   })
 })

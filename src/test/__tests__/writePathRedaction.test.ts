@@ -18,6 +18,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { resolveHistory, toClientGameState, applyInFlightOverlay, extendReplay, replayActions, type RedactedGameState, type RedactedLoggedAction, type InFlightOverlay, type Action, type LoggedAction, type GameState } from '@game-platform/sdk'
+import type { PickNumberAction } from '@game-platform/unique-pick/rules'
 import { hashGameStateView } from '../../lib/gameStateHash.ts'
 import { buildGenesisState } from '../../lib/gameGenesis.ts'
 import type { GameSettings } from '../../lib/dbTypes.ts'

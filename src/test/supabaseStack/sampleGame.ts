@@ -13,7 +13,7 @@
 // src/test/supabaseStack/ is game-agnostic.
 
 import { applyAction, type Action, type GameState } from '@game-platform/sdk'
-import { gameDefinition, MAX_PICK, PICK_PHASE, type GameData, type GameState as UniquePickState, type PickNumberAction } from '@game-platform/unique-pick/rules'
+import { gameDefinition, MAX_PICK, PICK_PHASE, type GameData, type PickNumberAction } from '@game-platform/unique-pick/rules'
 import type { GameRow, GameSettings, PlayerRow } from '../../lib/dbTypes.ts'
 
 /** The `games.game_type` every stack test room plays — the example game's registered id. */
@@ -35,9 +35,9 @@ export function pickAction(playerId: string, value: number): PickNumberAction {
   return { type: 'PICK_NUMBER', playerId, value }
 }
 
-/** The example game's own slice of a state (`GameState.game`), typed — the framework's GameState leaves it `unknown`. */
-export function gameData(state: GameState): GameData {
-  return (state as UniquePickState).game
+/** The example game's own slice of a state (`GameState.game`), typed — the framework's GameState (and its redacted/overlay views) leave it `unknown`. */
+export function gameData(state: { game: unknown }): GameData {
+  return state.game as GameData
 }
 
 /**

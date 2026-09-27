@@ -271,4 +271,42 @@ describe("undo-action leaves the Redo button usable for a viewer whose actionHis
     const bobClient = toClientGameState(bobRead.state)
     expect(resolveHistory(bobClient.actionHistory).canRedo).toBe(true)
   })
+
+  it('keeps the protocol-2 delta path consistent across that undo, and falls back to a full state once a redo re-masks the prefix', async () => {
+    const game = gameRow(testGameSettings({ hiddenInformationEnabled: true }))
+    const genesis = buildGenesisState(game, PLAYERS)
+    await stack.seedStartedGame({ game, players: PLAYERS, genesis })
+
+    const aliceChose = await stack.applyAction(ALICE, GAME_ID, pick('seat-alice'))
+    if (!aliceChose.ok) throw new Error(aliceChose.error)
+
+    // Charlie's cached base: nothing yet (Alice's pick is secret from him).
+    const charlieRead = await stack.getGameState(CHARLIE, GAME_ID)
+    if (!charlieRead.ok || 'actionHistoryAppend' in charlieRead) throw new Error('expected a full response')
+    const charlieBase = toClientGameState(charlieRead.state)
+    expect(charlieBase.actionHistory).toEqual([])
+
+    // Bob undoes Alice's pick. Charlie's delta now carries the (still masked,
+    // now undone) entry and the UNDO_ACTION after it, and his rebuild agrees
+    // with the server.
+    const bobUndo = await stack.undoAction(BOB, GAME_ID)
+    if (!bobUndo.ok) throw new Error(bobUndo.error)
+    const delta = await stack.getGameState(CHARLIE, GAME_ID, 0, 2)
+    if (!delta.ok) throw new Error(delta.error)
+    if (!('stateHash' in delta)) throw new Error('expected a protocol-2 delta')
+    expect(delta.actionHistoryAppend.map((entry) => entry.action.type)).toEqual(['HIDDEN_ACTION', 'UNDO_ACTION'])
+    const rebuilt = applyInFlightOverlay(extendReplay(genesis, charlieBase, delta.actionHistoryAppend as unknown as LoggedAction[]), delta.overlay)
+    expect(hashGameStateView(rebuilt)).toBe(delta.stateHash)
+    expect(resolveHistory(rebuilt.actionHistory).canRedo).toBe(true)
+
+    // A redo puts Alice's secret pick back in effect, so Charlie's safe
+    // prefix moves back behind it — a cursor past it gets a full state.
+    const bobRedo = await stack.redoAction(BOB, GAME_ID)
+    if (!bobRedo.ok) throw new Error(bobRedo.error)
+    const afterRedo = await stack.getGameState(CHARLIE, GAME_ID, rebuilt.actionHistory.length, 2)
+    if (!afterRedo.ok) throw new Error(afterRedo.error)
+    expect(afterRedo).toHaveProperty('state')
+    if (!('state' in afterRedo)) throw new Error('unreachable')
+    expect(toClientGameState(afterRedo.state).actionHistory).toEqual([])
+  })
 })

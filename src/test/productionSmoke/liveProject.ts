@@ -22,8 +22,8 @@
 //   (`isAuthorizedToActAs` requires an exact seat match for both).
 // - Teardown deletes the game *before* the users. `games.created_by` and
 //   `players.user_id` reference `auth.users` with no `on delete cascade`
-//   (0001_init_schema.sql), so the other order fails on a foreign key and
-//   strands the room.
+//   (0001_baseline.sql sections 3 and 4), so the other order fails on a
+//   foreign key and strands the room.
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { Action } from '../../engine/actions.ts'
@@ -83,15 +83,14 @@ export interface LiveRoom extends ReplayTarget {
   remapped: RemappedFixture
   readGameState(): Promise<{ state: GameState; version: number } | null>
   /**
-   * The same service-role read as `readGameState`, under the name
-   * ../supabaseStack/replayFixture.ts's `ReplayTarget` asks for it by. A
-   * replay has to keep its own copy of the *true* state to decide whether a
-   * logged entry is a stale forced follow-up, and for a
-   * `hiddenInformationEnabled` room the Edge Function response it would
-   * otherwise use is redacted for the acting seat. Kept as a separate member
-   * rather than renaming `readGameState`, because `ProductionStack`'s
-   * `readGameState(userId, gameId)` — which reads as a specific actor, on
-   * purpose — already owns that name with a different signature.
+   * The same service-role read as `readGameState`, under a name that says
+   * what it is: the unredacted row, whatever the room's hidden-information
+   * setting — for a `hiddenInformationEnabled` room every Edge Function
+   * response is redacted for the calling seat, and a seated player's own
+   * direct read gets nothing at all. Kept as a separate member so a caller
+   * holding both a `LiveRoom` and a `ProductionStack` (whose
+   * `readGameState(userId, gameId)` reads as a specific actor, on purpose)
+   * can't confuse the two.
    */
   readTrueState(): Promise<{ state: GameState; version: number } | null>
   /**
@@ -105,8 +104,8 @@ export interface LiveRoom extends ReplayTarget {
   /**
    * The signed-in client for one of this room's seats — the same one
    * `applyAction`/`undoAction`/`redoAction` invoke Edge Functions through.
-   * Exposed for HIDDEN_INFORMATION_PLAN.md §8 phase 9's wire-level check
-   * (../hiddenInformationWire.ts), which needs the raw, uncollapsed response
+   * Exposed for the hidden-information wire check
+   * (./hiddenInformationWire.ts), which needs the raw, uncollapsed response
    * body `invoke()` above would otherwise discard, and a real Realtime
    * subscription — neither of which fits this file's existing `applyAction`-
    * shaped surface.
@@ -134,17 +133,16 @@ export interface LiveRoomOptions {
   /**
    * Overrides `games.settings.hiddenInformationEnabled` for this room,
    * whatever the fixture recorded. The smoke runner sets it to `true`
-   * (../productionSmoke/runSmoke.ts): none of the checked-in exports was
-   * played with hidden information on, so without this the replay would
-   * never reach `redactStateForPlayer` on a deployed project and the only
-   * live coverage of redaction would be ./hiddenInformationWire.ts's single
-   * leak check. Left undefined — the default — the fixture's own setting
-   * stands, which is what the preview seeder and the wire check both want.
+   * (./runSmoke.ts), so every replay — not only a fixture that happened to be
+   * played with hidden information on — reaches `redactStateForPlayer` on a
+   * deployed project. Left undefined — the default — the fixture's own
+   * setting stands, which is what the preview seeder and the wire check both
+   * want.
    */
   hiddenInformation?: boolean
 }
 
-/** A short, room-name-safe label — `games.name` is capped at 60 chars by 0012_room_name.sql. */
+/** A short, room-name-safe label — `games.name` is capped at 60 chars by the `games_name_length` check (0001_baseline.sql section 3). */
 function roomName(fixtureName: string, prefix: string): string {
   return `${prefix} ${fixtureName}`.slice(0, 60)
 }
@@ -242,11 +240,12 @@ async function invokeStartGame(client: SupabaseClient, gameId: string): Promise<
  * settings, then — since this room is always `ruleEnforcementEnabled` — the
  * `start-game` Edge Function, not a direct client write: it re-resolves the
  * roster itself, writes genesis, and flips `games.status` to 'active' under
- * its own service-role client, per `0029_start_game_edge_function.sql`).
+ * its own service-role client — 0001_baseline.sql sections 3 and 7 refuse
+ * either write from a client for an enforced game).
  *
  * Every step runs as the user who would really do it: each player seats
- * themselves (0001's `users can seat themselves` policy checks
- * `user_id = auth.uid()`), and only the owner edits settings or starts the
+ * themselves (0001_baseline.sql section 4's `users can seat themselves`
+ * policy checks `user_id = auth.uid()`), and only the owner edits settings or starts the
  * game. A failure part-way through tears down whatever was created before
  * rethrowing, so a broken run doesn't leave a room behind.
  */
@@ -263,9 +262,11 @@ export async function provisionLiveRoom(config: LiveProjectConfig, fixture: Prod
 
   const teardown = async () => {
     if (gameId) {
-      // 0008_room_lifecycle.sql only allows deleting a room in 'lobby' or
-      // 'canceled', so cancel first. Service role bypasses RLS either way,
-      // but going through the same states the app does keeps this honest.
+      // The owner's delete policy only allows deleting a room in 'lobby' or
+      // 'canceled' (0001_baseline.sql section 3), so cancel first. Service
+      // role bypasses RLS either way, but going through the same states the
+      // app does keeps this honest (and active -> canceled is a legal
+      // transition for games_enforce_status_transition).
       await admin.from('games').update({ status: 'canceled' }).eq('id', gameId)
       await admin.from('games').delete().eq('id', gameId)
       gameId = null
@@ -280,7 +281,7 @@ export async function provisionLiveRoom(config: LiveProjectConfig, fixture: Prod
     const userIdByOriginalPlayerId: Record<string, string> = {}
 
     for (const player of fixture.finalState.players) {
-      const email = `rf-smoke-${globalThis.crypto.randomUUID()}@example.com`
+      const email = `smoke-${globalThis.crypto.randomUUID()}@example.com`
       const password = randomPassword()
       const { data, error } = await admin.auth.admin.createUser({ email, password, email_confirm: true })
       if (error || !data.user) throw new Error(`Could not create a throwaway user: ${error?.message ?? 'no user returned'}`)
@@ -343,10 +344,10 @@ export async function provisionLiveRoom(config: LiveProjectConfig, fixture: Prod
     const remapped = remapFixtureToRoom(fixture, identity)
     const roomSettings = { ...remapped.settings, ...hiddenInformationOverride }
 
-    // LobbyPage's resolve-then-persist step: whatever `buildGenesisState`
-    // needs that isn't already on the row (a recovered preset board, a
-    // resolved "build alone" builder and turn order) is pinned now, in this
-    // room's ids, so genesis is a deterministic function of the row alone.
+    // LobbyPage's persist-then-start step: whatever `buildGenesisState` needs
+    // from the row (the game's options, the hidden-information flag) is
+    // pinned now, in this room's ids, so genesis is a deterministic function
+    // of the row alone.
     const { data: pinnedGame, error: settingsError } = await ownerClient
       .from('games')
       .update({ settings: roomSettings })
@@ -357,7 +358,8 @@ export async function provisionLiveRoom(config: LiveProjectConfig, fixture: Prod
 
     // Pinning settings after everyone's already seated bumps config_version
     // past whatever each player's seat-time ready_for_version was set to
-    // (0009_config_versioning.sql) — a real lobby's players would just click
+    // (games_bump_config_version / players_set_initial_ready_for_version,
+    // 0001_baseline.sql sections 3 and 4) — a real lobby's players would just click
     // Ready again; do the same here so start-game's own canStartGame check
     // (below) doesn't see a room that looks un-ready.
     const configVersion = (pinnedGame as { config_version: number }).config_version
@@ -373,9 +375,9 @@ export async function provisionLiveRoom(config: LiveProjectConfig, fixture: Prod
 
     const game: GameRow = { ...(gameRow as GameRow), settings: roomSettings }
 
-    // 0029_start_game_edge_function.sql: this room is always
-    // ruleEnforcementEnabled (see the games.insert above), so genesis is no
-    // longer a direct client write — the start-game Edge Function resolves
+    // This room is always ruleEnforcementEnabled (see the games.insert
+    // above), so genesis is not a direct client write (0001_baseline.sql
+    // sections 3 and 7) — the start-game Edge Function resolves
     // the roster itself, writes `game_state`, and flips `games.status` to
     // 'active', all under its own service-role client.
     const startResult = await invokeStartGame(ownerClient, gameId)
@@ -386,7 +388,7 @@ export async function provisionLiveRoom(config: LiveProjectConfig, fixture: Prod
     // `buildGenesisState(game, players)` output either way, just produced
     // server-side now. Through get-game-state rather than a direct table
     // select: this room may also have `hiddenInformationEnabled` on, and
-    // 0028_hidden_information_rls_lockdown.sql makes such a game's
+    // 0001_baseline.sql section 8 makes such a game's
     // `game_state` row invisible to a direct SELECT entirely, seated player
     // or not (redaction can't happen within a row) — genesis has no
     // actionHistory to redact yet, so this is a no-op collapse either way.
@@ -479,9 +481,9 @@ export async function provisionLiveRoom(config: LiveProjectConfig, fixture: Prod
     // Ground truth for test assertions, not a simulation of any app read
     // path (contrast supabaseStack's `readGameState(userId, ...)`, which
     // deliberately reads as a specific actor to exercise RLS) — so this
-    // reads as the service role, bypassing RLS entirely. It has to: since
-    // 0028_hidden_information_rls_lockdown.sql (issue #488), even the seated
-    // `ownerClient` this used to read as gets nothing back for a
+    // reads as the service role, bypassing RLS entirely. It has to: under
+    // 0001_baseline.sql section 8, even the seated `ownerClient` gets
+    // nothing back for a
     // hiddenInformationEnabled room, which — since the smoke runner passes
     // `hiddenInformation: true` — is now every room this file provisions,
     // not just the wire check's.

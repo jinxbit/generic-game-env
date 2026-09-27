@@ -1,5 +1,6 @@
 import type { Action, LoggedAction } from './actions.ts'
 import { game } from './game.ts'
+import { resolveHistory } from './historyFold.ts'
 import type { GameEvent, GameState } from './types.ts'
 
 /**
@@ -115,12 +116,25 @@ export function redactGameLog(events: GameEvent[], state: GameState, viewerId: s
 
 /**
  * The longest prefix of a (possibly redacted) `actionHistory` that contains
- * no hidden entry — safe to replay. A hidden entry isn't a legal action, and
- * replaying around it would produce a state that never existed, so the cut
- * happens *before* the first one: the client simply hasn't seen anything
- * after that point yet, and learns the rest once the secret is revealed.
+ * no hidden entry still in effect — safe to replay. A hidden entry isn't a
+ * legal action, and replaying around it would produce a state that never
+ * existed, so the cut happens *before* the first effective one: the client
+ * simply hasn't seen anything after that point yet, and learns the rest once
+ * the secret is revealed.
+ *
+ * A hidden entry that has since been undone (behind the undo pointer — see
+ * ./historyFold.ts) is kept rather than cut at: replayActions only ever
+ * replays `resolveHistory(...).effective`, so it is never applied, and
+ * cutting there would also drop the UNDO_ACTION that undid it (and
+ * everything after), leaving the viewer's own resolveHistory disagreeing
+ * with the server's about whether a Redo is available. A HIDDEN_ACTION
+ * stands in for a gameplay action, so the fold counts it as one — exactly
+ * where the real entry sits.
  */
 export function unredactedPrefix(actionHistory: RedactedLoggedAction[]): LoggedAction[] {
-  const index = actionHistory.findIndex((entry) => entry.action.type === 'HIDDEN_ACTION')
-  return (index === -1 ? actionHistory : actionHistory.slice(0, index)) as LoggedAction[]
+  const history = actionHistory as LoggedAction[]
+  if (!history.some((entry) => (entry.action.type as string) === 'HIDDEN_ACTION')) return history
+  const effective = new Set(resolveHistory(history).effective)
+  const index = history.findIndex((entry) => (entry.action.type as string) === 'HIDDEN_ACTION' && effective.has(entry))
+  return index === -1 ? history : history.slice(0, index)
 }

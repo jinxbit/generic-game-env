@@ -51,6 +51,9 @@ function describeOutcome(before: GameState, after: GameState): DraftEvent[] {
  * UNDO_ACTION/REDO_ACTION entries aren't a forward step, so narrating one
  * re-derives the state with a full replayActions over the history so far.
  *
+ * A HIDDEN_ACTION placeholder (a secret move that was later undone, kept in a
+ * redacted client's log) is narrated without its details and not replayed.
+ *
  * Returns the final replayed `state` too. `ok` is false if an entry failed to
  * reapply; the log stops there rather than throwing mid-render.
  */
@@ -67,6 +70,13 @@ export function buildGameLogFrom(genesis: GameState, actionHistory: LoggedAction
     if (logged.action.type === 'UNDO_ACTION' || logged.action.type === 'REDO_ACTION') {
       after = replayActions(genesis, actionHistory.slice(0, index + 1))
       drafts = describeStep(logged.action, before, after)
+    } else if ((logged.action as { type: string }).type === 'HIDDEN_ACTION') {
+      // A still-secret entry a redacted client keeps only because it was
+      // undone later (unredactedPrefix, ./redaction.ts) — not a legal action,
+      // and never in effect, so there's nothing to replay.
+      const playerId = 'playerId' in logged.action ? logged.action.playerId : null
+      after = before
+      drafts = [{ playerId, message: playerId ? `${PLAYER_PLACEHOLDER} made a move.` : 'A move was made.' }]
     } else {
       const result = applyActionWithSteps(before, logged.action)
       if (!result.ok) return { state, events, ok: false }

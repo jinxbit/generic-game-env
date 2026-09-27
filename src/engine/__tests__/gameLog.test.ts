@@ -3,6 +3,7 @@ import type { LoggedAction } from '../actions'
 import { game } from '../game'
 import { buildGameLog, buildGameLogFrom, PLAYER_PLACEHOLDER } from '../gameLog'
 import type { GameState } from '../types'
+import { redactStateForPlayer, toClientGameState } from '../redaction'
 import { applyRedoAction, applyUndoAction } from '../undoRedo'
 import { act, newGame, pick, pickAll } from './helpers'
 
@@ -145,5 +146,19 @@ describe('buildGameLogFrom', () => {
     expect(result.ok).toBe(false)
     expect(result.events).toHaveLength(1)
     expect(result.state.game.picks.p1).toBe(3)
+  })
+})
+
+describe('buildGameLogFrom with an undone hidden entry', () => {
+  it('narrates the placeholder and keeps going instead of stopping', () => {
+    const genesis = newGame({ players: 3 })
+    let state = pick(genesis, 'p1', 2)
+    const undone = applyUndoAction(genesis, state, 'p2')
+    if (!undone.ok) throw new Error(undone.error)
+    state = act(undone.state, { type: 'PICK_NUMBER', playerId: 'p2', value: 4 })
+    const view = toClientGameState(redactStateForPlayer(state, 'p3'))
+    const built = buildGameLogFrom(genesis, view.actionHistory)
+    expect(built.ok).toBe(true)
+    expect(built.events.some((e) => e.message.includes('made a move'))).toBe(true)
   })
 })

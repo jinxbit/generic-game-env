@@ -65,8 +65,10 @@ export default defineConfig({
     testTimeout: 900_000,
     hookTimeout: 120_000,
     // The Edge Functions' own `jsr:` specifier, mapped onto the npm package —
-    // see src/test/supabaseStack/edgeFunctions.ts. Needed here too because the
-    // fixture loader's module graph reaches gameEnforcement.ts.
+    // see src/test/supabaseStack/edgeFunctions.ts. Nothing this config runs
+    // imports supabase/functions/ today, but a helper shared with the
+    // in-process stack easily could, and without this it would fail to load
+    // here rather than in CI.
     alias: { 'jsr:@supabase/supabase-js@2': '@supabase/supabase-js' },
   },
 })

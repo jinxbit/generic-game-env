@@ -1,10 +1,9 @@
 // @vitest-environment node
 //
 // RLS coverage for the `chat_sender_display_names` RPC
-// (0035_chat_sender_display_names.sql, issue #684, CHAT_PLAN.md §10.5):
-// site-wide chat has no seats to fall back to for a sender's display name
-// (unlike in-game chat since issue #682), and `profiles` itself has been
-// readable only by its own owner since 0013_discord_notify_backend.sql. This
+// (0001_baseline.sql section 10): site-wide chat has no seats to fall back
+// to for a sender's display name (unlike in-game chat), and `profiles`
+// itself is readable only by its own owner (section 2). This
 // RPC is the decided fix — any signed-in user may look up another user's
 // `display_name` this way, but never their `discord_webhook_url`, which
 // stays owner-only. Same style as chatMessages.test.ts: exercised directly

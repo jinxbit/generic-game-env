@@ -1,15 +1,10 @@
 name: Set Up Chat Notifications
 
 # One-time setup AND secret rotation for README.md's "Chat message
-# notifications" backend (issue #658): deploys notify-discord-chat and
+# notifications" backend: deploys notify-discord-chat and
 # notify-web-push-chat, (re)generates their two webhook secrets, and
 # registers their Database Webhooks — the fourth workflow in the family, and
 # the last notify-* pair that still had to be wired up by hand.
-#
-# It exists because the PR that shipped issue #658 could not create it: that
-# session's GitHub App had no permission to touch `.github/workflows/**`, so
-# CHAT_PLAN.md §20 and README documented the manual steps and left the
-# workflow as future work. Nothing about the design wanted it that way.
 #
 # Both functions watch one table and one event, `chat_messages` INSERT, which
 # is why this is the shortest of the four: two hooks total, not six.
@@ -20,11 +15,11 @@ name: Set Up Chat Notifications
 # in full, so a hook made by hand earlier is adopted rather than doubled.
 #
 # What still can't be automated, and isn't:
-#   - Each player turns the notifications on themselves: Profile -> Chat
-#     message notifications, which is off by default and separate from having
+#   - Each player controls the notifications themselves: Profile -> Chat
+#     message notifications, which is on by default and separate from having
 #     a Discord webhook / push enabled at all (CHAT_PLAN.md §20 — chat has no
-#     natural rate limit the way turn and lifecycle events do). Nobody gets a
-#     chat ping from this workflow alone.
+#     natural rate limit the way turn and lifecycle events do), and still
+#     needs a Discord webhook or push subscription to reach anyone.
 #   - Enabling Database Webhooks on a brand-new project (Database ->
 #     Webhooks -> Enable), which installs supabase_functions.http_request.
 #     The script checks for it and says so rather than failing obscurely.
@@ -101,6 +96,18 @@ jobs:
           fi
           echo "Environment '$ENVIRONMENT' -> Supabase project '$SUPABASE_PROJECT_ID' (production is '$PRODUCTION_PROJECT_ID')."
 
+      # Edge Functions import the game packages (src/games/registry.ts via
+      # supabase/functions/import_map.json); one installed from another repo
+      # lives in node_modules, so install before deploying.
+      - name: Set up Node
+        if: ${{ github.event.inputs.confirm == 'YES' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install npm packages
+        if: ${{ github.event.inputs.confirm == 'YES' }}
+        run: npm ci
       - name: Install Supabase CLI
         if: ${{ github.event.inputs.confirm == 'YES' }}
         uses: supabase/setup-cli@v1
@@ -281,7 +288,7 @@ jobs:
               *) echo "⚠️ The post-setup probe did not come back clean — see the \"Probe both functions\" step." ;;
             esac
             echo
-            echo "Players still have to turn this on individually: **Profile → Chat message notifications**, off by default and separate from the turn/lifecycle notifications' own opt-in."
+            echo "Players control this individually: **Profile → Chat message notifications**, on by default, and it only reaches players who have set up a Discord webhook or push."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Fail if a step that matters failed

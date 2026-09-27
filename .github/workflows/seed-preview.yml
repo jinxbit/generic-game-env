@@ -21,12 +21,14 @@ on:
   workflow_dispatch:
     inputs:
       fixture:
-        description: 'Which recorded game to seed'
-        type: choice
-        options:
-          - three-player-red-runaway
-          - red-beats-blue-async
-        default: three-player-red-runaway
+        # Free text rather than a choice list, so adding or removing a
+        # fixture in src/test/fixtures/productionGames/ never needs an edit
+        # here. Empty leaves the choice to the seeder
+        # (src/test/previewSeed/seedFinishedGame.seed.ts).
+        description: 'Which recorded game to seed (a file name in src/test/fixtures/productionGames/, without .json). Leave empty for the default.'
+        type: string
+        required: false
+        default: ''
 
 concurrency:
   # Two seeds at once would race over nothing in particular, but serialising

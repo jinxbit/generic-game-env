@@ -2,7 +2,7 @@
 // convention: it is set ONLY on non-production builds (Vercel's Preview
 // scope), so a build is production either when the variable is unset or
 // when it says "production" outright. See src/components/environmentBadge.ts
-// for the full reasoning and history (issue #496).
+// for the full reasoning and history.
 
 /** True when this build is production, by the `VITE_ENVIRONMENT` convention above. */
 export function isProductionBuild(environment: string | undefined): boolean {

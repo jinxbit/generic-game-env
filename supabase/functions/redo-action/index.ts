@@ -1,11 +1,19 @@
-// RULE_ENFORCEMENT_PLAN.md §8 phase 6 — redo's mirror of undo-action/
-// index.ts; see that file's doc comment (and apply-action/index.ts's) for
-// the shared background. Same authorization (any seated player, or the room
-// owner/an admin — no per-seat ownership check, no owner-override), same
-// genesis-replay approach, same no-payload request body, same write-side
-// response redaction (issue #478 — see redactedResponseState in
-// ../_shared/gameEnforcement.ts).
-import { applyRedoAction } from '../../../src/engine/undoRedo.ts'
+// Redoes the last undone action of a rule-enforced game, server-side.
+// Undo/redo are logged actions (UNDO_ACTION/REDO_ACTION) folded in by
+// resolveHistory (packages/sdk/src/historyFold.ts), not a splice of the log, so
+// this needs the game's genesis (buildGenesisState, src/lib/gameGenesis.ts):
+// it's a shorter/longer replay from the start, not a step forward from the
+// current state — mirroring GamePage.tsx's client-trusted handleUndo/
+// handleRedo.
+//
+// Allowed for any seated player (or the room owner/an admin), at any time:
+// moving the pointer is non-destructive. Discarding the undone tail only
+// happens when a *new* action is submitted behind the tip — that's gated in
+// apply-action, not here.
+//
+// Request body: `{ gameId: string }` — no action payload, by design. The
+// response's `state` is redacted the same way apply-action's is.
+import { applyRedoAction } from '@game-platform/sdk'
 import {
   buildGenesisState,
   corsHeaders,
@@ -15,7 +23,6 @@ import {
   loadGameContext,
   redactedResponseState,
   respondWithState,
-  resolveGameContent,
   serviceRoleClient,
   writeGameStateCAS,
 } from '../_shared/gameEnforcement.ts'
@@ -26,9 +33,7 @@ interface RedoActionRequest {
    * The caller's own cached `actionHistory` prefix length, and which delta
    * contract it speaks — both forwarded straight to `respondWithState`
    * (../_shared/gameEnforcement.ts), which is the same builder the read path
-   * uses. Issue #693: a move's own response was still sending the whole state
-   * back on every submission, which for the player actually playing is the
-   * most frequent read of all.
+   * uses — so the response can be a delta rather than the whole state.
    */
   sinceActionIndex?: number
   protocol?: number
@@ -66,16 +71,7 @@ Deno.serve(async (req) => {
 
   const callerPlayerId = ctx.players.find((p) => p.user_id === callerUserId)?.id ?? null
 
-  const content = resolveGameContent(ctx.gameState.state)
-  const result = applyRedoAction(
-    genesis,
-    ctx.gameState.state,
-    callerPlayerId,
-    content.unitContent,
-    content.achievementContent,
-    content.boardGenerationContent,
-    content.taleContent,
-  )
+  const result = applyRedoAction(genesis, ctx.gameState.state, callerPlayerId)
   if (!result.ok) return jsonResponse(400, { ok: false, error: result.error })
 
   const newVersion = await writeGameStateCAS(supabase, gameId, result.state, ctx.gameState.version)
@@ -83,7 +79,6 @@ Deno.serve(async (req) => {
     return jsonResponse(409, { ok: false, error: 'Game state changed concurrently — refetch and retry.' })
   }
 
-  // issue #478: same write-side redaction as apply-action — see
-  // redactedResponseState's doc comment.
+  // Same write-side redaction as apply-action — see redactedResponseState.
   return respondWithState('redo-action', result.state, redactedResponseState(ctx, callerUserId, result.state), newVersion, { sinceActionIndex, protocol, fallbackReason })
 })

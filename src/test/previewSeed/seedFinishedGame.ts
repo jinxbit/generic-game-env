@@ -1,4 +1,4 @@
-// Puts a real, finished game into a live Supabase project and LEAVES IT
+// Puts a recorded, finished game into a live Supabase project and LEAVES IT
 // THERE, so the maintainer has something to open and poke at by hand
 // (DELIVERY_PIPELINE_PLAN.md §6 step 3: "go and test it" should cost a click
 // rather than fifteen minutes of setting a game up).
@@ -31,7 +31,7 @@ export interface SeededGame {
   gameId: string
   roomCode: string
   name: string
-  /** Final score per display name, read back off the finished row. */
+  /** Final score per display name, read back off the finished row (../fixtures/productionGames/gameScores.ts — `{}` for a game with no scores). */
   finalScores: Record<string, number>
   /** `game_state.version` the finished row sits on — one per submitted action. */
   version: number

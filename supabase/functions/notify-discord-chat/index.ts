@@ -1,5 +1,5 @@
-// Sends a Discord ping when someone posts in a game's chat (issue #658,
-// CHAT_PLAN.md §20). Sibling of notify-discord-lifecycle/notify-discord-turn
+// Sends a Discord ping when someone posts in a game's chat (CHAT_PLAN.md
+// §20). Sibling of notify-discord-lifecycle/notify-discord-turn
 // (see notify-discord-turn's doc comment for the full "why server-side"
 // rationale) — this one watches `chat_messages` instead of `game_state` or
 // `players`/`games`.
@@ -7,10 +7,8 @@
 // Trigger: a Supabase Database Webhook on `chat_messages` INSERT, configured
 // the same way as every other notify-* function (an `x-webhook-secret`
 // header matching this function's `DISCORD_CHAT_WEBHOOK_SECRET` secret) —
-// see README's "Chat message notifications" section. No automated "Set Up …
-// Notifications" GitHub Actions workflow exists for this one yet (unlike the
-// other three notify-* families) — register the hook by hand per that
-// section until one is added.
+// see README's "Chat message notifications" section. Registered by the Set
+// Up Chat Notifications workflow, like the other notify-* families.
 //
 // In-game chat only: a `game_id is null` row (site-wide chat) is ignored —
 // CHAT_PLAN.md never gave site-wide chat an unread indicator either (§13),
@@ -22,8 +20,7 @@
 // Unlike the turn/lifecycle pings, this is gated by its own per-player
 // toggle on top of having a Discord webhook configured at all —
 // `profiles.preferences.chatNotificationsEnabled`
-// (src/lib/chatNotificationPreference.ts), default **on** as of issue #668
-// (previously off, issue #658) — so only an explicit `false` opts a player
+// (src/lib/chatNotificationPreference.ts), default **on** — so only an explicit `false` opts a player
 // out, not merely leaving the preference unset.
 //
 // `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` are provided automatically in
@@ -32,10 +29,11 @@
 // RLS, same as every other notify-* function.
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
+import { gameLabels } from '../_shared/games.ts'
 
 const WEBHOOK_URL_PATTERN = /^https:\/\/(?:discord\.com|discordapp\.com)\/api\/webhooks\/\d+\/[\w-]+$/
 
-// A chat message can be up to 2000 chars (0031_chat_messages.sql's check
+// A chat message can be up to 2000 chars (`chat_messages`' check
 // constraint) — far too long for a ping. Trimmed with an ellipsis, not
 // rejected; the full message is always readable in the game itself.
 const BODY_PREVIEW_MAX = 200
@@ -45,6 +43,8 @@ interface GameRow {
   room_code: string
   name: string
   play_mode: string
+  /** Which registered game the room plays — names it in the notification. */
+  game_type: string
 }
 
 interface PlayerRow {
@@ -103,7 +103,7 @@ async function sendDiscordNotification(webhookUrl: string, content: string): Pro
 async function handleChatMessage(supabase: SupabaseClient, message: ChatMessageRow): Promise<Response> {
   if (!message.game_id) return new Response('site-wide chat, no notification', { status: 200 })
 
-  const { data: game } = await supabase.from('games').select('id, room_code, name, play_mode').eq('id', message.game_id).maybeSingle()
+  const { data: game } = await supabase.from('games').select('id, room_code, name, play_mode, game_type').eq('id', message.game_id).maybeSingle()
   // Live players see the message over Realtime; hotseat has nobody remote to
   // ping — same async-only rule as every other notify-* function.
   if (!game || (game as GameRow).play_mode !== 'async') return new Response('not an async game', { status: 200 })
@@ -127,7 +127,7 @@ async function handleChatMessage(supabase: SupabaseClient, message: ChatMessageR
 
   const senderName = sender?.display_name ?? 'Someone'
   const game_ = game as GameRow
-  const content = `**Rise & Fall** — **${senderName}** in ${roomText(game_.name, game_.room_code, gameUrlFor(game_.room_code))}: ${previewBody(message.body)}`
+  const content = `**${gameLabels(game_.game_type).title}** — **${senderName}** in ${roomText(game_.name, game_.room_code, gameUrlFor(game_.room_code))}: ${previewBody(message.body)}`
 
   await Promise.allSettled(
     recipients.map((player) => {

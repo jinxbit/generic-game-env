@@ -1,7 +1,7 @@
 // @vitest-environment node
 //
-// RLS coverage for chat_read_status (0032_chat_read_status.sql,
-// CHAT_PLAN.md §13, issue #579) against the production-simulating stack
+// RLS coverage for chat_read_status (0001_baseline.sql section 10)
+// against the production-simulating stack
 // (src/test/supabaseStack/) — same style chatMessages.test.ts already uses
 // for chat_messages/app_config's RLS. In-game chat only — there is no
 // site-wide read cursor, so every row here carries a real game_id.
@@ -12,6 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { GameRow, GameSettings, PlayerRow } from '../../lib/dbTypes.ts'
 import { createProductionStack, type ProductionStack } from '../supabaseStack/index.ts'
+import { TEST_GAME_TYPE } from '../supabaseStack/sampleGame.ts'
 
 const PRIVATE_GAME_ID = '3f1c2d4e-0000-4000-8000-0000000000d1'
 const PUBLIC_GAME_ID = '3f1c2d4e-0000-4000-8000-0000000000d2'
@@ -20,28 +21,13 @@ const BOB = 'auth-user-bob' // seated in the private game only
 const CAROL = 'auth-user-carol' // never seated anywhere
 
 function settingsFor(): GameSettings {
-  return {
-    mapTemplateId: 'classic',
-    mapPoolBoard: null,
-    mapPoolMapId: null,
-    mapPoolRandomAtStart: false,
-    soloBuildMap: false,
-    soloBuilderSelection: 'owner',
-    soloBuilderId: null,
-    soloBuilderUnitOrder: 'last',
-    soloBuilderTurnOrder: null,
-    skipHotseatPassGate: false,
-    ruleEnforcementEnabled: false,
-    hiddenInformationEnabled: false,
-    lockRevealedInformationEnabled: false,
-    activeTaleIds: [],
-    gameLength: 3,
-  }
+  return { skipHotseatPassGate: false, ruleEnforcementEnabled: false, hiddenInformationEnabled: false, rulesVersion: 1 }
 }
 
 function gameRow(id: string, roomCode: string, visibility: GameRow['visibility']): GameRow {
   return {
     id,
+    game_type: TEST_GAME_TYPE,
     room_code: roomCode,
     name: 'chat read status RLS self-test',
     play_mode: 'live',
@@ -52,13 +38,13 @@ function gameRow(id: string, roomCode: string, visibility: GameRow['visibility']
     created_at: new Date(0).toISOString(),
     updated_at: new Date(0).toISOString(),
     settings: settingsFor(),
-    config_version: 1,
+    config_version: 0,
     visibility,
   }
 }
 
 function playerRow(id: string, gameId: string, userId: string, seatIndex: number): PlayerRow {
-  return { id, game_id: gameId, user_id: userId, display_name: userId, avatar_url: null, seat_index: seatIndex, color: '#e11', is_active: true, joined_at: new Date(0).toISOString() } as PlayerRow
+  return { id, game_id: gameId, user_id: userId, display_name: userId, avatar_url: null, seat_index: seatIndex, color: '#e11', is_active: true, joined_at: new Date(0).toISOString(), ready_for_version: 0 }
 }
 
 describe('chat_read_status RLS (issue #579)', () => {
@@ -153,6 +139,9 @@ describe('chat_read_status RLS (issue #579)', () => {
     stack.db.seed('chat_read_status', { id: 'cursor-alice-private', user_id: ALICE, game_id: PRIVATE_GAME_ID, last_read_id: 2, updated_at: new Date(0).toISOString() })
     stack.db.seed('chat_read_status', { id: 'cursor-alice-public', user_id: ALICE, game_id: PUBLIC_GAME_ID, last_read_id: 2, updated_at: new Date(0).toISOString() })
 
+    // An owner may only delete a room once it's out of play (0001_baseline.sql
+    // section 3), so cancel it first — the same order the app uses.
+    expect((await stack.clientFor(ALICE).from('games').update({ status: 'canceled' }).eq('id', PRIVATE_GAME_ID)).error).toBeNull()
     const { error } = await stack.clientFor(ALICE).from('games').delete().eq('id', PRIVATE_GAME_ID)
     expect(error).toBeNull()
 

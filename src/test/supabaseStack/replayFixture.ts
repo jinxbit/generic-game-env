@@ -1,17 +1,16 @@
 // Replays a whole game's logged action history against the stack, submitting
-// each entry the way production submits that kind of entry: a substantive
-// action to apply-action, an UNDO_ACTION/REDO_ACTION marker to
-// undo-action/redo-action (those move a pointer, they aren't a step forward —
-// see UndoAction's doc comment in src/engine/actions.ts), each as the
-// signed-in user who holds the seat that made it.
+// each entry the way production submits that kind of entry: a game action,
+// CONCEDE or SET_ADMIN_MODE to apply-action, an UNDO_ACTION/REDO_ACTION
+// marker to undo-action/redo-action (those move a pointer, they aren't a step
+// forward — see UndoAction's doc comment in packages/sdk/src/actions.ts), each as
+// the signed-in user who holds the seat that made it.
 //
-// Shared by ./…/__tests__/productionGames.test.ts, which points it at real
-// exported games, and by ./…/__tests__/supabaseStack.test.ts, which points it
-// at a game it just played — so the replay path itself stays covered in CI
-// even before any production export is checked in.
+// Shared by ../__tests__/productionGames.test.ts, which points it at the
+// checked-in game exports, by ../__tests__/supabaseStack.test.ts, which points
+// it at a game it just played, and by ../productionSmoke/ and ../previewSeed/,
+// which point it at a live project.
 
-import { applyActionWithSteps } from '../../engine/applyAction.ts'
-import type { GameState } from '../../engine/types.ts'
+import type { GameState } from '@game-platform/sdk'
 import type { ProductionGameFixture } from '../fixtures/productionGames/loadFixtures.ts'
 import { normalizeStateForComparison } from '../fixtures/productionGames/loadFixtures.ts'
 import type { EnforcedCallResult, ProductionStack } from './index.ts'
@@ -32,21 +31,13 @@ export interface ReplayTarget {
   applyActionClientTrusted?: ProductionStack['applyActionClientTrusted']
   undoActionClientTrusted?: ProductionStack['undoActionClientTrusted']
   redoActionClientTrusted?: ProductionStack['redoActionClientTrusted']
-  /**
-   * An unredacted read of the row, as the service role. Required only for a
-   * `hiddenInformationEnabled` game — see `trueStateAfter` below for why the
-   * write response can't stand in there. A live room supplies it
-   * (../productionSmoke/liveProject.ts); the in-process `ProductionStack`
-   * doesn't, because no fixture it replays directly hides anything.
-   */
-  readTrueState?(): Promise<{ state: GameState; version: number } | null>
 }
 
 export type LoggedEntry = GameState['actionHistory'][number]
 
 export function submitLoggedEntry(stack: ReplayTarget, fixture: ProductionGameFixture, entry: LoggedEntry): Promise<EnforcedCallResult> {
   // UNDO_ACTION/REDO_ACTION/SET_ADMIN_MODE carry a nullable, narration-only
-  // playerId (see their doc comments in src/engine/actions.ts) — a null one
+  // playerId (see their doc comments in packages/sdk/src/actions.ts) — a null one
   // means nobody in particular was "acting", so the room owner stands in,
   // which is also the only caller SET_ADMIN_MODE would have accepted.
   const playerId = entry.action.playerId
@@ -65,9 +56,9 @@ export function submitLoggedEntry(stack: ReplayTarget, fixture: ProductionGameFi
           `Replay it against the in-process stack, or give the fixture a sidecar leaving enforcement on.`,
       )
     }
-    if (entry.action.type === 'UNDO_ACTION') return stack.undoActionClientTrusted(userId, gameId, playerId, fixture.genesis, fixture.content)
-    if (entry.action.type === 'REDO_ACTION') return stack.redoActionClientTrusted(userId, gameId, playerId, fixture.genesis, fixture.content)
-    return stack.applyActionClientTrusted(userId, gameId, entry.action, fixture.content)
+    if (entry.action.type === 'UNDO_ACTION') return stack.undoActionClientTrusted(userId, gameId, playerId, fixture.genesis)
+    if (entry.action.type === 'REDO_ACTION') return stack.redoActionClientTrusted(userId, gameId, playerId, fixture.genesis)
+    return stack.applyActionClientTrusted(userId, gameId, entry.action)
   }
 
   if (entry.action.type === 'UNDO_ACTION') return stack.undoAction(userId, gameId)
@@ -76,98 +67,33 @@ export function submitLoggedEntry(stack: ReplayTarget, fixture: ProductionGameFi
 }
 
 export interface ReplayOutcome {
-  /** The `game_state.version` the row is on once the whole history has been submitted. */
+  /** The `game_state.version` the row is on once the whole history has been submitted — one per entry. */
   version: number
-  /** Indices into the fixture's raw history that had nothing left to submit — see `isStaleForcedFollowUp` below. */
-  foldedEntryIndices: number[]
   /**
-   * Wall-clock time of each `submitLoggedEntry` call, in submission order. A
-   * folded entry (see above) never reaches `submitLoggedEntry` — it costs no
-   * round trip — so this is shorter than the raw history whenever any were
-   * folded. Consumed by ../productionSmoke/runSmoke.ts to catch a round-trip
+   * Wall-clock time of each `submitLoggedEntry` call, in submission order.
+   * Consumed by ../productionSmoke/runSmoke.ts to catch a round-trip
    * regression as a clear failure rather than as the whole run eventually
-   * hitting its timeout (todo.md #139).
+   * hitting its timeout.
    */
   actionDurationsMs: number[]
 }
 
 /**
- * Is this logged entry something today's engine has already done, as part of
- * the preceding entry's own cascade?
- *
- * Since the §4.2/§4.3 fold-in, a forced single-option follow-up (a tile tier
- * with one legal arrangement left, a one-card hand's pick) no longer gets its
- * own actionHistory entry — applyAction folds it into whatever triggered it.
- * A game played before that change has standalone entries for those, and its
- * own reconstruction paths (replayActions, gameLog, turnReview) already skip
- * them: applyAction's `isStaleForcedFollowUp` branch. A *live* submission
- * deliberately does not, so that a player resubmitting a stale action still
- * gets a real rejection — which means a replay driving the live path has to
- * make the same distinction the reconstruction paths make.
- *
- * Asked of the engine rather than reimplemented: dispatched as a trusted
- * replay, a stale follow-up is the one case that succeeds with no steps.
- */
-function isStaleForcedFollowUp(state: GameState, entry: LoggedEntry, fixture: ProductionGameFixture): boolean {
-  if (entry.action.type === 'UNDO_ACTION' || entry.action.type === 'REDO_ACTION') return false
-  const { content } = fixture
-  const result = applyActionWithSteps(
-    state,
-    entry.action,
-    content.unitContent,
-    content.achievementContent,
-    content.boardGenerationContent,
-    content.taleContent,
-    true,
-  )
-  return result.ok && result.steps.length === 0
-}
-
-/**
- * Does this game's write response come back redacted, so the replay can't use
- * it as its own copy of the state?
- *
- * The same condition gameEnforcement.ts's `shouldRedact` applies, minus the
- * admin escape hatch (no replay runs as an admin): a hidden-information game
- * outside hotseat gets `redactStateForPlayer` for the acting seat, which
- * truncates `actionHistory` at `unredactedPrefix` and masks the in-flight
- * fields. `isStaleForcedFollowUp` dispatches against that state, so feeding
- * it a redacted one would have it reasoning about a game that doesn't exist.
- */
-function responsesAreRedacted(fixture: ProductionGameFixture): boolean {
-  return Boolean(fixture.game.settings.hiddenInformationEnabled) && fixture.game.play_mode !== 'hotseat'
-}
-
-/**
  * Submits every entry in order, failing with the action's position and the
  * server's own message the moment one is rejected — which is the useful half
- * of a failure here: "action 143/210, RESOLVE_UNIT_ACTION by seat-2, 400: ..."
+ * of a failure here: "action 14/40, PICK_NUMBER by seat-2, 400: ..."
  * localizes a rules or enforcement regression to one move of one real game.
+ *
+ * Needs nothing back from each write but its status and version, so it works
+ * the same whether or not the target's responses are redacted for the acting
+ * seat (a hidden-information game) or come back as protocol-2 deltas.
  */
 export async function replayFixtureThroughStack(stack: ReplayTarget, fixture: ProductionGameFixture): Promise<ReplayOutcome> {
   const history = fixture.finalState.actionHistory
-  const foldedEntryIndices: number[] = []
   const actionDurationsMs: number[] = []
-  let state = fixture.genesis
   let version = 0
 
-  // Both eligible checked-in fixtures genuinely fold entries (12 and 18), so
-  // this isn't a theoretical path: a redacted `state` here would silently
-  // skip or submit the wrong entries, and surface as a mid-replay rejection
-  // with a misleading message.
-  const needsTrueState = responsesAreRedacted(fixture)
-  if (needsTrueState && !stack.readTrueState) {
-    throw new Error(
-      `[${fixture.name}] hides in-progress information, so every write response is redacted for the acting seat — ` +
-        `this replay target must supply readTrueState() for the stale-follow-up check to have the real state to work from.`,
-    )
-  }
-
   for (const [index, entry] of history.entries()) {
-    if (isStaleForcedFollowUp(state, entry, fixture)) {
-      foldedEntryIndices.push(index)
-      continue
-    }
     const startedAt = Date.now()
     const result = await submitLoggedEntry(stack, fixture, entry)
     actionDurationsMs.push(Date.now() - startedAt)
@@ -180,33 +106,8 @@ export async function replayFixtureThroughStack(stack: ReplayTarget, fixture: Pr
     if (result.version !== version) {
       throw new Error(`[${fixture.name}] action ${index + 1}/${history.length} left game_state at version ${result.version}, expected ${version}.`)
     }
-    // One extra direct row read per action, and only for a redacted game —
-    // it costs no Edge Function boot, and it is deliberately outside the
-    // `actionDurationsMs` window above, which exists to catch a regression in
-    // the *round trip* (runSmoke.ts's ceiling, todo.md #139) and would
-    // otherwise be measuring this read too.
-    if (needsTrueState) {
-      const trueState = await stack.readTrueState!()
-      if (!trueState) throw new Error(`[${fixture.name}] the game_state row vanished after action ${index + 1}/${history.length}.`)
-      state = trueState.state
-    } else {
-      state = result.state
-    }
   }
-  return { version, foldedEntryIndices, actionDurationsMs }
-}
-
-/**
- * The exported state as the replay should have reproduced it: identical in
- * every respect except that the entries `replayFixtureThroughStack` had
- * nothing to submit for are gone from the log. Each one is a no-op against
- * today's engine by construction (that is what made it skippable), so
- * dropping it changes the log and nothing else about the game.
- */
-export function expectedFinalState(fixture: ProductionGameFixture, outcome: ReplayOutcome): GameState {
-  if (outcome.foldedEntryIndices.length === 0) return fixture.finalState
-  const folded = new Set(outcome.foldedEntryIndices)
-  return { ...fixture.finalState, actionHistory: fixture.finalState.actionHistory.filter((_, index) => !folded.has(index)) }
+  return { version, actionDurationsMs }
 }
 
 /**
@@ -217,8 +118,8 @@ export function expectedFinalState(fixture: ProductionGameFixture, outcome: Repl
  * An UNDO_ACTION/REDO_ACTION entry's `playerId` is narration only: the server
  * stamps it from whoever called, and in a hotseat game several seats share one
  * auth user, so a replay can legitimately attribute a marker to a different
- * seat than production did (see UndoAction's doc comment). Everything else,
- * including every substantive entry and its order, has to match exactly.
+ * seat than the original did (see UndoAction's doc comment). Everything else,
+ * including every other entry and its order, has to match exactly.
  */
 export function normalizeForComparison(state: GameState): GameState {
   return normalizeStateForComparison({

@@ -1,0 +1,15 @@
+{
+  "name": "Player A vs Player B — first to 12",
+  "settings": {
+    "ruleEnforcementEnabled": false
+  },
+  "expected": {
+    "winners": [
+      "Player A"
+    ],
+    "finalScores": {
+      "Player A": 12,
+      "Player B": 9
+    }
+  }
+}

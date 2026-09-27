@@ -1,68 +1,55 @@
-# Production game fixtures
+# Recorded game fixtures
 
-Drop a game exported from production into this directory and it becomes a
-test. No registration step, no code change:
-`src/test/__tests__/productionGames.test.ts` globs this folder, and every
-export it finds is replayed action by action through the real
-`apply-action`/`undo-action`/`redo-action` Edge Functions against a Supabase
-stack that behaves like production (`src/test/supabaseStack/`).
+Drop a game export into this directory and it becomes a test. No registration
+step, no code change: `src/test/__tests__/productionGames.test.ts` globs this
+folder, and every export it finds is replayed action by action through the
+real `apply-action`/`undo-action`/`redo-action` Edge Functions (or, for a
+client-trusted game, through direct `game_state` writes) against a Supabase
+stack that behaves like production (`src/test/supabaseStack/`). The same
+fixtures drive the live smoke test (`../../productionSmoke/`) and the preview
+seeder (`../../previewSeed/`).
 
 ## Adding a game
 
 1. Open the game and use **Copy game export** (GamePage.tsx) — or the saved
    `.json` file that button's download produces.
 2. Save it here as `<something-descriptive>.json`, unchanged. The file is the
-   app's own export format (`src/lib/gameStateExport.ts`): a small JSON object
-   whose `gameStateZipped` field holds the gzipped `GameState`.
-3. Run `npm run test`. The new game shows up as its own suite, named after the
+   app's own export format (`src/lib/gameStateExport.ts`,
+   `src/lib/gameStateExport.schema.json`): a small JSON object whose
+   `gameStateZipped` field holds the gzipped `GameState`.
+3. Add a `<something-descriptive>.room.json` sidecar declaring the result (see
+   below), and say so there if the game was played client-trusted.
+4. Run `npm run test`. The new game shows up as its own suite, named after the
    file.
 
-Pick games that are worth regression-testing: a finished game, a game that hit
-a bug, a game using a Tale or a game length that little else covers, a game
-with undo/redo in its history, a hotseat game. Long games are fine — a few
-hundred actions replays in seconds.
+Pick games worth regression-testing: a finished game, a game that hit a bug,
+a game with undo/redo, a concede or admin mode in its history, a hotseat game,
+a game played with hidden information. Long games are fine — a few hundred
+actions replay in seconds.
 
 ## Declaring the result
 
-A game's outcome is worth stating in a sidecar, from what you read off the
-end-of-game screen, rather than leaving the test to derive it:
+State a game's outcome in its sidecar, from what you read off the end-of-game
+screen, rather than leaving the test to derive it:
 
 ```json
 {
   "expected": {
-    "finalScores": { "Player A": 174, "Player B": 138 },
-    "winners": ["Player A"]
+    "winners": ["Player A"],
+    "finalScores": { "Player A": 12, "Player B": 9 }
   }
 }
 ```
 
-Players are named by display name or by engine player id. A scoring change
-that moved every total in step would still satisfy "the replay matches the
-export" — both sides move together — but it cannot satisfy a number that came
+Players are named by display name or by engine player id. A rules change that
+moved every game's outcome in step would still satisfy "the replay matches the
+export" — both sides move together — but it cannot satisfy a result that came
 from outside the code.
 
-## Entries that no longer need submitting
-
-A game played before the §4.2/§4.3 fold-in can have a standalone history entry
-for something today's engine does automatically as part of the preceding
-action — a tile tier down to one legal arrangement, a one-card hand's pick.
-The app's own reconstruction paths (`replayActions`, `gameLog`, `turnReview`)
-already skip those; a live submission deliberately does not, so that a player
-resubmitting a stale action still gets a real rejection.
-
-The replay makes the same distinction, asking the engine rather than guessing:
-dispatched as a trusted replay, such an entry is the one case that succeeds
-with no steps. Those entries are skipped, and the final state is compared with
-them dropped from the expected log — they are no-ops by construction, so
-nothing else about the game changes. `red-beats-blue-async` has 12 of them out
-of 263, `three-player-red-runaway` 18 out of 229.
-
-One field is likewise left out of the comparison:
-`declineSourceZoneByCardId` is checked only while a decline phase is open,
-which is the only window anything reads it (it exists so `RETRACT_DECLINE` can
-put a card back where it came from). Its own doc comment calls it live scratch
-state rather than part of the replayable log, and a real game bears that out —
-see `normalizeStateForComparison` in `loadFixtures.ts`.
+`finalScores` is optional, and is the one game-specific piece of this folder:
+`gameScores.ts` says how to read a score off a `GameState` (for the example
+game, `game.scores`). A game with no notion of a score returns `{}` there and
+its sidecars declare `winners` only.
 
 ## Which write path a game is replayed on
 
@@ -75,86 +62,105 @@ The app has two, and a game is replayed on the one it was actually played on
 - **Client-trusted**: the client applies the action itself and writes
   `game_state` directly, under RLS and the version compare-and-swap.
 
-Most games in production still run client-trusted. Say so in the sidecar:
+A game played client-trusted says so in its sidecar:
 
 ```json
 { "settings": { "ruleEnforcementEnabled": false } }
 ```
 
-Replaying a client-trusted game through the Edge Functions would be testing it
-against rules it was never played under — and can genuinely fail: the hotseat
-game in this directory is refused under enforcement, because §4.4's
-owner-override check lacks the hotseat carve-out §4.1 has (see the
-"refuses a hotseat player acting for their other seat" test in
-`src/test/__tests__/supabaseStack.test.ts` for a minimal reproduction).
+Replaying a client-trusted game through the Edge Functions would be testing
+it against checks it was never played under (per-seat authorization, the
+owner-override check). The smoke test and the preview seeder skip such games
+for the same reason.
 
 ## What gets asserted
 
-For each game:
+For each game (`productionGames.test.ts`):
 
 - Every logged action is accepted, submitted by the seat that actually made
   it. A rejection fails with that action's position in the history and the
   server's own message.
 - `game_state.version` advances by exactly one per action.
-- Nobody outside the game can act: a signed-in user with no seat in it is
-  refused, on the Edge Function path and the direct-write path alike.
-- The state stored at the end matches the exported one — including `status`,
-  `winnerPlayerIds` and `claimedByAchievementId`, asserted separately so
-  "the game ended differently" reads as its own failure.
-- The final score matches whatever the sidecar declares, and — declared or
-  not — the winner is whoever actually has the most points.
+- The state stored at the end matches the exported one — with `status` and
+  `winnerPlayerIds` asserted separately so "the game ended differently" reads
+  as its own failure.
+- The declared winners and scores match, the replay scores what the export
+  scores, and nobody who conceded is among the winners.
 - The stored row is shaped the way that game's write path stores it (gzipped
-  for an enforced game), and its `game_state_meta` projection matches
-  (issue #451).
-- The game's first action is refused (403) when submitted by another seat.
-- A direct client `UPDATE` of `game_state` is refused by RLS for an enforced
-  game and allowed for a client-trusted one
-  (`0026_rule_enforcement_flag.sql`).
+  for an enforced game), and its `game_state_meta` projection matches.
+- The game's first action is refused (403) when submitted by another seat or
+  by a signed-in user with no seat, and a direct client `UPDATE` of
+  `game_state` is refused by RLS for an enforced game and allowed for a
+  client-trusted one (`0001_baseline.sql` section 7).
 
 ## What is inferred, and how to override it
 
 An export carries the `GameState` only, so the `games`/`players` rows around it
-are reconstructed from it (see `reconstructRoom` in `loadFixtures.ts`): seats
-and their auth users come from `state.players`, the map settings are recovered
-from the action history, and `ruleEnforcementEnabled` is forced on — replaying
-through the Edge Functions is the whole point, and a client-trusted game would
-not exercise a line of enforcement.
+are reconstructed from it (`reconstructRoom` in `loadFixtures.ts`): seats and
+their auth users come from `state.players` (in seat order), the room's
+`game_type` and pinned `settings.rulesVersion` from `state.gameType` /
+`state.rulesVersion` (so a fixture can be of any game registered in
+`src/games/registry.ts`, at any rules version still registered there), and the
+settings genesis depends on — the game's options, `hiddenInformationEnabled` —
+are carried on the state itself. `ruleEnforcementEnabled` defaults to on.
 
 Every fixture verifies itself at load: the reconstructed genesis is replayed
 through the engine and must reproduce the exported state exactly. If it can't,
-the loader says so and names the fix — add a sidecar next to the export:
+the loader says so and names the fix — add or extend the sidecar:
 
 ```jsonc
 // my-game.room.json  (sits beside my-game.json)
 {
+  "name": "A readable room name",
   "createdBy": "<auth user id of the room owner>",
   "admins": ["<auth user id>"],
-  "settings": { "mapTemplateId": "classic" },
+  "settings": { "ruleEnforcementEnabled": false },
   "userIdByPlayerId": { "<engine player id>": "<auth user id>" },
-  "expected": { "finalScores": { "<display name>": 174 }, "winners": ["<display name>"] }
+  "expected": { "winners": ["<display name>"], "finalScores": { "<display name>": 12 } }
 }
 ```
 
-The loader works out "build alone" games and preset-board games from the
-history on its own — `blue-beats-red` needed no settings beyond its write
-path — so reach for `settings` only when the load-time check says to.
-
 `admins` is the one to reach for if a replay is refused with *"Submitting this
-action would discard another player's undone move"*: that action was made in
-production by the room owner or a site admin with room admin mode on, so the
-replay needs to know who that was.
+action would discard another player's undone move"*: that action was made by
+the room owner or a site admin with room admin mode on, so the replay needs to
+know who that was. (The room owner is also treated as an admin by
+`productionGames.test.ts`.)
+
+## The checked-in games
+
+The three games here are for the example game ("Unique Pick",
+`@game-platform/unique-pick`)
+and were generated by `generateExampleFixtures.ts`, not recorded from real
+play — each one scripted move by move through the real engine, then encoded
+with the app's own `encodeGameStateExport`, with realistic fixed timestamps:
+
+| Fixture | Write path | What it covers |
+| --- | --- | --- |
+| `two-player-live-win` | client-trusted | a short live game played straight to the target score |
+| `three-player-async-undo-concede` | rule-enforced | a changed pick, an undo + redo, an undo followed by a different move, a concede |
+| `three-player-hidden-picks` | rule-enforced + hidden information | secret picks, a changed pick while the round is open, room admin mode on and off |
+
+To regenerate them — after a rules change the load-time check reports, say —
+run:
+
+```bash
+node scripts/generate-example-fixtures.mjs
+```
+
+That script loads `generateExampleFixtures.ts` through Vite and writes each
+`<name>.json` and `<name>.room.json` here. Replacing the example game means
+replacing these (and `gameScores.ts`); real exports of the new game can
+simply be dropped in instead.
 
 ## Privacy
 
-These files are committed to the repository. An export contains display names
-and auth user ids of everyone who played, plus the full game. Only add games
-whose players are fine with that, and use a sidecar's `userIdByPlayerId` to
-substitute placeholder ids if not.
+These files are committed to the repository. A real export contains display
+names and auth user ids of everyone who played, plus the full game. Only add
+games whose players are fine with that, and use a sidecar's
+`userIdByPlayerId` to substitute placeholder ids if not.
 
 Display names have no sidecar override — they're baked into the gzipped
 `GameState` itself (`players[].displayName`), unlike auth ids. To anonymize
 one, decode `gameStateZipped` (`decodeGameStateExport`), rewrite
-`state.players[].displayName`, and re-encode with `gzipToBase64` before
-committing, then update the sidecar's `name`/`expected` to match — the
-checked-in fixtures use placeholders (`Player A`, `Player B`, …) rather than
-real display names for exactly this reason.
+`state.players[].displayName`, and re-encode with `encodeGameStateExport`
+before committing, then update the sidecar's `name`/`expected` to match.

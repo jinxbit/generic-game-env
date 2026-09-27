@@ -1,6 +1,5 @@
 import { gunzipFromBase64, gzipToBase64 } from './gzip'
-import type { GameState as EngineGameState } from '../engine/types'
-
+import type { GameState as EngineGameState } from '@game-platform/sdk'
 /**
  * Debug export format for pasting a game state into a bug report or chat, or
  * saving it as a `.json` file (see GamePage.tsx's "Copy JSON" / "Copy game
@@ -8,12 +7,12 @@ import type { GameState as EngineGameState } from '../engine/types'
  * A plain JSON object so it opens in any editor/JSON viewer and round-trips
  * through `JSON.parse`; only the game state itself is gzip-compressed and
  * base64-encoded (as `gameStateZipped`), since that's what dominates the
- * size — a full game state is tens of KB pretty-printed.
+ * size.
  * `schema`/`version` let a decoder recognize and validate the file before
  * trusting its contents, and give room to change the encoding later without
  * breaking old exports.
  */
-export const GAME_STATE_EXPORT_SCHEMA = 'rise-and-fall/game-state-export'
+export const GAME_STATE_EXPORT_SCHEMA = 'game-platform/game-state-export'
 export const GAME_STATE_EXPORT_VERSION = 1
 
 /** The on-disk/on-clipboard shape: a real JSON object, not a custom prefix + blob. */

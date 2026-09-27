@@ -183,10 +183,46 @@ describe('GameOverviewCard', () => {
   })
 
   function emptySummary(): GameCardSummary {
-    return { playerRange: null, mapBuildStyle: null, moduleNames: [], roundNumber: null }
+    return { gameTitle: 'Unique Pick', playerRange: null, optionsSummary: null, turnLabel: null }
   }
 
-  it('shows the player range and map build style on a joinable card', () => {
+  it("shows which game the room plays, before and after it starts, and once it's finished", () => {
+    const { rerender } = render(
+      <ul>
+        <GameOverviewCard
+          name="Test room"
+          phase="Not started"
+          players={[]}
+          pendingPlayerIds={[]}
+          isMyTurn={false}
+          isFinished={false}
+          updatedAt="Updated just now"
+          summary={{ ...emptySummary(), playerRange: '2–4 players' }}
+          onOpen={() => {}}
+        />
+      </ul>,
+    )
+    expect(screen.getByText('Unique Pick')).toBeInTheDocument()
+
+    rerender(
+      <ul>
+        <GameOverviewCard
+          name="Test room"
+          phase="Finished"
+          players={[]}
+          pendingPlayerIds={[]}
+          isMyTurn={false}
+          isFinished
+          updatedAt="Updated 2d ago"
+          summary={{ ...emptySummary(), gameTitle: 'retired-game', turnLabel: 'Turn 4' }}
+          onOpen={() => {}}
+        />
+      </ul>,
+    )
+    expect(screen.getByText('retired-game')).toBeInTheDocument()
+  })
+
+  it('shows the player range and options summary on a joinable card', () => {
     render(
       <ul>
         <GameOverviewCard
@@ -198,36 +234,36 @@ describe('GameOverviewCard', () => {
           isFinished={false}
           isJoinable
           updatedAt="Updated just now"
-          summary={{ ...emptySummary(), playerRange: '2–4 players', mapBuildStyle: 'Interactive (built together)' }}
+          summary={{ ...emptySummary(), playerRange: '2–4 players', optionsSummary: 'First to 12 · max 10 rounds' }}
           onOpen={() => {}}
         />
       </ul>,
     )
 
-    expect(screen.getByText('2–4 players · Interactive (built together)')).toBeInTheDocument()
+    expect(screen.getByText('2–4 players · First to 12 · max 10 rounds')).toBeInTheDocument()
   })
 
-  it('shows the modules (active Tales) whenever any are set', () => {
+  it('shows the options summary alone when there is no player range', () => {
     render(
       <ul>
         <GameOverviewCard
           name="Test room"
-          phase="In progress"
+          phase="Not started"
           players={[]}
           pendingPlayerIds={[]}
           isMyTurn={false}
           isFinished={false}
           updatedAt="Updated just now"
-          summary={{ ...emptySummary(), moduleNames: ['The Capital', 'The Ports'] }}
+          summary={{ ...emptySummary(), optionsSummary: 'First to 12 · max 10 rounds' }}
           onOpen={() => {}}
         />
       </ul>,
     )
 
-    expect(screen.getByText('Modules: The Capital, The Ports')).toBeInTheDocument()
+    expect(screen.getByText('First to 12 · max 10 rounds')).toBeInTheDocument()
   })
 
-  it('shows the round number alongside plain player names (no score summary — issue #441)', () => {
+  it('shows the turn label alongside plain player names', () => {
     render(
       <ul>
         <GameOverviewCard
@@ -238,7 +274,7 @@ describe('GameOverviewCard', () => {
           isMyTurn={false}
           isFinished={false}
           updatedAt="Updated just now"
-          summary={{ ...emptySummary(), roundNumber: 3 }}
+          summary={{ ...emptySummary(), turnLabel: 'Round 3' }}
           onOpen={() => {}}
         />
       </ul>,
@@ -248,7 +284,7 @@ describe('GameOverviewCard', () => {
     expect(screen.getByText((_, el) => el?.textContent === 'Alice, Bob')).toBeInTheDocument()
   })
 
-  it('hides the round number once finished', () => {
+  it('hides the turn label once finished', () => {
     render(
       <ul>
         <GameOverviewCard
@@ -259,7 +295,7 @@ describe('GameOverviewCard', () => {
           isMyTurn={false}
           isFinished
           updatedAt="Updated 2d ago"
-          summary={{ ...emptySummary(), roundNumber: 8 }}
+          summary={{ ...emptySummary(), turnLabel: 'Round 8' }}
           onOpen={() => {}}
         />
       </ul>,
@@ -284,6 +320,8 @@ describe('GameOverviewCard', () => {
       </ul>,
     )
 
-    expect(screen.queryByText(/Modules:/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Round /)).not.toBeInTheDocument()
+    expect(screen.queryByText(/players$/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Unique Pick')).not.toBeInTheDocument()
   })
 })

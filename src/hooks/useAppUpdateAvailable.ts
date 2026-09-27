@@ -6,7 +6,7 @@ const CHECK_INTERVAL_MS = 5 * 60 * 1000
  * Polls the deployed build's version.json in the background and reports
  * when it no longer matches the build this tab loaded, so the UI can offer
  * a reload instead of the player only finding out something's stale when
- * an action starts erroring mid-session (issue #247).
+ * an action starts erroring mid-session.
  */
 export function useAppUpdateAvailable(): boolean {
   const [updateAvailable, setUpdateAvailable] = useState(false)

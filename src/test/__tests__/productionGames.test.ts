@@ -1,7 +1,8 @@
 // @vitest-environment node
 //
-// Replays real games, exported from production, against the
-// production-simulating Supabase stack (src/test/supabaseStack/).
+// Replays recorded games — exports in the app's own "Copy game export"
+// format — against the production-simulating Supabase stack
+// (src/test/supabaseStack/).
 //
 // Every game export dropped into src/test/fixtures/productionGames/ becomes a
 // suite here automatically — no registration step. What each one asserts is
@@ -9,7 +10,7 @@
 // actually submitted it, through the real apply-action/undo-action/
 // redo-action Edge Functions, against a database that enforces the same RLS
 // and the same optimistic-concurrency contract production does — and that the
-// state that lands in `game_state` at the end is the state production
+// state that lands in `game_state` at the end is the state the game
 // finished with, down to the winner.
 //
 // That makes these regression tests for the whole write path at once. A rules
@@ -23,7 +24,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { CompressedGameState, StoredGameState } from '../../lib/gameStateCompression.ts'
 import { loadProductionGameFixtures } from '../fixtures/productionGames/loadFixtures.ts'
 import { createProductionStack, type ProductionStack } from '../supabaseStack/index.ts'
-import { expectedFinalState, normalizeForComparison, replayFixtureThroughStack } from '../supabaseStack/replayFixture.ts'
+import { normalizeForComparison, replayFixtureThroughStack } from '../supabaseStack/replayFixture.ts'
 
 const fixtures = await loadProductionGameFixtures()
 
@@ -60,20 +61,20 @@ describe('production game replays', () => {
 
     afterEach(() => stack?.dispose())
 
-    it('replays the whole game through the Edge Functions and ends where production ended', async () => {
+    it('replays the whole game through its own write path and ends where the recording ended', async () => {
       await seedGame()
 
       const outcome = await replayFixtureThroughStack(stack, fixture)
 
       const stored = await stack.readGameState(fixture.players[0].user_id, fixture.game.id)
       expect(stored?.version).toBe(outcome.version)
-      expect(normalizeForComparison(stored!.state)).toEqual(normalizeForComparison(expectedFinalState(fixture, outcome)))
+      expect(outcome.version).toBe(fixture.finalState.actionHistory.length)
+      expect(normalizeForComparison(stored!.state)).toEqual(normalizeForComparison(fixture.finalState))
       // Stated separately from the deep equality above so a divergence in how
       // the game *ended* reads as its own failure rather than a diff of the
       // entire board.
       expect(stored!.state.status).toBe(fixture.finalState.status)
       expect(stored!.state.winnerPlayerIds).toEqual(fixture.finalState.winnerPlayerIds)
-      expect(stored!.state.claimedByAchievementId).toEqual(fixture.finalState.claimedByAchievementId)
     }, REPLAY_TIMEOUT_MS)
 
     it('stores the game the way its own write path stores it, with a matching meta projection', async () => {
@@ -91,12 +92,18 @@ describe('production game replays', () => {
 
       // Either way the trigger has to be able to read status/turn straight off
       // the stored JSON — the plaintext keys beside the gzip blob exist for
-      // exactly this (issue #451).
-      const meta = stack.db.table<{ status: string; turn: number; version: number }>('game_state_meta')[0]
-      expect(meta).toMatchObject({ status: fixture.finalState.status, turn: fixture.finalState.turn, version: stored.version })
+      // exactly this.
+      const meta = stack.db.table<{ status: string; phase: string | null; turn: number; version: number; pending_player_ids: string[] }>('game_state_meta')[0]
+      expect(meta).toMatchObject({
+        status: fixture.finalState.status,
+        phase: fixture.finalState.phase,
+        turn: fixture.finalState.turn,
+        version: stored.version,
+        pending_player_ids: fixture.finalState.status === 'active' ? fixture.finalState.pendingPlayerIds : [],
+      })
     }, REPLAY_TIMEOUT_MS)
 
-    it('ends on the final score production recorded', async () => {
+    it('ends on the result the sidecar declares', async () => {
       await seedGame()
       await replayFixtureThroughStack(stack, fixture)
       const stored = await stack.readGameState(fixture.players[0].user_id, fixture.game.id)
@@ -119,18 +126,10 @@ describe('production game replays', () => {
       }
 
       // True of every game, declared or not: the replay scores what the export
-      // scores, and whoever the game recorded as winning is whoever actually
-      // has the most points (there is no tiebreaker — see determineWinners).
+      // scores, and nobody who left the game is among its winners.
       expect(scores).toEqual(fixture.finalScores(fixture.finalState))
-      if (stored!.state.status === 'completed') {
-        const best = Math.max(...Object.values(scores))
-        expect(stored!.state.winnerPlayerIds.map((id) => fixture.describePlayer(id)).sort()).toEqual(
-          Object.entries(scores)
-            .filter(([, score]) => score === best)
-            .map(([playerId]) => fixture.describePlayer(playerId))
-            .sort(),
-        )
-      }
+      const eliminated = new Set(stored!.state.players.filter((player) => player.eliminated).map((player) => player.id))
+      expect(stored!.state.winnerPlayerIds.filter((id) => eliminated.has(id))).toEqual([])
     }, REPLAY_TIMEOUT_MS)
 
     it('refuses the game’s first action from a signed-in user who is not seated in it', async () => {
@@ -139,15 +138,15 @@ describe('production game replays', () => {
       const first = fixture.finalState.actionHistory[0]
 
       if (fixture.game.settings.ruleEnforcementEnabled && first.action.type !== 'UNDO_ACTION' && first.action.type !== 'REDO_ACTION') {
-        // §4.1: live/async needs an exact (game, seat, caller) match, and even
+        // Live/async needs an exact (game, seat, caller) match, and even
         // hotseat's blanket "any seat" only extends to players enrolled in
-        // that game.
+        // that game (isAuthorizedToActAs, gameEnforcement.ts).
         const result = await stack.applyAction('auth-user-not-in-this-game', fixture.game.id, first.action)
         expect(result).toMatchObject({ ok: false, status: 403 })
       }
 
       // And the direct write path is closed to them too, enforced or not —
-      // 0001_init_schema.sql's update policy has always required a seat.
+      // 0001_baseline.sql section 7's update policy requires a seat.
       const { data } = await stack
         .clientFor('auth-user-not-in-this-game')
         .from('game_state')
@@ -167,7 +166,7 @@ describe('production game replays', () => {
       const isSeatAction = first.action.type !== 'UNDO_ACTION' && first.action.type !== 'REDO_ACTION' && first.action.type !== 'SET_ADMIN_MODE'
       if (!impostor || !isSeatAction) {
         // A hotseat game (every seat is one auth user) has nobody to
-        // impersonate — §4.1 explicitly scopes hotseat out — and a first entry
+        // impersonate — hotseat is scoped out of per-seat checks — and a first entry
         // that isn't a seat's own action is authorized by a different rule
         // (any seated player may move the pointer; only the owner/an admin may
         // toggle admin mode). Nothing to assert either way.
@@ -175,10 +174,12 @@ describe('production game replays', () => {
       }
       const result = await stack.applyAction(impostor.user_id, fixture.game.id, first.action)
       expect(result).toMatchObject({ ok: false, status: 403 })
-      expect((await stack.readGameState(impostor.user_id, fixture.game.id))?.version).toBe(0)
+      // Straight off the table: a hidden-information game's row is invisible
+      // to a non-admin's direct read (0001_baseline.sql section 8).
+      expect(stack.db.table<{ version: number }>('game_state')[0].version).toBe(0)
     })
 
-    it('gates direct client writes on the game’s own enforcement setting (0026)', async () => {
+    it('gates direct client writes on the game’s own enforcement setting (0001_baseline.sql section 7)', async () => {
       await seedGame()
       const { data, error } = await stack
         .clientFor(fixture.players[0].user_id)

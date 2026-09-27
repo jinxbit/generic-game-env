@@ -6,7 +6,7 @@ import { updatePassword } from '../lib/auth'
 import { simpleError, toAppError, type AppError } from '../lib/errors'
 
 /**
- * Landing page for the "forgot password" email link (issue #386). Supabase's
+ * Landing page for the "forgot password" email link. Supabase's
  * redirect carries a recovery token in the URL that the client picks up
  * automatically (`detectSessionInUrl`, on by default) and turns into a
  * short-lived session — `updatePassword` just needs *some* active session,

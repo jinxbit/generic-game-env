@@ -1,8 +1,8 @@
-// Admin screen (issue #676) for importing a pasted game state export
+// Admin screen for importing a pasted game state export
 // (src/lib/gameStateExport.ts, GamePage.tsx's "Copy game export") into a
 // brand-new hotseat room the importing admin owns — lets an admin reproduce
 // a reported game without direct Supabase access or the reporter's account.
-// Gated the same way AdminMapsPage.tsx/AdminRoomsPage.tsx gate (useIsAdmin,
+// Gated the same way AdminRoomsPage.tsx gates (useIsAdmin,
 // backed by the is_admin column) — there's no roles system beyond that
 // single flag, and this is a UI-only restriction (see
 // importGameExportAsHotseat's doc comment for the RLS it actually relies on).
@@ -71,7 +71,7 @@ export function AdminImportPage() {
       <textarea
         value={exportText}
         onChange={(e) => setExportText(e.target.value)}
-        placeholder='{"schema": "rise-and-fall/game-state-export", ...}'
+        placeholder='{"schema": "game-platform/game-state-export", ...}'
         rows={10}
         className="w-full rounded-md border border-neutral-700 bg-neutral-900 p-3 font-mono text-xs text-neutral-200"
       />

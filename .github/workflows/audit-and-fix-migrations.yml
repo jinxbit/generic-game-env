@@ -1,42 +1,51 @@
 name: Audit and Fix Supabase Migrations
 
-# The earlier "Repair Supabase Migration History" workflow marked all 25
-# local migrations as applied based on a handful of spot-checked tables
-# (profiles.is_admin, map_pool, games.settings, observers absent). That
-# sample missed 0020_push_subscriptions.sql, which was never actually run
-# despite being marked applied — the app didn't notice until "Turn off"
-# hit PostgREST error PGRST205 ("Could not find the table
-# 'public.push_subscriptions' in the schema cache").
+# Verifies that the live project's `public` schema actually contains what
+# supabase/migrations/ says it should, rather than trusting the migration
+# history table. (That trust has failed before: a migration once sat marked
+# "applied" without ever having run, and nothing noticed until PostgREST
+# answered PGRST205 "Could not find the table ... in the schema cache".)
 #
-# This workflow checks every migration's actual effect (not a sample) by
-# dumping the live public schema and grepping for one solid, migration-file-
-# specific marker per migration (a table, a uniquely-named constraint/
-# index/trigger, or a policy name) — chosen so its presence proves the
-# whole migration file committed, since Supabase runs each migration file
-# in its own transaction. A handful of superseded/pure-cleanup migrations
-# (0002, 0004, 0006, 00051 — folded into games.settings by 0007; 0010,
-# 0014, 0019 — superseded by 0021) are intentionally not checked
-# individually; their effect is fully captured by checking the migration
-# that superseded them.
+# The migration set is a single baseline, 0001_baseline.sql. This workflow
+# dumps the live public schema and greps for one solid marker per key object
+# the baseline creates (a table, a uniquely-named constraint/index/trigger/
+# function, a column, or a policy name), one row per section of the
+# baseline, so a report shows *which part* is missing rather than just
+# "0001: missing". It also checks that objects from the pre-squash schema
+# that the baseline deliberately no longer has are absent; those rows are
+# report-only (fix version "-"), because the right fix for a leftover table
+# is a human decision, not a re-run of the baseline.
 #
 # Patterns are matched against `supabase db dump`'s actual output, not
 # assumed formatting — pg_dump double-quotes every identifier
 # ("public"."games", "settings" "jsonb") and Postgres silently truncates
-# identifiers over 63 bytes (0021's full policy name did), both of which
-# broke an earlier version of this audit and produced false positives on
-# 0001/0005/0007/0016/0021/0023 (confirmed by re-running against a real
-# dump). Verify any future pattern change against real dump output before
-# trusting it — a plausible-looking pattern is not the same as a tested one.
+# identifiers over 63 bytes (a policy name in the old migration chain was
+# cut off exactly that way). Both broke an earlier version of this audit and
+# produced false positives, confirmed by re-running against a real dump.
+# Every policy name in the baseline is at most 63 bytes, so the patterns
+# below are full names, but verify any future pattern change against real
+# dump output before trusting it — a plausible-looking pattern is not the
+# same as a tested one. In particular a table pattern must keep its closing
+# quote: "public"."game_state" without it would also match
+# "public"."game_state_meta". The column rows added with the squash
+# ("phase", "pending_player_ids", "is_admin") match the bare quoted column
+# name rather than name + type, since only "jsonb"'s quoting has been seen
+# in a real dump; those rows, like every row new with the squash, have not
+# yet been run against one.
 #
-# Always dumps + reports (read-only, safe). Only reverts tracking + re-runs
-# `db push` for migrations the audit actually found missing when
-# confirm=YES — never touches ones already confirmed present.
+# Always dumps + reports (read-only, safe). Only when confirm=YES and a
+# check with a fix version fails does it revert the baseline's tracking row
+# and re-run `db push`. The baseline is written to be re-runnable (`if not
+# exists`, `create or replace`, `drop ... if exists` before every trigger
+# and policy), so that re-creates any missing table, function, trigger,
+# index or policy — but it cannot add a missing *column* to a table that
+# already exists; a missing-column row needs a hand-written fix.
 
 on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Type YES to actually revert + re-apply any migration this audit finds missing. Leave "no" to just see the report.'
+        description: 'Type YES to revert + re-apply the baseline if this audit finds any of its objects missing. Leave "no" to just see the report.'
         required: true
         default: 'no'
 
@@ -80,44 +89,66 @@ jobs:
             echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Audit every migration against the live schema
+      - name: Audit the baseline against the live schema
         id: audit
         run: |
           set -euo pipefail
           schema=/tmp/schema.sql
           missing_versions=""
+          leftovers=no
           {
             echo "## Supabase migration audit"
             echo
-            echo "| Migration | What it should have created | Found? |"
+            echo "| Section | What 0001_baseline.sql should have created | Found? |"
             echo "|---|---|---|"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          # id|description|grep pattern|mode(present/absent)|fix versions (space-separated)
+          # id|description|grep pattern|mode(present/absent)|fix versions (space-separated, or - for report-only)
           #
           # pg_dump double-quotes every identifier ("public"."games", "settings"
-          # "jsonb") and Postgres silently truncates identifiers over 63 bytes
-          # (bit 0021's full policy name) — patterns below account for both,
-          # confirmed against a real dump rather than assumed.
+          # "jsonb") and truncates identifiers over 63 bytes — patterns below
+          # account for both. Table patterns keep their closing quote so
+          # "public"."game_state" does not also match "public"."game_state_meta".
           checks='
-          0001|table public.games|"public"."games"|present|0001
-          0003|players delete-own-row policy|users can delete their own player row|present|0003
-          0005|table public.profiles|"public"."profiles"|present|0005
-          0007|games.settings column (also covers 0002/0004/0006/00051)|"settings" "jsonb"|present|0002 0004 00051 0006 0007
-          0008|games_status_check constraint (canceled status)|games_status_check|present|0008
-          0009|games_bump_config_version trigger|games_bump_config_version|present|0009
-          0011|games_public_idx index|games_public_idx|present|0011
-          0012|games_name_length constraint|games_name_length|present|0012
-          0013|co-players webhook policy removed|co-players can read each other'"'"'s webhook url|absent|0013
-          0015|profiles.display_name column|display_name|present|0015
-          0016|table public.map_pool|"public"."map_pool"|present|0016
-          0017|profiles.is_admin column|is_admin|present|0017
-          0018|admin map-pool delete policy|admins can delete any map from the pool|present|0018
-          0020|table public.push_subscriptions|"public"."push_subscriptions"|present|0020
-          0021|current game_state select policy|seated players and any signed-in user can read non-lobby|present|0021
-          0022|profiles_unit_color_hand_format constraint|profiles_unit_color_hand_format|present|0022
-          0023|profiles.preferences column|"preferences" "jsonb"|present|0023
-          0024|admin game_state read policy|admins can read any game state|present|0024
+          helpers|set_updated_at function|"set_updated_at"|present|0001
+          profiles|table public.profiles|"public"."profiles"|present|0001
+          profiles|profiles_display_name_length constraint|profiles_display_name_length|present|0001
+          profiles|profiles.is_admin column|"is_admin"|present|0001
+          profiles|profiles.preferences column|"preferences" "jsonb"|present|0001
+          profiles|profiles_enforce_is_admin_unchanged trigger|profiles_enforce_is_admin_unchanged|present|0001
+          games|table public.games|"public"."games"|present|0001
+          games|games.settings column|"settings" "jsonb"|present|0001
+          games|games_status_check constraint (canceled status)|games_status_check|present|0001
+          games|games_name_length constraint|games_name_length|present|0001
+          games|games.game_type column + format constraint|games_game_type_format|present|0001
+          games|games_public_idx index|games_public_idx|present|0001
+          games|games_enforce_name_immutable trigger|games_enforce_name_immutable|present|0001
+          games|games_enforce_status_transition trigger (incl. start-game lockdown)|games_enforce_status_transition|present|0001
+          games|admin delete-any-game policy|admins can delete any game|present|0001
+          players|table public.players|"public"."players"|present|0001
+          players|players delete-own-row policy (hotseat)|users can delete their own player row|present|0001
+          players|games_bump_config_version trigger|games_bump_config_version|present|0001
+          players|players_enforce_ready_for_version trigger|players_enforce_ready_for_version|present|0001
+          game_state|table public.game_state|"public"."game_state"|present|0001
+          game_state_meta|table public.game_state_meta|"public"."game_state_meta"|present|0001
+          game_state_meta|game_state_meta.phase column|"phase"|present|0001
+          game_state_meta|game_state_meta.pending_player_ids column|"pending_player_ids"|present|0001
+          game_state_meta|game_state_sync_meta trigger function|"game_state_sync_meta"|present|0001
+          rule enforcement|game_state insert lockdown policy|seated players can insert game state when enforcement is off|present|0001
+          rule enforcement|game_state update lockdown policy|seated players can update game state when enforcement is off|present|0001
+          hidden information|game_state select lockdown policy|read game state when hidden information is off|present|0001
+          hidden information|admin game_state read policy|admins can read any game state|present|0001
+          push|table public.push_subscriptions|"public"."push_subscriptions"|present|0001
+          chat|table public.app_config|"public"."app_config"|present|0001
+          chat|table public.chat_messages|"public"."chat_messages"|present|0001
+          chat|chat_messages_rate_limit_trigger|chat_messages_rate_limit_trigger|present|0001
+          chat|table public.chat_read_status|"public"."chat_read_status"|present|0001
+          chat|chat_sender_display_names function|"chat_sender_display_names"|present|0001
+          pre-squash leftover|table public.map_pool absent|"public"."map_pool"|absent|-
+          pre-squash leftover|table public.observers absent|"public"."observers"|absent|-
+          pre-squash leftover|game_state_meta.round_phase column absent (renamed phase)|"round_phase"|absent|-
+          pre-squash leftover|profiles unit-colour columns absent|"unit_color_hand"|absent|-
+          pre-squash leftover|games_settings_for_listing function absent|"games_settings_for_listing"|absent|-
           '
 
           while IFS='|' read -r id desc pattern mode fixvers; do
@@ -132,29 +163,34 @@ jobs:
             if [ "$ok" = "yes" ]; then
               echo "| $id | $desc | ✅ |" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "| $id | $desc | ❌ MISSING |" >> "$GITHUB_STEP_SUMMARY"
-              missing_versions="$missing_versions $fixvers"
+              if [ "$fixvers" = "-" ]; then
+                # Report-only: re-running the baseline would not remove it.
+                echo "| $id | $desc | ⚠️ PRESENT — not auto-fixed, remove by hand after checking it holds nothing you need |" >> "$GITHUB_STEP_SUMMARY"
+                leftovers=yes
+              else
+                echo "| $id | $desc | ❌ MISSING |" >> "$GITHUB_STEP_SUMMARY"
+                missing_versions="$missing_versions $fixvers"
+              fi
             fi
           done <<< "$checks"
 
-          # Informational only, not auto-fixed (dropping it could discard real rows).
-          if grep -qF '"public"."observers"' "$schema"; then
+          if [ "$leftovers" = "yes" ]; then
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "⚠️ \`public.observers\` still exists — 0021_remove_observers.sql's table drop hasn't run even though its policy marker was found, or this is stale data. Not auto-fixed since dropping it could discard real rows; investigate before running 0021 again." >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ This project still carries objects from the schema that predates 0001_baseline.sql. The baseline neither creates nor drops them. A pre-production project is best rebuilt (rebuild-preproduction.yml); anywhere else, drop them by hand once you are sure they hold nothing you need." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          # Dedupe while preserving order, e.g. "0002 0004 00051 0006 0007 0020" -> unique list
+          # Dedupe while preserving order, e.g. "0001 0001 0001" -> "0001"
           unique_missing="$(echo "$missing_versions" | tr ' ' '\n' | awk 'NF && !seen[$0]++' | tr '\n' ' ')"
           echo "missing=$unique_missing" >> "$GITHUB_OUTPUT"
 
           echo "" >> "$GITHUB_STEP_SUMMARY"
           if [ -z "$(echo "$unique_missing" | tr -d '[:space:]')" ]; then
-            echo "**Result: every checked migration is present. Nothing to fix.**" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Result: every checked object is present. Nothing to re-apply.**" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "**Result: missing migrations →** \`$unique_missing\`" >> "$GITHUB_STEP_SUMMARY"
             if [ "${{ github.event.inputs.confirm }}" != "YES" ]; then
               echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "Re-run with confirm=YES to revert their tracking status and apply them for real." >> "$GITHUB_STEP_SUMMARY"
+              echo "Re-run with confirm=YES to revert the baseline's tracking status and re-apply it (it is re-runnable; missing columns on existing tables still need a hand-written fix)." >> "$GITHUB_STEP_SUMMARY"
             fi
           fi
 

@@ -1,28 +1,22 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ErrorBanner } from '../components/ErrorBanner'
-import { GameLengthSelector } from '../components/GameLengthSelector'
-import { MapModeSelector, type MapMode, type MapPoolChoice, type SoloBuilderSelection, type SoloBuilderUnitOrder } from '../components/MapModeSelector'
 import { PlayModeSelector } from '../components/PlayModeSelector'
-import { TaleSelector } from '../components/TaleSelector'
+import { listGames, type PlayMode } from '@game-platform/sdk'
+import { gameUiFor } from '../games/ui'
 import { useAuth } from '../hooks/useAuth'
 import { useDisplayName } from '../hooks/useDisplayName'
 import { createGame, MAX_PLAYERS } from '../lib/gameApi'
-import {
-  hiddenInformationAvailable as computeHiddenInformationAvailable,
-  lockRevealedInformationAvailable as computeLockRevealedInformationAvailable,
-} from '../lib/hiddenInformationEligibility'
+import { hiddenInformationAvailable as computeHiddenInformationAvailable } from '../lib/hiddenInformationEligibility'
 import { randomRoomName } from '../lib/randomRoomName'
 import { toAppError, type AppError } from '../lib/errors'
-import type { PlayMode } from '../engine/types'
-
-// Rule enforcement and hidden-information-hiding are both mandatory for
-// every game created through this page now (issue #552) — there is no
-// creator-facing opt-out, unlike the earlier checked-by-default checkboxes
-// (issues #432/#481). See CLAUDE.md's "two write paths" section: the
-// client-trusted path and hiddenInformationEnabled: false still exist for
-// games that predate this, so createGame()'s own defaults are unchanged.
+// Rule enforcement and hidden information are both on for every game
+// created through this page — there is no creator-facing opt-out. See
+// CLAUDE.md's "two write paths" section: the client-trusted path and
+// hiddenInformationEnabled: false still exist for other callers (tests,
+// imports), so createGame()'s own defaults are unchanged.
 const RULE_ENFORCEMENT_ENABLED = true
+
 
 export function CreateGamePage() {
   const { session, loading } = useAuth()
@@ -31,48 +25,48 @@ export function CreateGamePage() {
 
   const [name, setName] = useState(() => randomRoomName())
   const [playMode, setPlayMode] = useState<PlayMode>('async')
-  const [mapMode, setMapMode] = useState<MapMode>('buildAlone')
-  const [mapChoice, setMapChoice] = useState<MapPoolChoice | null>(null)
-  const [soloBuilderSelection, setSoloBuilderSelection] = useState<SoloBuilderSelection>('owner')
-  const [soloBuilderUnitOrder, setSoloBuilderUnitOrder] = useState<SoloBuilderUnitOrder>('last')
   const [skipHotseatPassGate, setSkipHotseatPassGate] = useState(true)
-  const [lockRevealedInformationEnabled, setLockRevealedInformationEnabled] = useState(true)
-  const [activeTaleIds, setActiveTaleIds] = useState<string[]>([])
-  const [gameLength, setGameLength] = useState(4)
-  const [minPlayersInput, setMinPlayersInput] = useState('2')
-  const [maxPlayersInput, setMaxPlayersInput] = useState('8')
+  // The deployment's registered games (src/games/registry.ts). With one, the
+  // picker below isn't shown at all — a single-game site.
+  const games = listGames()
+  const [gameType, setGameType] = useState(games[0].id)
+  const gameDefinition = games.find((g) => g.id === gameType) ?? games[0]
+  const gameUi = gameUiFor(gameDefinition.id)
+  /** Seats the game allows, capped by how many distinct player colours there are. */
+  const maxSeats = Math.min(gameDefinition.maxPlayers, MAX_PLAYERS)
+  const [gameOptions, setGameOptions] = useState<unknown>(gameDefinition.defaultOptions)
+  const [minPlayersInput, setMinPlayersInput] = useState(String(gameDefinition.minPlayers))
+  const [maxPlayersInput, setMaxPlayersInput] = useState(String(maxSeats))
+
+  /** Switching games resets everything that belongs to the previous one. */
+  function chooseGame(id: string) {
+    const next = games.find((g) => g.id === id)
+    if (!next) return
+    setGameType(next.id)
+    setGameOptions(next.defaultOptions)
+    setMinPlayersInput(String(next.minPlayers))
+    setMaxPlayersInput(String(Math.min(next.maxPlayers, MAX_PLAYERS)))
+  }
   const [visibility, setVisibility] = useState<'public' | 'private'>('public')
   const [error, setError] = useState<AppError | null>(null)
   const [busy, setBusy] = useState(false)
 
-  // A selected saved map is built for one exact player count, not a
-  // range (issue #166) — while one's active, it overrides the free-typed
-  // min/max fields below rather than coexisting with them.
-  const minPlayers = mapChoice ? mapChoice.playerCount : Number(minPlayersInput)
-  const maxPlayers = mapChoice ? mapChoice.playerCount : Number(maxPlayersInput)
-  const minPlayersValid = mapChoice !== null || (/^\d+$/.test(minPlayersInput.trim()) && minPlayers >= 1)
-  const maxPlayersValid = mapChoice !== null || (/^\d+$/.test(maxPlayersInput.trim()) && maxPlayers >= 1 && maxPlayers <= MAX_PLAYERS)
+  const minPlayers = Number(minPlayersInput)
+  const maxPlayers = Number(maxPlayersInput)
+  const minPlayersValid = /^\d+$/.test(minPlayersInput.trim()) && minPlayers >= gameDefinition.minPlayers
+  const maxPlayersValid = /^\d+$/.test(maxPlayersInput.trim()) && maxPlayers >= 1 && maxPlayers <= maxSeats
   const playerCountValid = minPlayersValid && maxPlayersValid && maxPlayers >= minPlayers
   const playerCountError = !minPlayersValid
-    ? `Min players must be a whole number of at least 1.`
+    ? `Min players must be a whole number of at least ${gameDefinition.minPlayers}.`
     : !maxPlayersValid
-      ? `Max players must be a whole number between 1 and ${MAX_PLAYERS}.`
+      ? `Max players must be a whole number between 1 and ${maxSeats}.`
       : maxPlayers < minPlayers
         ? `Max players can't be lower than min players.`
         : null
 
-  // Rule enforcement is always on now (see RULE_ENFORCEMENT_ENABLED above),
-  // so this is unavailable only for hotseat (src/lib/hiddenInformationEligibility.ts)
-  // — hiding in-progress picks is otherwise always on too, with no
-  // creator-facing checkbox (issue #552).
+  // Rule enforcement is always on (see RULE_ENFORCEMENT_ENABLED above), so
+  // this is unavailable only for hotseat (src/lib/hiddenInformationEligibility.ts).
   const hiddenInformationAvailable = computeHiddenInformationAvailable(playMode, RULE_ENFORCEMENT_ENABLED)
-  // See hiddenInformationEligibility.ts: only meaningful once hidden
-  // information itself is actually on, which now just means "not hotseat."
-  // The checkbox stays visually checked/unchecked as the player left it (so
-  // switching away from hotseat restores their choice) but is disabled, and
-  // never actually submitted, otherwise. Defaults to checked (issue #552,
-  // superseding issue #529's opt-in default).
-  const lockRevealedInformationAvailable = computeLockRevealedInformationAvailable(hiddenInformationAvailable)
 
   if (loading) {
     return <div className="p-8 text-neutral-400">Loading…</div>
@@ -102,19 +96,11 @@ export function CreateGamePage() {
         userId: user.id,
         displayName,
         avatarUrl,
-        mapTemplateId: null,
-        mapPoolBoard: mapChoice?.board ?? null,
-        mapPoolMapId: mapChoice?.mapId ?? null,
-        mapPoolRandomAtStart: mapMode === 'blind',
-        soloBuildMap: mapMode === 'buildAlone',
-        soloBuilderSelection,
-        soloBuilderUnitOrder,
+        gameType: gameDefinition.id,
+        gameOptions,
         skipHotseatPassGate,
         ruleEnforcementEnabled: RULE_ENFORCEMENT_ENABLED,
         hiddenInformationEnabled: hiddenInformationAvailable,
-        lockRevealedInformationEnabled: lockRevealedInformationAvailable && lockRevealedInformationEnabled,
-        activeTaleIds,
-        gameLength,
         minPlayers,
         maxPlayers,
         visibility,
@@ -162,61 +148,57 @@ export function CreateGamePage() {
             Don&apos;t show a &quot;pass the device&quot; message every turn
           </label>
         )}
-        <h3 className="text-sm font-medium text-neutral-400">Game length</h3>
-        <GameLengthSelector value={gameLength} onChange={setGameLength} />
-        <h3 className="text-sm font-medium text-neutral-400">Players</h3>
-        {mapMode === 'select' ? (
-          <p className="text-xs text-neutral-500">Set by the player count picked below, under Map.</p>
-        ) : (
-          <div className="flex gap-4">
-            <label className="flex flex-col gap-1 text-sm text-neutral-400">
-              Min players
-              <input
-                type="number"
-                inputMode="numeric"
-                value={minPlayersInput}
-                onChange={(e) => setMinPlayersInput(e.target.value)}
-                className={`w-14 rounded-md border bg-neutral-900 px-3 py-2 text-center text-neutral-100 ${
-                  minPlayersValid ? 'border-neutral-700' : 'border-red-500'
-                }`}
-              />
-            </label>
-            <label className="flex flex-col gap-1 text-sm text-neutral-400">
-              Max players
-              <input
-                type="number"
-                inputMode="numeric"
-                value={maxPlayersInput}
-                onChange={(e) => setMaxPlayersInput(e.target.value)}
-                className={`w-14 rounded-md border bg-neutral-900 px-3 py-2 text-center text-neutral-100 ${
-                  maxPlayersValid && maxPlayers >= minPlayers ? 'border-neutral-700' : 'border-red-500'
-                }`}
-              />
-            </label>
-          </div>
+        {games.length > 1 && (
+          <label className="flex flex-col gap-1 text-sm text-neutral-400">
+            Game
+            <select
+              value={gameType}
+              onChange={(e) => chooseGame(e.target.value)}
+              className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-neutral-100"
+            >
+              {games.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.title}
+                </option>
+              ))}
+            </select>
+            {gameUi && <span className="text-xs text-neutral-500">{gameUi.tagline}</span>}
+          </label>
         )}
-        {mapChoice && <p className="text-xs text-neutral-500">Locked to {mapChoice.playerCount} players by the selected map.</p>}
-        {playerCountError && <p className="text-sm text-red-400">{playerCountError}</p>}
-        <h3 className="text-sm font-medium text-neutral-400">Variants</h3>
-        <div className="flex flex-col gap-3 rounded-md border border-neutral-800 p-3">
-          <MapModeSelector
-            mode={mapMode}
-            onModeChange={setMapMode}
-            mapChoice={mapChoice}
-            onMapChoiceChange={setMapChoice}
-            initialPlayerCount={playerCountValid ? minPlayers : 2}
-            soloBuilderSelection={soloBuilderSelection}
-            onSoloBuilderSelectionChange={setSoloBuilderSelection}
-            soloBuilderUnitOrder={soloBuilderUnitOrder}
-            onSoloBuilderUnitOrderChange={setSoloBuilderUnitOrder}
-          />
-          <details>
-            <summary className="cursor-pointer text-sm font-medium text-neutral-400">Tales</summary>
-            <div className="mt-3">
-              <TaleSelector value={activeTaleIds} onChange={setActiveTaleIds} />
-            </div>
-          </details>
+        {gameUi && (
+          <>
+            <h3 className="text-sm font-medium text-neutral-400">{gameDefinition.title} options</h3>
+            <gameUi.OptionsEditor value={gameOptions} onChange={setGameOptions} />
+          </>
+        )}
+        <h3 className="text-sm font-medium text-neutral-400">Players</h3>
+        <div className="flex gap-4">
+          <label className="flex flex-col gap-1 text-sm text-neutral-400">
+            Min players
+            <input
+              type="number"
+              inputMode="numeric"
+              value={minPlayersInput}
+              onChange={(e) => setMinPlayersInput(e.target.value)}
+              className={`w-14 rounded-md border bg-neutral-900 px-3 py-2 text-center text-neutral-100 ${
+                minPlayersValid ? 'border-neutral-700' : 'border-red-500'
+              }`}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm text-neutral-400">
+            Max players
+            <input
+              type="number"
+              inputMode="numeric"
+              value={maxPlayersInput}
+              onChange={(e) => setMaxPlayersInput(e.target.value)}
+              className={`w-14 rounded-md border bg-neutral-900 px-3 py-2 text-center text-neutral-100 ${
+                maxPlayersValid && maxPlayers >= minPlayers ? 'border-neutral-700' : 'border-red-500'
+              }`}
+            />
+          </label>
         </div>
+        {playerCountError && <p className="text-sm text-red-400">{playerCountError}</p>}
         <label className="flex items-center gap-2 text-sm text-neutral-400">
           <input
             type="checkbox"
@@ -225,16 +207,6 @@ export function CreateGamePage() {
             className="h-4 w-4 rounded border-neutral-700 bg-neutral-900"
           />
           List this room on the Public rooms screen
-        </label>
-        <label className={`flex items-center gap-2 text-sm ${lockRevealedInformationAvailable ? 'text-neutral-400' : 'text-neutral-600'}`}>
-          <input
-            type="checkbox"
-            checked={lockRevealedInformationEnabled}
-            disabled={!lockRevealedInformationAvailable}
-            onChange={(e) => setLockRevealedInformationEnabled(e.target.checked)}
-            className="h-4 w-4 rounded border-neutral-700 bg-neutral-900 disabled:opacity-50"
-          />
-          Lock a card pick once revealed — only the room owner or an admin, with admin mode on, can undo past it (unavailable for hotseat)
         </label>
         <button
           disabled={busy || displayNameLoading || name.trim().length === 0 || !playerCountValid}

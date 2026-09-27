@@ -17,7 +17,7 @@
 # Why this exists at all: before it, every "Set Up ... Notifications"
 # workflow stopped one step short and printed "now go create N hooks in the
 # dashboard and paste this secret into each". For the lifecycle
-# notifications (issue #77) that was six hooks per Supabase project, each
+# notifications that was six hooks per Supabase project, each
 # with a hand-pasted secret — the step most likely to be got wrong, and the
 # reason rotating a webhook secret was a chore rather than a button.
 #
@@ -30,8 +30,9 @@
 #   - a hook originally created by hand in the dashboard is adopted rather
 #     than duplicated, and
 #   - a hook on a table the function has stopped watching is removed (this is
-#     what retires the lifecycle functions' old `game_state` hooks, todo.md
-#     #100) instead of invoking it for nothing on every write.
+#     what retires the lifecycle functions' old `game_state` hooks, now that
+#     game-finished pings come from the turn functions) instead of invoking
+#     it for nothing on every write.
 # The match is on the function URL *including its closing quote*, so
 # `notify-web-push` never matches `notify-web-push-lifecycle`.
 #

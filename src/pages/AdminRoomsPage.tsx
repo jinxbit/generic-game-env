@@ -18,11 +18,11 @@ import {
 } from '../lib/publicRoomsView'
 
 /**
- * Admin "all rooms" screen (issue #361) — same three-bucket layout as
- * PublicRoomsPage.tsx, but sourced from listAllRooms() so private rooms
- * show up too, with a visibility tag since that's otherwise invisible here.
- * Gated by useIsAdmin the same way AdminMapsPage.tsx is; listAllRooms()'s
- * own doc comment explains this isn't an RLS boundary, just a UI one.
+ * Admin "all rooms" screen — same three-bucket layout as PublicRoomsPage.tsx,
+ * but sourced from listAllRooms() so private rooms show up too, with a
+ * visibility tag since that's otherwise invisible here. Gated by
+ * useIsAdmin; listAllRooms()'s own doc comment explains this isn't an RLS
+ * boundary, just a UI one.
  */
 export function AdminRoomsPage() {
   const { session, loading: authLoading } = useAuth()

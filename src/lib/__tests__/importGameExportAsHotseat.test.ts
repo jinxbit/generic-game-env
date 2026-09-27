@@ -10,6 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { GameState as UniquePickState } from '@game-platform/unique-pick/rules'
 
 let currentClient: SupabaseClient
 vi.mock('../supabase', () => ({
@@ -45,6 +46,7 @@ describe('importGameExportAsHotseat', () => {
     currentClient = stack.clientFor(ALICE)
     const { game: sourceGame } = await createGame({
       name: 'Source room',
+      gameType: 'unique-pick',
       playMode: 'live',
       userId: ALICE,
       displayName: 'Alice',
@@ -72,6 +74,10 @@ describe('importGameExportAsHotseat', () => {
     expect(importedGame.created_by).toBe(ADMIN)
     expect(importedGame.settings.ruleEnforcementEnabled).toBe(false)
     expect(importedGame.settings.hiddenInformationEnabled).toBe(false)
+    // Same game, same pinned rules version, same options as the source room.
+    expect(importedGame.game_type).toBe(sourceGame.game_type)
+    expect(importedGame.settings.rulesVersion).toBe(sourceSnapshot.state.rulesVersion)
+    expect(importedGame.settings.gameOptions).toEqual(sourceSnapshot.state.options)
 
     const importedPlayers = stack.db
       .table<{ id: string; game_id: string; user_id: string }>('players')
@@ -88,6 +94,8 @@ describe('importGameExportAsHotseat', () => {
     expect(importedSnapshot.state.gameId).toBe(importedGame.id)
     expect(importedSnapshot.state.players).toHaveLength(2)
     expect(importedSnapshot.state.players.every((p) => p.authUserId === ADMIN)).toBe(true)
+    // The game-specific slice is keyed by the new roster's ids too.
+    expect(Object.keys((importedSnapshot.state as UniquePickState).game.scores).sort()).toEqual(importedPlayers.map((p) => p.id).sort())
 
     // The source game is completely untouched.
     const sourceStillThere = await getGameState(sourceGame.id)
@@ -99,43 +107,5 @@ describe('importGameExportAsHotseat', () => {
     await expect(importGameExportAsHotseat({ exportText: '{"not": "an export"}', hostUserId: ADMIN })).rejects.toThrow(
       /Unrecognized game state export schema/,
     )
-  })
-
-  it('reconstructs the map-pool board for a preset-map source game (issue #680)', async () => {
-    currentClient = stack.clientFor(ALICE)
-    const { game: sourceGame } = await createGame({
-      name: 'Source room',
-      playMode: 'live',
-      userId: ALICE,
-      displayName: 'Alice',
-      avatarUrl: null,
-      minPlayers: 2,
-      maxPlayers: 2,
-      mapTemplateId: 'classic',
-    })
-
-    currentClient = stack.clientFor(BOB)
-    const bobSeat = await joinGame({ game: sourceGame, userId: BOB, displayName: 'Bob', avatarUrl: null })
-    await markReady(bobSeat.id, sourceGame.config_version)
-
-    currentClient = stack.clientFor(ALICE)
-    await startGameFromLobby(sourceGame)
-    const sourceSnapshot = await getGameState(sourceGame.id)
-    if (!sourceSnapshot) throw new Error('expected source game state to exist')
-    // A preset-map genesis skips tile placement entirely — straight into
-    // starting-unit placement — so there is no PLACE_TILE action to find.
-    expect(sourceSnapshot.state.actionHistory.some((entry) => entry.action.type === 'PLACE_TILE')).toBe(false)
-
-    const exportText = await encodeGameStateExport(sourceSnapshot.state)
-
-    currentClient = stack.clientFor(ADMIN)
-    const importedGame = await importGameExportAsHotseat({ exportText, hostUserId: ADMIN })
-
-    // Without this, buildGenesisState would rebuild an interactive genesis
-    // for the new room, which doesn't match the exported actionHistory at
-    // all — that mismatch is what left turn review empty for a preset-map
-    // import.
-    expect(importedGame.settings.mapTemplateId).toBeNull()
-    expect(importedGame.settings.mapPoolBoard).toEqual(sourceSnapshot.state.board)
   })
 })

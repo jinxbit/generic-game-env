@@ -2,13 +2,13 @@
 // away from the board — a player joining the lobby, the game starting, or
 // the game being canceled — for async games. The fourth, **game finished**,
 // is a `game_state` UPDATE and so is sent by notify-web-push, off the
-// webhook it already has (see notify-discord-lifecycle's doc comment, and
-// todo.md #100). Structurally identical to notify-discord-lifecycle (see that
+// webhook it already has (see notify-discord-lifecycle's doc comment).
+// Structurally identical to notify-discord-lifecycle (see that
 // function's doc comment for the full trigger/dispatch rationale, and
 // notify-web-push's doc comment for why this is a near-duplicate of the
-// Discord version rather than a shared import): Deno Edge Functions can't
-// import the app's Vite-aliased TypeScript sources, and these are small
-// enough that duplicating them beats the ceremony of a shared module.
+// Discord version rather than a shared module): these are small enough that
+// duplicating them beats the ceremony of a shared module. The title comes
+// the room's game's (../_shared/games.ts), like every notify-* function's.
 //
 // Trigger: the same two Database Webhooks as notify-discord-lifecycle
 // (`players` INSERT, `games` UPDATE) can each also target this function — Database Webhooks support multiple targets per
@@ -19,12 +19,15 @@
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import webpush from 'npm:web-push@3'
+import { gameLabels } from '../_shared/games.ts'
 
 interface GameRow {
   id: string
   room_code: string
   name: string
   play_mode: string
+  /** Which registered game the room plays — names it in the notification. */
+  game_type: string
   status: string
 }
 
@@ -57,7 +60,7 @@ function gameUrlFor(roomCode: string): string {
 }
 
 async function fetchGame(supabase: SupabaseClient, gameId: string): Promise<GameRow | null> {
-  const { data } = await supabase.from('games').select('id, room_code, name, play_mode, status').eq('id', gameId).maybeSingle()
+  const { data } = await supabase.from('games').select('id, room_code, name, play_mode, status, game_type').eq('id', gameId).maybeSingle()
   return (data as GameRow | null) ?? null
 }
 
@@ -68,7 +71,7 @@ async function fetchPlayers(supabase: SupabaseClient, gameId: string, excludingP
   return (data as PlayerRow[] | null) ?? []
 }
 
-async function notifyPlayers(supabase: SupabaseClient, players: PlayerRow[], body: string, url: string): Promise<void> {
+async function notifyPlayers(supabase: SupabaseClient, players: PlayerRow[], title: string, body: string, url: string): Promise<void> {
   if (players.length === 0) return
   const { data: subscriptions } = await supabase
     .from('push_subscriptions')
@@ -83,7 +86,7 @@ async function notifyPlayers(supabase: SupabaseClient, players: PlayerRow[], bod
       try {
         await webpush.sendNotification(
           { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          JSON.stringify({ title: 'Rise & Fall', body, url }),
+          JSON.stringify({ title, body, url }),
         )
       } catch (err) {
         // A 404/410 means the browser dropped the subscription — clean it up,
@@ -105,7 +108,7 @@ async function handlePlayerJoined(
   if (!game || game.play_mode !== 'async') return new Response('not an async game', { status: 200 })
 
   const others = await fetchPlayers(supabase, newPlayer.game_id, newPlayer.id)
-  await notifyPlayers(supabase, others, `${newPlayer.display_name} joined ${game.name}.`, gameUrlFor(game.room_code))
+  await notifyPlayers(supabase, others, gameLabels(game.game_type).title, `${newPlayer.display_name} joined ${game.name}.`, gameUrlFor(game.room_code))
   return new Response('ok', { status: 200 })
 }
 
@@ -123,7 +126,7 @@ async function handleGameStatusChange(supabase: SupabaseClient, oldGame: GameRow
   if (!body) return new Response('no relevant status change', { status: 200 })
 
   const players = await fetchPlayers(supabase, newGame.id)
-  await notifyPlayers(supabase, players, body, gameUrlFor(newGame.room_code))
+  await notifyPlayers(supabase, players, gameLabels(newGame.game_type).title, body, gameUrlFor(newGame.room_code))
   return new Response('ok', { status: 200 })
 }
 

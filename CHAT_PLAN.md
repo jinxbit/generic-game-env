@@ -1,12 +1,12 @@
 # Chat — Spec, Design & Execution Plan
 
-Tracks [issue #466](https://github.com/jinxbit/Rise-and-fall/issues/466). This
-is a **design document, not yet implemented** — no code in this repo
-implements any of the below at the time this file is written. Once reviewed
-and finalized, it is the source of truth for breaking the work into
-independent GitHub issues, the same way `HIDDEN_INFORMATION_PLAN.md` and
-`RULE_ENFORCEMENT_PLAN.md` serve their features. Update it as decisions
-change.
+The design record for site-wide and in-game chat. Chat is implemented
+(`src/components/ChatPanel.tsx`, `src/lib/chatApi.ts`, the chat section of
+`supabase/migrations/0001_baseline.sql`, and the `notify-*-chat` Edge
+Functions); this document explains why it works the way it does. Issue
+numbers below refer to the project this platform was extracted from, and
+migration file names (`00NN_*.sql`) to its migration history, which has since
+been squashed into `0001_baseline.sql`. Update it as decisions change.
 
 ## 1. Problem statement
 
@@ -29,13 +29,13 @@ Constraints from the issue, carried through this whole document:
   change shape later, but are not part of the initial execution phases.
 
 Chat is **not a game rule**. It never touches `GameState`, never goes through
-`applyAction()`, and is invisible to `src/engine/`, `replayActions`, or
+`applyAction()`, and is invisible to the rules framework (`packages/sdk`), `replayActions`, or
 either write path in `CLAUDE.md`'s "two write paths" section. It also carries
 no rule-enforcement concern — there's nothing to cheat at by posting a
 message — so unlike `game_state`, chat rows are ordinary client-writable
 tables gated by RLS, the same trust model as `players`/`games` themselves.
 This keeps the whole feature outside the four engine invariants entirely; no
-`src/engine/` change is needed anywhere in this plan.
+the rules framework (`packages/sdk`) change is needed anywhere in this plan.
 
 ## 2. Scope, proposed
 
@@ -73,11 +73,10 @@ This keeps the whole feature outside the four engine invariants entirely; no
   or per-DM channels in the first cut (DMs are §8, a distinct future
   mechanism, not a "channel").
 - **Hotseat games get in-game chat like any other game.** All local hotseat
-  players share one `auth.uid()` (`0003_hotseat_local_players.sql`), so
-  hotseat chat is really "notes from the one signed-in host to themselves"
-  — harmless, and consistent with `HIDDEN_INFORMATION_PLAN.md`'s existing
-  precedent of hotseat being out of scope for anything seat-distinguishing
-  rather than specially blocked.
+  players share one `auth.uid()`, so hotseat chat is really "notes from the
+  one signed-in host to themselves" — harmless, and consistent with hidden
+  information's existing precedent of hotseat being out of scope for
+  anything seat-distinguishing rather than specially blocked.
 
 ### Out of scope for the initial phases (designed for, not built — §7–§9)
 
@@ -198,8 +197,8 @@ policy exists yet (nothing needs one until reporting/moderation, §8).
 ## 4. The kill switch: "disabled until I enable it"
 
 The issue's requirement is stronger than "hide the UI" — mirroring this
-repo's own stance on hidden information (`HIDDEN_INFORMATION_PLAN.md` §5.4:
-a client-side-only hide is "a UX guarantee, not a security one"), a modified
+repo's own stance on hidden information (a client-side-only hide is "a UX
+guarantee, not a security one"), a modified
 client must not be able to post or read chat while it's off, not just fail
 to render a chat box.
 
@@ -357,7 +356,7 @@ Not built now.
   `created_at`), insert-only by any authenticated user, readable only by
   `profiles.is_admin` — same shape as the `is_admin` precedent in §4.
 - An admin review surface, likely a new `/admin/chat-reports` page mirroring
-  `AdminMapsPage.tsx`'s existing `is_admin`-gated pattern
+  `AdminRoomsPage.tsx`'s existing `is_admin`-gated pattern
   (`useIsAdmin(session?.user ?? null)`), from which an admin can delete a
   message (needs the `delete` RLS policy §3 deliberately deferred) or
   dismiss the report.
@@ -484,7 +483,7 @@ later work, not part of the initial delivery.
   append) via `@testing-library/react`, this repo's existing pattern for
   UI components with no engine logic behind them.
 - No engine tests are needed anywhere in this feature — by design (§1), it
-  never touches `src/engine/`.
+  never touches the rules framework (`packages/sdk`).
 
 ## 13. Unread indicator (issue #579)
 
@@ -685,8 +684,8 @@ Two different color sources, one per surface, both computed entirely
 client-side — no schema/RLS change:
 
 - **In-game chat** colors a sender's name with their seat's
-  `PlayerRow.color` (the same per-seat color `RoundView.tsx`'s
-  `PlayerColorName`/`LogPlayerName` already use for the log and score rows).
+  `PlayerRow.color` (the same per-seat color `GameLogPanel.tsx` uses for
+  the game log).
   `GamePage.tsx` now passes its already-loaded `players` list into
   `<ChatPanel>` as a new `players` prop; `ChatPanel` looks up
   `players.find((p) => p.user_id === message.sender_id)?.color` — matching
@@ -769,8 +768,7 @@ Three display-only asks, all in `ChatPanel.tsx`; no schema/RLS/data change —
 `chat_messages.created_at` already existed and was simply unused by the
 panel.
 
-- **`[HH:MM]` timestamp per message.** `formatChatTimestamp()` mirrors
-  `RoundView.tsx`'s game-log `formatLogTimestamp()`: minute resolution (a
+- **`[HH:MM]` timestamp per message.** `formatChatTimestamp()`: minute resolution (a
   chat has no use for seconds), local time, empty string for an
   unparseable/missing timestamp so nothing renders rather than "Invalid
   Date". Rendered as `[HH:MM] ` immediately before the sender's name.
@@ -865,12 +863,12 @@ asked for it directly (unlike §7, which is still gated on open question
   than riding the existing switch. The new toggle,
   `profiles.preferences.chatNotificationsEnabled` (issue #658,
   `src/lib/chatNotificationPreference.ts`), reuses the existing
-  `profiles.preferences` JSONB blob (0023_unit_reserve_display.sql) rather
+  `profiles.preferences` JSONB blob rather
   than a new column or migration — the same "add a key, thread it through
   `gameApi.ts`'s `getProfilePreferences`/`saveProfilePreferences`" pattern
   `dbTypes.ts`'s `ProfilePreferences` doc comment already prescribes.
   Surfaced on the Profile page as `ChatNotificationSettings.tsx`, styled and
-  shaped exactly like `ConfirmBeforeRevealingCardsSettings.tsx`. Originally
+  shaped like the other Profile page settings. Originally
   shipped **off** by default — a player who configured either channel years
   ago for turn pings should not silently start getting pinged on every line
   of a chat conversation — but issue #668 flipped the default to **on**:
@@ -880,9 +878,7 @@ asked for it directly (unlike §7, which is still gated on open question
 - **Two new Edge Functions**, `notify-discord-chat` and
   `notify-web-push-chat` (`supabase/functions/`), near-duplicates of
   `notify-discord-lifecycle`/`notify-web-push-lifecycle` for the same
-  "Deno Edge Functions can't import the app's Vite-aliased TypeScript
-  sources" reason every other notify-\*/notify-\* pair in this repo is a
-  duplicate rather than a shared import. Trigger: a Database Webhook on
+  shape. Trigger: a Database Webhook on
   `chat_messages` INSERT. Recipients are every other seated player in the
   message's game (looked up the same way `notify-discord-lifecycle`'s
   `fetchPlayers` does), filtered to those with both a usable Discord webhook
@@ -894,7 +890,7 @@ asked for it directly (unlike §7, which is still gated on open question
 - **A fourth "Set Up …" workflow, `setup-chat-notifications.yml`.** The PR
   that shipped the rest of this section could not create it — that session's
   GitHub App had no permission to touch `.github/workflows/**` — so it landed
-  one commit later (todo.md #129) with the manual steps documented in the
+  one commit later with the manual steps documented in the
   meantime. It follows `setup-lifecycle-notifications.yml` step for step
   (same wrong-project guard, same generate-secret-then-register-then-probe
   order, same soft-failing registration with a dashboard fallback in the job

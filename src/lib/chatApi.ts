@@ -1,15 +1,14 @@
-// Chat, phase 2 (issue #564): the typed data layer for CHAT_PLAN.md §6,
-// mirroring gameApi.ts's shape. Parameterized by `gameId: string | null`
-// throughout (null = site-wide) so phase 3 (#565, in-game chat) reuses this
-// file unchanged with a real game id — nothing here is HomePage-specific.
-// Never touches src/engine/: chat is not a game rule (CHAT_PLAN.md §1).
+// Chat: the typed data layer for CHAT_PLAN.md §6, mirroring gameApi.ts's
+// shape. Parameterized by `gameId: string | null` throughout (null =
+// site-wide) so in-game chat uses this file unchanged with a real game id — nothing here is HomePage-specific.
+// Never touches the rules framework: chat is not a game rule (CHAT_PLAN.md §1).
 
 import { supabase } from './supabase'
 import type { ChatMessageRow, ChatReadStatusRow } from './dbTypes'
 
 /**
- * Page size for both the initial load and each older-history page (issue
- * #587, CHAT_PLAN.md §16) — "enough to see the recent conversation on load,"
+ * Page size for both the initial load and each older-history page
+ * (CHAT_PLAN.md §16) — "enough to see the recent conversation on load,"
  * and reused as the older-page size so `ChatPanel.tsx` can tell whether a
  * page came back short (fewer than this many rows) and stop asking for more.
  */
@@ -23,17 +22,18 @@ export function formatUnreadBadge(count: number): string {
 let chatEnabledCache: Promise<boolean> | null = null
 
 /**
- * The chat kill switch (0031_chat_messages.sql, CHAT_PLAN.md §4). Reads
+ * The chat kill switch (the baseline migration's `app_config`, CHAT_PLAN.md §4). Reads
  * `app_config.chat_enabled` directly rather than through a `chat_enabled()`
  * RPC call — CHAT_PLAN.md §4 explicitly allows either ("a cheap RPC call, or
  * folded into whatever the client already fetches on load"), and a plain
  * table read matches every other query in this file/gameApi.ts and is
  * directly exercisable by the RLS coverage
- * `src/test/__tests__/chatMessages.test.ts` already added in phase 1.
+ * in `src/test/__tests__/chatMessages.test.ts`.
  * `app_config`'s own "anyone can read" policy is what makes this safe to
  * call before checking session. Cached for the page load's lifetime since
- * both chat surfaces need it and it only changes when jinxbit hand-flips it
- * in the Supabase SQL editor. (`getChatDisplayNames` below does call
+ * both chat surfaces need it and it only changes when it's flipped
+ * out-of-band (by hand in the Supabase SQL editor, or by
+ * scripts/supabase/set-chat-enabled.sh on a pre-production deploy). (`getChatDisplayNames` below does call
  * `supabase.rpc()` — the RLS split it needs, §10.5, can't be expressed as a
  * plain table read.)
  */
@@ -56,7 +56,7 @@ export function isChatEnabled(): Promise<boolean> {
 /**
  * Most recent messages for one surface — site-wide (`gameId: null`) or one
  * game's chat — oldest first, capped to CHAT_PAGE_SIZE. RLS
- * (0031_chat_messages.sql) already scopes the result to what this caller may
+ * (`chat_messages`' read policies) already scopes the result to what this caller may
  * see; a signed-out caller or a disabled kill switch just gets `[]`.
  */
 export async function listChatMessages(gameId: string | null): Promise<ChatMessageRow[]> {
@@ -69,8 +69,8 @@ export async function listChatMessages(gameId: string | null): Promise<ChatMessa
 
 /**
  * One older page, strictly before `beforeId` (the oldest message currently
- * loaded), oldest-first, same shape and cap as `listChatMessages` (issue
- * #587, CHAT_PLAN.md §16). Same RLS scoping — a signed-out caller or a
+ * loaded), oldest-first, same shape and cap as `listChatMessages`
+ * (CHAT_PLAN.md §16). Same RLS scoping — a signed-out caller or a
  * disabled kill switch just gets `[]`.
  */
 export async function listOlderChatMessages(gameId: string | null, beforeId: number): Promise<ChatMessageRow[]> {
@@ -108,7 +108,7 @@ export function subscribeToChatMessages(gameId: string | null, onInsert: (messag
 }
 
 /**
- * The caller's own read cursor for one game's chat (0032_chat_read_status.sql,
+ * The caller's own read cursor for one game's chat (`chat_read_status`,
  * CHAT_PLAN.md §13), or null if they have never had one recorded (a player
  * who just joined a game with existing chat history). In-game chat only —
  * there is no cursor for the site-wide channel. RLS already scopes this to
@@ -153,10 +153,9 @@ export async function markChatRead(gameId: string, userId: string, lastReadId: n
 
 /**
  * Best-effort display names for a batch of sender ids, keyed by `user_id`.
- * Backed by `profiles.display_name` (0015_profile_display_name.sql) via the
- * `chat_sender_display_names` RPC (0035_chat_sender_display_names.sql,
- * issue #684, CHAT_PLAN.md §10.5), not a direct `profiles` select —
- * `profiles`' own RLS (0013_discord_notify_backend.sql) only exposes a row
+ * Backed by `profiles.display_name` via the security-definer
+ * `chat_sender_display_names` RPC (CHAT_PLAN.md §10.5), not a direct
+ * `profiles` select — `profiles`' own RLS only exposes a row
  * to its own owner, and a plain relaxation would also expose
  * `discord_webhook_url` (RLS is row-, not column-scoped). The `security
  * definer` RPC returns only `(user_id, display_name)` for any signed-in

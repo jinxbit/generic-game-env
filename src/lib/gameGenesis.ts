@@ -1,30 +1,29 @@
-// Rebuilds a game's genesis GameState — the exact state LobbyPage.tsx's
-// handleStart() originally created and persisted (status: 'boardSetup' or,
-// for a preset map, straight past interactive tile placement; actionHistory:
-// []) — on demand instead of storing it separately. Deterministic from the
-// game's row + seated players: player roster/seat order never changes after
-// creation, and content resolution only depends on player count, so this
-// always reconstructs the same genesis a second time. Used by handleStart()
-// itself and by GamePage.tsx's undo feature, which replays
-// actionHistory.slice(0, -1) against this genesis (see replayActions in
-// ../engine/replay.ts) to step the game back one action.
+// Rebuilds a game's genesis GameState — the exact state the game started
+// from (status: 'active', actionHistory: []) — on demand instead of storing
+// it separately. Deterministic from the game's row + seated players: the
+// roster and seat order never change after the game starts, and nothing here
+// reads randomness, the clock or ambient state. Used when starting a game
+// (gameApi.ts's startGameFromLobby, the start-game Edge Function), by undo/
+// redo (which replay the history against it — @game-platform/sdk's undoRedo.ts), and by
+// the delta read path (./deltaReplayContext.ts).
+//
+// A game that needs randomness at setup (a shuffled deck, a random first
+// player) must resolve it once, before genesis, and persist the result into
+// `games.settings` — then read it from there here, so genesis stays a pure
+// function of the row.
+//
+// Which game's rules build it comes from the row too: `game_type`, at the
+// `settings.rulesVersion` pinned when the room was created. The game must be
+// registered (src/games/registry.ts) in whatever process calls this.
 
-import { resolveBoardGenerationContent, resolveMapTemplateBoard, resolveResourceBank } from '../content/resolveContent.ts'
-import { createEmptyBoard } from '../engine/board.ts'
-import { createNewGame, startGame, startGameWithPresetBoard } from '../engine/createGame.ts'
-import type { GameState } from '../engine/types.ts'
-import type { GameRow, GameSettings, MapPoolRow, PlayerRow } from './dbTypes.ts'
+import { createNewGame, type GameState } from '@game-platform/sdk'
+import type { GameRow } from './dbTypes.ts'
 
 /**
  * Exactly the `players` columns genesis depends on — nothing else in a
  * `PlayerRow` reaches `buildGenesisState`, and saying so in the type is what
- * lets a caller rebuild genesis from somewhere other than the table.
- *
- * A cached `GameState`'s own `players` carry all four (`Player.id`/
- * `authUserId`/`displayName`/`color`, engine/types.ts), which is how
- * ../lib/deltaReplayContext.ts reconstructs genesis on a cold open without
- * waiting for `listPlayers` — see its doc comment. `PlayerRow[]` is assignable
- * to this, so every existing caller is unaffected.
+ * lets a caller rebuild genesis from somewhere other than the table (a cached
+ * `GameState`'s own `players` carry all four — see ./deltaReplayContext.ts).
  *
  * Order is significant: seat order becomes `turnOrder`, so callers must pass
  * these in the same order `listPlayers` returns them (by `seat_index`).
@@ -37,117 +36,18 @@ export type GenesisPlayerInput = {
 }
 
 export function buildGenesisState(game: GameRow, players: readonly GenesisPlayerInput[]): GameState {
-  const lobbyState = createNewGame({
+  return createNewGame({
     gameId: game.id,
+    gameType: game.game_type,
+    rulesVersion: game.settings.rulesVersion,
     playMode: game.play_mode,
-    board: createEmptyBoard('hex'),
     players: players.map((p) => ({
       id: p.id,
       authUserId: p.user_id,
       displayName: p.display_name,
       color: p.color,
     })),
-    resourceBank: resolveResourceBank(players.length),
-    activeTaleIds: game.settings.activeTaleIds,
-    gameLength: game.settings.gameLength,
     hiddenInformationEnabled: game.settings.hiddenInformationEnabled,
-    lockRevealedInformationEnabled: game.settings.lockRevealedInformationEnabled,
+    options: game.settings.gameOptions,
   })
-
-  if (game.settings.mapTemplateId) {
-    const presetBoard = resolveMapTemplateBoard(game.settings.mapTemplateId)
-    if (!presetBoard) throw new Error(`Unknown map template: ${game.settings.mapTemplateId}`)
-    return startGameWithPresetBoard(lobbyState, presetBoard)
-  }
-  if (game.settings.mapPoolBoard) {
-    return startGameWithPresetBoard(lobbyState, game.settings.mapPoolBoard)
-  }
-  if (!game.settings.soloBuildMap) {
-    return startGame(lobbyState, resolveBoardGenerationContent(players.length))
-  }
-
-  // "Build alone" (GameSettings.soloBuildMap, issue #243): resolve the
-  // builder's *player* row id (not their auth user id) to hand to
-  // startGame() as the sole tile-builder (see BoardSetupState.builderId).
-  // 'owner' resolves deterministically right here (a pure function of
-  // game.created_by); 'random' was already resolved once, before this game
-  // ever reached this function, by resolveSoloBuildMap below (see its own
-  // doc comment for why the randomness can't live here).
-  const builderId =
-    game.settings.soloBuilderSelection === 'random'
-      ? game.settings.soloBuilderId
-      : (players.find((p) => p.user_id === game.created_by)?.id ?? null)
-
-  // Starting *unit* placement always follows the normal turnOrder rotation
-  // regardless of who builds (see BoardSetupState.builderId's doc comment)
-  // — soloBuilderUnitOrder only chooses what that rotation's order *is*:
-  // 'last' deterministically moves the (now-resolved) builder to the end
-  // of the normal seat order; 'random' reuses the turn order
-  // resolveSoloBuildMap already rolled and persisted, for the same
-  // determinism reason as builderId above.
-  const seatOrder = lobbyState.turnOrder
-  const turnOrder =
-    game.settings.soloBuilderUnitOrder === 'random'
-      ? (game.settings.soloBuilderTurnOrder ?? seatOrder)
-      : builderId
-        ? [...seatOrder.filter((id) => id !== builderId), builderId]
-        : seatOrder
-  const orderedLobbyState = turnOrder === seatOrder ? lobbyState : { ...lobbyState, turnOrder, pendingPlayerIds: [...turnOrder] }
-
-  return startGame(orderedLobbyState, resolveBoardGenerationContent(players.length), builderId)
-}
-
-/** Fisher-Yates shuffle — used only by resolveSoloBuildMap below, which is the one place in this file allowed to use real randomness (see its doc comment). */
-function shuffled<T>(items: T[]): T[] {
-  const result = [...items]
-  for (let i = result.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
-    ;[result[i], result[j]] = [result[j], result[i]]
-  }
-  return result
-}
-
-/**
- * Resolves GameSettings.soloBuilderSelection/soloBuilderUnitOrder's
- * 'random' options (issue #243) against the actual seated `players` —
- * into an updated GameSettings with soloBuilderId/soloBuilderTurnOrder
- * locked in — or `settings` unchanged if soloBuildMap is off, both
- * options are 'owner'/'last' (resolved deterministically inline by
- * buildGenesisState instead, no persistence needed), or everything
- * relevant is already resolved (e.g. a second call after the first
- * already resolved it). Uses real randomness (Math.random, via shuffled
- * above), so — like resolveMapPoolRandomAtStart — this can't live inside
- * buildGenesisState itself, which must stay a synchronous, deterministic
- * function of the game row alone; LobbyPage.tsx's handleStart() calls
- * this once and persists the result before building genesis.
- */
-export function resolveSoloBuildMap(settings: GameSettings, players: PlayerRow[]): GameSettings {
-  if (!settings.soloBuildMap) return settings
-  let next = settings
-  if (next.soloBuilderSelection === 'random' && next.soloBuilderId === null) {
-    next = { ...next, soloBuilderId: players[Math.floor(Math.random() * players.length)].id }
-  }
-  if (next.soloBuilderUnitOrder === 'random' && next.soloBuilderTurnOrder === null) {
-    next = { ...next, soloBuilderTurnOrder: shuffled(players.map((p) => p.id)) }
-  }
-  return next
-}
-
-/**
- * Resolves GameSettings.mapPoolRandomAtStart ("truly random" map, issue
- * #166) against an already-looked-up map_pool row for the actual seated
- * player count, into an updated GameSettings with that board locked in —
- * or `settings` unchanged if the mode isn't active, a board's already
- * locked in, or `picked` is null (no saved map fits that count, so
- * buildGenesisState falls back to its normal interactive board-building
- * path). Pure and synchronous — unlike buildGenesisState it doesn't touch
- * the DB itself; LobbyPage.tsx's handleStart() does the actual
- * pickRandomMapFromPool lookup (mapPoolApi.ts) and persists the result via
- * updateGameSettings before calling buildGenesisState, so genesis stays a
- * deterministic function of the game row alone (see buildGenesisState's
- * doc comment) once the game is under way.
- */
-export function resolveMapPoolRandomAtStart(settings: GameSettings, picked: MapPoolRow | null): GameSettings {
-  if (!settings.mapPoolRandomAtStart || settings.mapPoolBoard || !picked) return settings
-  return { ...settings, mapPoolBoard: picked.board, mapPoolMapId: picked.id }
 }

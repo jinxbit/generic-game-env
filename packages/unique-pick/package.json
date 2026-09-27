@@ -1,0 +1,16 @@
+{
+  "name": "@game-platform/unique-pick",
+  "version": "0.1.0",
+  "description": "Unique Pick \u2014 the platform's example game: pick a number nobody else picks.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    "./rules": "./src/rules.ts",
+    "./view": "./src/view.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "peerDependencies": {
+    "@game-platform/sdk": "*",
+    "react": "^19"
+  }
+}

@@ -2,7 +2,7 @@ interface UpdateBannerProps {
   onReload: () => void
 }
 
-/** Prompts players to reload once a newer deployment is detected, so they update on their own terms instead of hitting a stale-build error (issue #247). */
+/** Prompts players to reload once a newer deployment is detected, so they update on their own terms instead of hitting a stale-build error. */
 export function UpdateBanner({ onReload }: UpdateBannerProps) {
   return (
     <div className="flex items-center justify-center gap-3 bg-sky-500/10 px-4 py-2 text-sm text-sky-300">

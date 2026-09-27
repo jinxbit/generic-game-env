@@ -22,7 +22,7 @@ export async function signInWithGoogle() {
 }
 
 /**
- * Registers a new account with email/password (issue #384) — an alternative
+ * Registers a new account with email/password — an alternative
  * to Discord/Google for players who'd rather not use OAuth. `username`
  * becomes the account's `full_name` metadata, same field Discord/Google
  * populate, so resolveDisplayName picks it up with no extra profile write.
@@ -45,7 +45,7 @@ export async function signInWithEmail(email: string, password: string) {
 }
 
 /**
- * Sends a password-reset email (issue #386). The link lands back on
+ * Sends a password-reset email. The link lands back on
  * `/reset-password`, which Supabase turns into a temporary "recovery"
  * session (see ResetPasswordPage) that `updatePassword` below then uses.
  */

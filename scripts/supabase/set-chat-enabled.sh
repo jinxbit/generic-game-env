@@ -12,7 +12,7 @@
 # `update public.app_config set chat_enabled = true;` in the SQL editor.
 #
 # The SQL is wrapped in a guard that no-ops if the table doesn't exist yet, so
-# a deploy from a commit predating 0031_chat_messages.sql (or after a revert)
+# a deploy from a commit predating public.app_config (or after a revert)
 # doesn't fail here.
 #
 # Required env:

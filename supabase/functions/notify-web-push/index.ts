@@ -1,5 +1,5 @@
 // Sends "it's your turn" Web Push notifications for async games — the
-// notification-half of PWA support (issue #250). Structurally identical to
+// notification-half of PWA support. Structurally identical to
 // notify-discord-turn (see that function's doc comment for the full
 // rationale on why this runs server-side). Who to ping is decided by
 // ../_shared/turnNotify.ts, shared with notify-discord-turn; only the
@@ -19,7 +19,8 @@
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import webpush from 'npm:web-push@3'
-import { type GameStateRow, justFinished, newlyPendingActorIds, phaseLabel } from '../_shared/turnNotify.ts'
+import { gameLabels } from '../_shared/games.ts'
+import { type GameStateRow, justFinished, newlyPendingActorIds, phaseLabel, turnNumber } from '../_shared/turnNotify.ts'
 
 interface DatabaseWebhookPayload {
   type: string
@@ -51,7 +52,7 @@ function gameUrlFor(roomCode: string): string {
 //
 // One JSON line per invocation (evt: 'notify_web_push', written by the
 // Deno.serve wrapper below) — notify-discord-turn's twin, see its Logging
-// section and todo.md #151. Never log an endpoint URL: it's a capability
+// section. Never log an endpoint URL: it's a capability
 // anyone can push to. The push service's host (fcm.googleapis.com,
 // updates.push.services.mozilla.com, web.push.apple.com, ...) is enough to
 // tell browsers apart.
@@ -66,7 +67,7 @@ interface SendOutcome {
 
 interface InvocationLog {
   gameId?: string
-  phase?: string
+  phase?: string | null
   round?: number | null
   nowPending?: string[]
   sends?: SendOutcome[]
@@ -83,7 +84,7 @@ function pushServiceHost(endpoint: string): string {
 // Returns a lookup error to surface as a 500, so a broken subscriptions read
 // shows up as a failed invocation rather than as silence; the sends themselves
 // stay best-effort, with each one's outcome recorded on `log`.
-async function pushToUsers(supabase: SupabaseClient, userIds: string[], body: string, url: string, log: InvocationLog): Promise<string | null> {
+async function pushToUsers(supabase: SupabaseClient, userIds: string[], title: string, body: string, url: string, log: InvocationLog): Promise<string | null> {
   if (userIds.length === 0) return null
   const { data: subscriptions, error } = await supabase.from('push_subscriptions').select('user_id, endpoint, p256dh, auth').in('user_id', userIds)
   if (error) return `subscriptions lookup failed: ${error.message}`
@@ -96,7 +97,7 @@ async function pushToUsers(supabase: SupabaseClient, userIds: string[], body: st
       try {
         const res = await webpush.sendNotification(
           { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          JSON.stringify({ title: 'Rise & Fall', body, url }),
+          JSON.stringify({ title, body, url }),
         )
         return { userId: sub.user_id, service, result: res.statusCode }
       } catch (err) {
@@ -117,7 +118,7 @@ async function pushToUsers(supabase: SupabaseClient, userIds: string[], body: st
 }
 
 async function handleGameFinished(supabase: SupabaseClient, gameId: string, log: InvocationLog): Promise<Response> {
-  const { data: game } = await supabase.from('games').select('room_code, name, play_mode').eq('id', gameId).maybeSingle()
+  const { data: game } = await supabase.from('games').select('room_code, name, play_mode, game_type').eq('id', gameId).maybeSingle()
   // Live players watched it end over Realtime; hotseat is one shared device.
   if (!game || game.play_mode !== 'async') return new Response('not an async game', { status: 200 })
 
@@ -127,6 +128,7 @@ async function handleGameFinished(supabase: SupabaseClient, gameId: string, log:
   const pushError = await pushToUsers(
     supabase,
     (players as { user_id: string }[]).map((p) => p.user_id),
+    gameLabels(game.game_type).title,
     `${game.name} has finished!`,
     gameUrlFor(game.room_code),
     log,
@@ -185,7 +187,7 @@ async function handle(req: Request, log: InvocationLog): Promise<Response> {
 
   const { data: game, error: gameError } = await supabase
     .from('games')
-    .select('room_code, name, play_mode')
+    .select('room_code, name, play_mode, game_type')
     .eq('id', gameId)
     .maybeSingle()
   if (gameError) return new Response(`game lookup failed: ${gameError.message}`, { status: 500 })
@@ -194,9 +196,12 @@ async function handle(req: Request, log: InvocationLog): Promise<Response> {
   if (!game || game.play_mode !== 'async') return new Response('not an async game', { status: 200 })
 
   const gameUrl = gameUrlFor(game.room_code)
-  const phase = phaseLabel(payload.record.state)
-  const round = payload.record.state.status === 'active' ? payload.record.state.turn : null
-  const roundText = round === null ? '' : ` (Round ${round})`
+  const phase = phaseLabel(payload.record.state, game.game_type)
+  const labels = gameLabels(game.game_type)
+  const round = turnNumber(payload.record.state)
+  // Same detail format as src/lib/discordNotify.ts's turnNotificationMessage.
+  const details = [round === null ? null : `${labels.turnLabel} ${round}`, phase].filter((part): part is string => !!part)
+  const detailText = details.length > 0 ? ` (${details.join(' · ')})` : ''
   log.phase = phase
   log.round = round
 
@@ -204,10 +209,11 @@ async function handle(req: Request, log: InvocationLog): Promise<Response> {
   if (playersError) return new Response(`players lookup failed: ${playersError.message}`, { status: 500 })
   if (!players || players.length === 0) return new Response('no matching players', { status: 200 })
 
-  const body = `It's your turn to ${phase} in ${game.name}${roundText}.`
+  const body = `It's your turn in ${game.name}${detailText}.`
   const pushError = await pushToUsers(
     supabase,
     players.map((p) => p.user_id),
+    labels.title,
     body,
     gameUrl,
     log,

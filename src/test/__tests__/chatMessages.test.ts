@@ -1,16 +1,16 @@
 // @vitest-environment node
 //
 // RLS + kill-switch coverage for chat_messages/app_config
-// (0031_chat_messages.sql, CHAT_PLAN.md §3-§4, issue #563 phase 1). No
-// chatApi.ts or UI exists yet (phases 2/3) — this exercises the data layer
-// directly against the production-simulating stack (src/test/supabaseStack/),
-// the same style getGameState.test.ts/writePathRedaction.test.ts use for the
+// (0001_baseline.sql section 10, CHAT_PLAN.md §3-§4). This exercises the
+// data layer directly against the production-simulating stack
+// (src/test/supabaseStack/), the same style getGameState.test.ts/writePathRedaction.test.ts use for the
 // game tables (see supabaseStack.test.ts's own doc comment for what
 // "production-simulating" means here).
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { GameRow, GameSettings, PlayerRow } from '../../lib/dbTypes.ts'
 import { createProductionStack, type ProductionStack } from '../supabaseStack/index.ts'
+import { TEST_GAME_TYPE } from '../supabaseStack/sampleGame.ts'
 
 const PRIVATE_GAME_ID = '3f1c2d4e-0000-4000-8000-0000000000c1'
 const PUBLIC_GAME_ID = '3f1c2d4e-0000-4000-8000-0000000000c2'
@@ -19,28 +19,13 @@ const BOB = 'auth-user-bob' // seated in the private game only
 const CAROL = 'auth-user-carol' // never seated anywhere
 
 function settingsFor(): GameSettings {
-  return {
-    mapTemplateId: 'classic',
-    mapPoolBoard: null,
-    mapPoolMapId: null,
-    mapPoolRandomAtStart: false,
-    soloBuildMap: false,
-    soloBuilderSelection: 'owner',
-    soloBuilderId: null,
-    soloBuilderUnitOrder: 'last',
-    soloBuilderTurnOrder: null,
-    skipHotseatPassGate: false,
-    ruleEnforcementEnabled: false,
-    hiddenInformationEnabled: false,
-    lockRevealedInformationEnabled: false,
-    activeTaleIds: [],
-    gameLength: 3,
-  }
+  return { skipHotseatPassGate: false, ruleEnforcementEnabled: false, hiddenInformationEnabled: false, rulesVersion: 1 }
 }
 
 function gameRow(id: string, roomCode: string, visibility: GameRow['visibility']): GameRow {
   return {
     id,
+    game_type: TEST_GAME_TYPE,
     room_code: roomCode,
     name: 'chat RLS self-test',
     play_mode: 'live',
@@ -51,13 +36,13 @@ function gameRow(id: string, roomCode: string, visibility: GameRow['visibility']
     created_at: new Date(0).toISOString(),
     updated_at: new Date(0).toISOString(),
     settings: settingsFor(),
-    config_version: 1,
+    config_version: 0,
     visibility,
   }
 }
 
 function playerRow(id: string, gameId: string, userId: string, seatIndex: number): PlayerRow {
-  return { id, game_id: gameId, user_id: userId, display_name: userId, avatar_url: null, seat_index: seatIndex, color: '#e11', is_active: true, joined_at: new Date(0).toISOString() } as PlayerRow
+  return { id, game_id: gameId, user_id: userId, display_name: userId, avatar_url: null, seat_index: seatIndex, color: '#e11', is_active: true, joined_at: new Date(0).toISOString(), ready_for_version: 0 }
 }
 
 describe('chat_messages / app_config RLS + kill switch (issue #563)', () => {
@@ -167,7 +152,7 @@ describe('chat_messages / app_config RLS + kill switch (issue #563)', () => {
       expect(tooLongError).not.toBeNull()
     })
 
-    // 0034_chat_rate_limit.sql (issue #605): a server-side flood defense —
+    // chat_messages_rate_limit_trigger (0001_baseline.sql section 10): a server-side flood defense —
     // no client-side throttle can be relied on since a script can post
     // directly through the REST API, the same reasoning CHAT_PLAN.md §4
     // gives for the kill switch being DB-enforced rather than a UI hide.

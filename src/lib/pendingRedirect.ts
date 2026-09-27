@@ -1,4 +1,4 @@
-const KEY = 'riseAndFall.postSignInRedirect'
+const KEY = 'gamePlatform.postSignInRedirect'
 
 /**
  * Remembers where an unauthenticated visitor was trying to go, so HomePage

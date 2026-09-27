@@ -1,63 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { BoardSetupView } from '../components/BoardSetupView'
 import { ChatPanel } from '../components/ChatPanel'
-import { EndGameView } from '../components/EndGameView'
 import { ErrorBanner } from '../components/ErrorBanner'
-import { BankResources, PhaseBanner, RoundView } from '../components/RoundView'
-import {
-  listMapTemplates,
-  listTales,
-  resolveAchievementContent,
-  resolveBoardGenerationContent,
-  resolveTaleContent,
-  resolveUnitContent,
-} from '../content/resolveContent'
-import type { Action, LoggedAction } from '../engine/actions'
-import { applyAction } from '../engine/applyAction'
-import { stripOccupants } from '../engine/board'
-import { buildGameLogFrom, extendGameLog } from '../engine/gameLog'
-import { redactGameLog } from '../engine/redaction'
-import { calculateScoreHistory } from '../engine/scoreHistory'
-import { applyTaleAchievementModifiers, applyTaleModifiers } from '../engine/tales'
-import { applyRedoAction, applyUndoAction, resolveHistory, undoWouldReopenRevealedPick } from '../engine/undoRedo'
-import { calculateGoldSpendingByCategory, calculateUnitValueDetail } from '../engine/unitValue'
-import type { ActionResult, GameEvent, GameState as EngineGameState, Coordinate } from '../engine/types'
-import {
-  buildTurnReview,
-  cardChoicesForRecap,
-  findReviewWindowStart,
-  findTurnStops,
-  recapTurnFor,
-  reviewPhaseGroupAt,
-  roundPhaseForRecap,
-  shouldShowCardChoiceRecap,
-} from '../engine/turnReview'
-import type { CardChoiceRecap, TurnReview } from '../engine/turnReview'
-import { currentActorId } from '../engine/turnOrder'
+import { GameLogPanel } from '../components/GameLogPanel'
+import { applyAction, buildGameLog, findGameDefinition, redactGameLog, replayActions, currentActorId, applyRedoAction, applyUndoAction, resolveHistory, type Action, type ActionResult, type GameState as EngineGameState } from '@game-platform/sdk'
+import { gameUiFor } from '../games/ui'
 import { useAuth } from '../hooks/useAuth'
 import { useIsAdmin } from '../hooks/useIsAdmin'
-import { useOneLineFit } from '../hooks/useOneLineFit'
 import { useRefetchOnVisible } from '../hooks/useRefetchOnVisible'
 import { useTrafficStats } from '../hooks/useTrafficStats'
-import { useConfirmBeforeRevealingCards } from '../hooks/useConfirmBeforeRevealingCards'
-import { useUnitPlateColors } from '../hooks/useUnitPlateColors'
-import { useUnitReserveDisplayMode } from '../hooks/useUnitReserveDisplayMode'
 import { formatUnreadBadge, isChatEnabled } from '../lib/chatApi'
 import type { GameRow, PlayerRow } from '../lib/dbTypes'
+import { buildDeltaReplayContextFromState } from '../lib/deltaReplayContext'
 import { simpleError, toAppError, type AppError } from '../lib/errors'
 import { buildGenesisState } from '../lib/gameGenesis'
 import {
   applyActionEnforced,
   cancelGame,
   deleteGame,
+  deriveBaseFromView,
   duplicateGameAsHotseat,
   getGameByRoomCode,
   getGameState,
   getGameStateRedacted,
-  deriveBaseFromView,
-  type DeltaReplayContext,
-  type GameStateSnapshot,
   listMyGames,
   listPlayers,
   redoActionEnforced,
@@ -67,39 +32,29 @@ import {
   subscribeToPlayers,
   undoActionEnforced,
   writeGameState,
+  type DeltaReplayContext,
   type GameEnforcementResult,
+  type GameStateSnapshot,
 } from '../lib/gameApi'
-import { buildDeltaReplayContextFromState } from '../lib/deltaReplayContext'
 import { loadCachedGameState, saveCachedGameState } from '../lib/gameStateCache'
 import { encodeGameStateExport } from '../lib/gameStateExport'
-import { saveMapToPool } from '../lib/mapPoolApi'
-import { gamePath, isFinished as isMyGameFinished, isCanceled as isMyGameCanceled, isMyTurn as isMyGameTurn, latestUpdatedAt as latestMyGameUpdatedAt, type MyGameEntry } from '../lib/myGamesView'
+import { gamePath, isCanceled as isMyGameCanceled, isFinished as isMyGameFinished, isMyTurn as isMyGameTurn, latestUpdatedAt as latestMyGameUpdatedAt, type MyGameEntry } from '../lib/myGamesView'
 import { setPendingRedirect } from '../lib/pendingRedirect'
-import { shouldRetractOwnChoice, shouldRetractOwnDecline } from '../lib/undoDecision'
 
 /**
  * Two players' writes racing the game_state row's optimistic-concurrency
- * `version` check is the COMMON case, not a rare edge case — e.g. both
- * players choosing their card in the same simultaneous select-cards phase
- * routinely land within milliseconds of each other. Whoever's write
- * doesn't land first isn't in any real conflict with the other's action
- * (their own choice is still entirely valid against the fresher state) —
- * so retrying against the latest state should just work, silently, rather
- * than surfacing a "someone else acted first, try again" error that the
- * player has to notice and manually retry (or, worse, just reach for a
- * full page refresh). Capped so a genuinely stuck case still surfaces an
- * error instead of hanging.
+ * `version` check is the COMMON case in a simultaneous phase, not a rare
+ * edge case — both players moving within milliseconds of each other. The
+ * loser isn't in any real conflict (their move is still valid against the
+ * fresher state), so the client-trusted path retries transparently against
+ * the latest state. Capped so a genuinely stuck case still surfaces an error.
  */
 const MAX_WRITE_RETRIES = 3
 
 /**
- * HIDDEN_INFORMATION_PLAN.md §8 phase 8: whether this game's state reads
- * should go through the redacted get-game-state Edge Function
- * (getGameStateRedacted) instead of the raw game_state row (getGameState).
- * Only true when both GameSettings.ruleEnforcementEnabled and
- * hiddenInformationEnabled are on — every other game (the default, and
- * every game that existed before either flag) keeps reading the raw row,
- * completely unaffected.
+ * Whether this game's state reads go through the redacted get-game-state
+ * Edge Function (getGameStateRedacted) instead of the raw game_state row —
+ * only when both ruleEnforcementEnabled and hiddenInformationEnabled are on.
  */
 function usesRedactedReads(game: GameRow): boolean {
   return game.settings.ruleEnforcementEnabled && game.settings.hiddenInformationEnabled
@@ -107,73 +62,24 @@ function usesRedactedReads(game: GameRow): boolean {
 
 /**
  * Picks getGameState vs getGameStateRedacted per usesRedactedReads above.
- * `previous`, when given, is forwarded to getGameStateRedacted as the state
- * to splice its incremental actionHistory response onto (issue #647) —
- * ignored for a non-redacted game, which has no equivalent parameter.
+ * `previous`, when given, is the state to splice an incremental response onto
+ * — ignored for a non-redacted game.
  */
 function fetchGameState(game: GameRow, previous?: EngineGameState | null, replay?: DeltaReplayContext | null): Promise<GameStateSnapshot | null> {
   return usesRedactedReads(game) ? getGameStateRedacted(game.id, previous, replay ?? undefined) : getGameState(game.id)
 }
 
 /**
- * The review banner's territory-control toggle (see `territoryControlMode`
- * state below) cycles through these in order on each click, rather than
- * offering three separate buttons — one button reads more like a single
- * "territory overlay" control switching between views than three
- * independent, easy-to-confuse-with-multi-select toggles.
+ * The in-game screen: the platform shell (header, menu, undo/redo, history
+ * review, hotseat hand-off, admin mode, chat, log, room lifecycle) around the
+ * game's own view (its package's `view` entry, via src/games/ui.ts). Everything game-specific is in the
+ * game slot; this file only knows the generic GameState envelope.
  */
-const TERRITORY_CONTROL_MODES = [
-  { mode: 'off', label: 'Territory: off', title: 'Territory control is hidden. Click to outline every region a player currently controls, like the victory screen.' },
-  {
-    mode: 'on',
-    label: 'Territory: on',
-    title: 'Outlining every region currently under a player’s control, like the victory screen. Click to outline only what changed since the previous step instead.',
-  },
-  {
-    mode: 'changes',
-    label: 'Territory: changes',
-    title:
-      'Outlining only the regions whose control changed since the previous step — a region that turned neutral is striped black-and-white. Click to hide territory control.',
-  },
-] as const
-
-/**
- * Icon for the live territory-control toggle (issue #665): three small
- * hexes connected as a triangle, standing in for the "Territory: on/off"
- * text label the button used to carry. State reads from `currentColor`
- * alone — the button's own text/border color already flips between amber
- * (on) and neutral (off), so the icon needs no color logic of its own.
- */
-function TerritoryTriangleIcon() {
-  const r = 4.4
-  const sqrt3 = Math.sqrt(3)
-  const centers = [
-    { x: 0, y: -r },
-    { x: -r * (sqrt3 / 2), y: r / 2 },
-    { x: r * (sqrt3 / 2), y: r / 2 },
-  ]
-  const hexPoints = (cx: number, cy: number) =>
-    Array.from({ length: 6 }, (_, i) => {
-      const angle = (Math.PI / 180) * (60 * i - 90)
-      return `${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`
-    }).join(' ')
-  return (
-    <svg width="16" height="16" viewBox="-9 -9 18 18" aria-hidden="true">
-      {centers.map((c, i) => (
-        <polygon key={i} points={hexPoints(c.x, c.y)} fill="currentColor" fillOpacity={0.85} stroke="currentColor" strokeWidth={0.6} />
-      ))}
-    </svg>
-  )
-}
-
 export function GamePage() {
   const { roomCode } = useParams<{ roomCode: string }>()
   const { session, loading: authLoading } = useAuth()
   const isAdmin = useIsAdmin(session?.user ?? null)
   const trafficStats = useTrafficStats()
-  const { colors: unitPlateColors } = useUnitPlateColors(session?.user ?? null)
-  const { mode: unitReserveDisplayMode } = useUnitReserveDisplayMode(session?.user ?? null)
-  const { value: confirmBeforeRevealingCards } = useConfirmBeforeRevealingCards(session?.user ?? null)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -189,102 +95,51 @@ export function GamePage() {
   const [gameState, setGameState] = useState<EngineGameState | null>(null)
   const [version, setVersion] = useState<number | null>(null)
   /**
-   * Tracks the newest `version` actually applied to `gameState`, independent
-   * of React state (which only updates after a render) — guards
+   * The newest `version` actually applied to `gameState`, independent of
+   * React state (which only updates after a render) — guards
    * applyGameStateSnapshot below against two in-flight fetches resolving out
-   * of order. Reset to `null` whenever the game-id effect below
-   * (re-)subscribes, since a version number is only ever comparable within
-   * the same game's `game_state` row.
-   *
-   * Also handed to subscribeToGameState as `getAppliedVersion` (issue #646):
-   * the realtime `game_state_meta` event that follows this client's own
-   * write already carries a version this ref has just been set to, so the
-   * subscription can skip its refetch entirely instead of re-downloading
-   * state it already has.
+   * of order. Also handed to subscribeToGameState as `getAppliedVersion`, so
+   * the realtime echo of this client's own write skips its refetch.
    */
   const latestVersionRef = useRef<number | null>(null)
   /**
-   * The last-applied `GameState` itself, mirroring `latestVersionRef` for the
-   * same reason: the game-id effect below subscribes once per room and
-   * closes over whatever `gameState` was at that render, so a ref is what
-   * lets its realtime callback always see the latest value. Handed to
-   * subscribeToGameState as `getAppliedState` (issue #647) so a redacted
-   * game's per-move refetch can ask the `get-game-state` Edge Function for
-   * just the actionHistory entries logged since this state, instead of the
-   * whole array again.
-   */
-  const latestGameStateRef = useRef<EngineGameState | null>(null)
-  /**
-   * The *base* behind `latestGameStateRef`'s rendered view: the state replayed
-   * up to this viewer's safe actionHistory prefix, before
-   * `applyInFlightOverlay` lays the unresolved phase over it (issue #648).
-   * This — never the view — is what seeds the next delta request and what gets
-   * cached, because the view has the overlay's effects already baked in and
-   * would double-apply them once those actions became visible for real.
-   * `null` whenever the last response could not produce one, which just means
-   * the next read is a full fetch.
+   * The *base* behind the rendered view: the state replayed up to this
+   * viewer's safe actionHistory prefix, before any in-flight overlay
+   * (@game-platform/sdk's inFlightOverlay.ts). This — never the view — seeds the next delta
+   * request and gets cached, because the view has the overlay's effects baked
+   * in and would double-apply them once those actions became visible.
    */
   const latestBaseRef = useRef<EngineGameState | null>(null)
   /**
    * Everything getGameStateRedacted needs to rebuild a state from actions
-   * instead of being handed one. Held in a ref, assigned during render below
-   * once `genesis` and the content bundles exist, because the effects that
-   * read it are declared above them — referencing them in a dependency array
-   * up here would hit the temporal dead zone.
+   * instead of being handed one — assigned during render below once
+   * `genesis` exists. A ref because the effects that read it are declared
+   * above it.
    */
   const deltaContextRef = useRef<DeltaReplayContext | null>(null)
 
   /**
    * Applies a freshly fetched state/version pair, discarding it if it's no
-   * newer than what's already showing. The realtime subscription below
-   * kicks off a brand new `fetchState()` HTTP round trip on every
-   * `game_state_meta` change, and `useRefetchOnVisible` does the same on tab
-   * focus — two such requests (or one of them racing this client's own
-   * optimistic write in submitAction/writeWithRetry) can resolve in a
-   * different order than they were sent, which without this guard would
-   * briefly roll `gameState` back to an earlier round phase/card choice
-   * before the newer response's turn came — e.g. flashing ActionsPanel's
-   * "No chosen card found for this player." for the split second the UI
-   * shows `roundPhase: 'actions'` from a fresher response paired with an
-   * older response's `chosenCardIdByPlayerId` (issue #507). Every call site
-   * that sets `gameState`/`version` together should go through this instead
-   * of calling both setters directly.
+   * newer than what's already showing — realtime refetches, tab-focus
+   * refetches and this client's own writes can resolve out of order. Every
+   * call site that sets `gameState`/`version` should go through this.
    */
   function applyGameStateSnapshot(snapshot: GameStateSnapshot) {
     if (latestVersionRef.current !== null && snapshot.version <= latestVersionRef.current) return
     latestVersionRef.current = snapshot.version
-    latestGameStateRef.current = snapshot.state
     latestBaseRef.current = snapshot.base ?? null
     setGameState(snapshot.state)
     setVersion(snapshot.version)
   }
+
   /**
-   * Persists every snapshot applyGameStateSnapshot accepts to IndexedDB
-   * (issue #688), so a later cold open — the mount effect below, via
-   * loadCachedGameState — has something to seed its first fetch with
-   * instead of always paying for a full one. Fires for a same-session
-   * refetch, a realtime push, and this client's own submitted action alike,
-   * not just the initial load, since all of them flow through the
-   * gameState/version state this depends on. Fire-and-forget:
-   * saveCachedGameState degrades to a no-op on any failure (its own doc
-   * comment), so there's nothing to await or surface here.
+   * Persists every accepted snapshot's base to IndexedDB (gameStateCache.ts),
+   * so a later cold open can ask for a delta instead of a full state.
+   * Derives the base from the view when the response didn't carry one (the
+   * normal case on a cold open, before `players` has loaded). Fire-and-forget.
    */
   useEffect(() => {
     if (!game || !session || !gameState || version === null) return
-    // The base, not the rendered view — see latestBaseRef.
-    //
-    // Derived here when the last response couldn't produce one, which on a
-    // cold open is the normal case rather than the exception: the mount fetch
-    // below runs before `players` has loaded, so `genesis` — and with it the
-    // replay context — is still null when the response comes back. Without
-    // this the ref stayed null, nothing was ever written to IndexedDB, and the
-    // first move of every session went out on protocol 1. #688's cache had
-    // populated unconditionally; making it conditional on a base is what
-    // broke it.
-    //
-    // Deriving from the *view* is safe whether or not an overlay was applied:
-    // deriveBaseFromView replays `actionHistory`, which is the safe prefix
-    // either way, so the overlay's fields are never consulted.
     let base = latestBaseRef.current
     if (!base) {
       const replay = deltaContextRef.current
@@ -294,39 +149,22 @@ export function GamePage() {
     }
     if (!base) return
     void saveCachedGameState(game.id, session.user.id, version, base)
-    // Deliberately keyed on the ids, not the `game`/`session` objects: a
-    // `subscribeToGame` merge (below) gives `game` a new identity on every
-    // unrelated `games` row change (e.g. a presence touch), and re-running
-    // this on those would just re-persist the same gameState/version.
+    // Keyed on the ids, not the objects: `game` gets a new identity on every
+    // unrelated `games` row change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game?.id, session?.user?.id, gameState, version, players.length])
+
   const [actionError, setActionError] = useState<AppError | null>(null)
-  /** True while a move submitted via submitAction() is in flight — surfaced as a small "Sending…" badge in the board's top-right corner (issue #434). */
+  /** True while a move is in flight — shown as a "Sending…" badge and passed to the game view. */
   const [submitting, setSubmitting] = useState(false)
   const [showStateJson, setShowStateJson] = useState(false)
-  /** Site-admin-only "Room configuration" panel (issue #453) — a readable summary of `game.settings`, primarily so an admin can confirm whether RULE_ENFORCEMENT_PLAN.md's `ruleEnforcementEnabled` is on for this room without decoding the full state JSON. */
+  /** Site-admin-only summary of `game.settings`. */
   const [showRoomConfig, setShowRoomConfig] = useState(false)
-  /** The top-left hamburger menu (Main menu, Show/Hide game state JSON) — see the click-outside/Escape effect below. */
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
-  /**
-   * In-game chat's own open/closed state (issue #580), lifted out of
-   * ChatPanel so its toggle button can live next to the player-name list in
-   * the header instead of ChatPanel rendering its own bordered box wherever
-   * it sits in the page. Closed by default, same as the old `compact` prop's
-   * initial `collapsed` — a chat panel pinned open would push the board
-   * below the fold on a phone (issue #565).
-   */
   const [chatOpen, setChatOpen] = useState(false)
-  /** Mirrors ChatPanel's live unread count (issue #580's `onUnreadCountChange`) so the header's own toggle button can show a matching badge while the panel itself renders nothing. */
   const [chatUnreadCount, setChatUnreadCount] = useState(0)
-  /**
-   * Mirrors the `chat_enabled` kill switch (CHAT_PLAN.md §4) so the header's
-   * own toggle button — unlike ChatPanel itself, which already renders
-   * nothing while disabled — can stay hidden too (issue #608: the button was
-   * shown regardless of the switch, the only visible trace of an otherwise
-   * fully-gated feature).
-   */
+  /** Mirrors the `chat_enabled` kill switch so the header's toggle button hides too. */
   const [chatEnabled, setChatEnabled] = useState(false)
   useEffect(() => {
     let cancelled = false
@@ -341,141 +179,43 @@ export function GamePage() {
       cancelled = true
     }
   }, [])
-  /** The "Reviewing history" banner (Prev/Next/slider/Back to live, etc.) — see the page-wide click-to-exit handler below. */
   const reviewBannerRef = useRef<HTMLDivElement>(null)
   const [copiedStateJson, setCopiedStateJson] = useState(false)
   const [copiedStateExport, setCopiedStateExport] = useState(false)
   const [stateExportError, setStateExportError] = useState<AppError | null>(null)
-  const [savingMap, setSavingMap] = useState(false)
-  const [mapSaved, setMapSaved] = useState(false)
-  const [mapSaveError, setMapSaveError] = useState<AppError | null>(null)
   const [undoing, setUndoing] = useState(false)
   const [redoing, setRedoing] = useState(false)
   /**
-   * Room admin mode (issue #391, persisted per issue #464): lets the room
-   * owner or a site admin act on behalf of whichever player the game is
-   * currently waiting on — e.g. to unstick a game where someone's stepped
-   * away — and, since #464, is also what the owner/admin override for
-   * discarding another player's undone action (via a branching Undo/Redo
-   * follow-up submission) is now gated on server-side, instead of that
-   * override being unconditionally available to them. A persisted,
-   * shared `GameState.adminModeActive` (toggled by submitting
-   * SET_ADMIN_MODE — see handleToggleAdminMode below) rather than a
-   * page-local `useState`, so it survives a reload, is the same for every
-   * client, and lands its own actionHistory entry — unlike every other
-   * toggle on this page, this one is a real, logged, shared game-state
-   * change, not a private viewing preference.
+   * Room admin mode: lets the room owner or a site admin act on behalf of
+   * whichever player the game is waiting on (e.g. to unstick an AFK player),
+   * and is what the server-side override for discarding another player's
+   * undone action is gated on. A persisted, logged, shared
+   * `GameState.adminModeActive` toggled by SET_ADMIN_MODE — not a page-local
+   * toggle — so every client agrees and the log records when it was on.
    */
   const adminModeActive = gameState?.adminModeActive ?? false
-  /**
-   * Cheat mode (issue #430, extended by issue #456): a site-admin-only
-   * testing aid with two effects while on:
-   * - Adds a "Move anywhere (cheat)" option to every acting unit's menu
-   *   (RoundView.tsx), letting the admin submit a movement action targeting
-   *   any hex on the board instead of just its legal destinations. It's
-   *   still a completely ordinary RESOLVE_UNIT_ACTION submission — the point
-   *   is to exercise the real rule-enforcement path (applyMove,
-   *   src/engine/unitActions.ts) and confirm the server actually refuses an
-   *   illegal target rather than trusting the client.
-   * - Lets `visibleGameLog` (below) show the fully unredacted narration log
-   *   instead of the same per-viewer-redacted view every other player gets —
-   *   without this toggle, admins (and the room owner, who never gets this
-   *   bypass at all) see hidden information masked exactly like anyone else.
-   * Not persisted — resets to off on reload, same as every other page-local
-   * UI toggle here.
-   */
-  const [cheatModeEnabled, setCheatModeEnabled] = useState(false)
-  /**
-   * Undo/redo availability (design change, issue #412): UNDO_ACTION/
-   * REDO_ACTION are now logged entries in `actionHistory` itself (see
-   * UndoAction's doc comment, engine/actions.ts) instead of a client-local,
-   * unpersisted `redoStack` — so unlike that stack, both buttons' enabled
-   * state below is just a pure read of the shared, persisted game state
-   * (`canUndo`: is there anything left to undo; `canRedo`: is there anything
-   * to redo), identical for every client and unaffected by reloading
-   * mid-review. `canUndo` (issue #545), unlike a plain `effective.length`
-   * check, stays false when the only thing logged so far is a `SET_ADMIN_MODE`
-   * toggle — it's always present in `.effective` (../engine/historyFold.ts)
-   * but is never itself what a bare Undo would revert.
-   */
+  /** Undo/redo availability — a pure read of the shared, logged history (@game-platform/sdk's historyFold.ts). */
   const historyPointer = useMemo(() => (gameState ? resolveHistory(gameState.actionHistory) : { effective: [], canUndo: false, canRedo: false }), [gameState])
   /**
-   * History review (issue #63): lets anyone step through past points in the
-   * game — genesis plus every action since — without touching the live,
-   * shared `game_state` row the way Undo does. `null` means "showing the
-   * live game" (the normal case); otherwise it's an index into
-   * `gameState.actionHistory` (0 = genesis, N = the state right after the
-   * Nth logged action), and `reviewState` below replays purely client-side
-   * up to that point. Reset whenever a fresh room loads, same as
-   * `hotseatActivePlayerId`.
-   *
-   * Both step sizes ("action by action", "turn by turn", issue #261) drive
-   * this same index — they're the same read-only replay feature, just with a
-   * different step size (see `historyStepMode` below). One "Review history"
-   * button opens this (issue #264) — the in-review "Step by turn"/"Step by
-   * action" toggle then switches `historyStepMode` without leaving review.
-   * Sharing one index means both step sizes show the exact same
-   * reconstructed historical board (RoundView's `state` prop).
+   * History review: step through past points in the game without touching
+   * the live `game_state` row. `null` means "showing the live game";
+   * otherwise an index into `gameState.actionHistory` (0 = genesis, N = the
+   * state right after the Nth logged entry), replayed purely client-side.
    */
   const [reviewIndex, setReviewIndex] = useState<number | null>(null)
   /**
-   * Which step size is currently driving `reviewIndex` — 'action' steps by a
-   * single actionHistory entry at a time; 'turn' steps by a whole player's
-   * turn at a time (see `fullTurnStops` below). Switched via the in-review
-   * "Step by turn"/"Step by action" toggle (issue #264), which snaps
-   * `reviewIndex` onto the nearest turn boundary when switching into 'turn'
-   * mode so the switch keeps showing whichever turn was already being
-   * reviewed. Only meaningful while `reviewIndex !== null`.
-   */
-  const [historyStepMode, setHistoryStepMode] = useState<'action' | 'turn'>('action')
-  /**
-   * The review banner's territory-control overlay mode (issue #281,
-   * RoundView's `territoryControlMode` prop) — 'off' shows nothing extra,
-   * 'on' outlines every currently-controlled region like the victory screen,
-   * 'changes' outlines only what flipped since the previously-reviewed point
-   * (including a region that turned neutral, shown in black-and-white
-   * stripes). Defaults to 'changes' per issue #281 — the most useful
-   * at-a-glance view while stepping through history, more so than either the
-   * noisier 'on' or the silent 'off'. Cycled off -> on -> changes -> off by
-   * one toggle button (TERRITORY_CONTROL_MODES below) rather than three
-   * separate buttons, per follow-up request on issue #281.
-   */
-  const [territoryControlMode, setTerritoryControlMode] = useState<'off' | 'on' | 'changes'>('changes')
-  /**
-   * Live-play territory-control overlay (issue #656) — a simple on/off
-   * toggle, separate from the review banner's 3-state `territoryControlMode`
-   * above, that outlines every region the *live* board currently controls,
-   * the same way EndGameView's final board and the review 'on' mode do (see
-   * RoundView's `liveTerritoryControlOn` prop). Starts off so the board looks
-   * the same as before this issue until a player asks for it.
-   */
-  const [liveTerritoryControlOn, setLiveTerritoryControlOn] = useState(false)
-  /**
-   * Hotseat pass-and-play: which seated player the shared device is
-   * currently "handed to" — distinct from auth identity, since every
-   * hotseat seat shares one signed-in host's user_id (see gameApi.ts's
-   * addLocalPlayer). Null until confirmed via the pass-the-device gate
-   * below, and reset whenever a fresh room loads.
+   * Hotseat pass-and-play: which seated player the shared device is currently
+   * "handed to" — distinct from auth identity, since every hotseat seat
+   * shares the host's user_id (gameApi.ts's addLocalPlayer). Null until
+   * confirmed via the pass-the-device gate below.
    */
   const [hotseatActivePlayerId, setHotseatActivePlayerId] = useState<string | null>(null)
   const [lifecycleBusy, setLifecycleBusy] = useState(false)
   const [lifecycleError, setLifecycleError] = useState<AppError | null>(null)
   const [duplicating, setDuplicating] = useState(false)
   const [duplicateError, setDuplicateError] = useState<AppError | null>(null)
-  /**
-   * Other games (any status) the signed-in user is seated in, refreshed
-   * whenever this room loads and whenever the tab regains visibility — see
-   * `nextGameNeedingInput` below, which is what the "Next game" header
-   * button (issue #396) actually acts on. A one-shot fetch like
-   * MyGamesPage.tsx's, not a live subscription — gameApi.ts has no
-   * "all my games" realtime channel, only per-game ones.
-   */
+  /** Other games the signed-in user is seated in — drives the "Next game" button. Refreshed on load and tab focus. */
   const [otherMyGames, setOtherMyGames] = useState<MyGameEntry[]>([])
-  /**
-   * Guards against re-running the auto-enter-review effect below more than
-   * once per room load (issue #105).
-   */
-  const autoReviewAppliedRef = useRef(false)
 
   useEffect(() => {
     if (!menuOpen) return
@@ -501,10 +241,6 @@ export function GamePage() {
     setLoadError(null)
     setHotseatActivePlayerId(null)
     setReviewIndex(null)
-    setHistoryStepMode('action')
-    setMapSaved(false)
-    setMapSaveError(null)
-    autoReviewAppliedRef.current = false
     void (async () => {
       try {
         const foundGame = await getGameByRoomCode(roomCode)
@@ -547,12 +283,8 @@ export function GamePage() {
       .catch(() => {})
   })
 
-  // Realtime subscriptions (below) miss anything that changed while the
-  // tab was backgrounded and its socket dropped, and this room's own
-  // `game`/`gameState`/`players` weren't covered by the "other games" list
-  // refetch above — e.g. a "your turn" push notification firing while the
-  // tab is stale otherwise leaves the board showing the wrong turn until
-  // something else forces a refetch (issue #405).
+  // Realtime subscriptions miss anything that changed while the tab was
+  // backgrounded and its socket dropped — refetch this room on focus.
   useRefetchOnVisible(() => {
     if (!roomCode || !game) return
     void getGameByRoomCode(roomCode).then((fresh) => {
@@ -569,33 +301,18 @@ export function GamePage() {
     const gameId = game.id
     const redacted = usesRedactedReads(game)
     let cancelled = false
-    // A version number is only comparable within the same game's game_state
-    // row — starting fresh here (rather than carrying over whatever the
-    // previous game left behind) is what lets applyGameStateSnapshot's guard
-    // accept this game's very first, low-numbered snapshot. Same reasoning
-    // for latestGameStateRef: a previous room's actionHistory is not a valid
-    // prefix to splice this one's incremental fetches onto.
+    // A version number is only comparable within the same game's row.
     latestVersionRef.current = null
-    latestGameStateRef.current = null
     latestBaseRef.current = null
 
     void (async () => {
-      // issue #688: the cold-open counterpart to latestGameStateRef above —
-      // a state this same signed-in user materialised in a *previous*
-      // session, read back from IndexedDB so this very first fetch can also
-      // ask get-game-state for a delta instead of the whole state. Only
-      // ever a seed for that request (fetchGameState's own doc comment) —
-      // gameStateCache.ts's own doc comment covers why a stale/foreign/
-      // corrupt entry here just falls back to today's full fetch rather
-      // than risk anything worse.
+      // A state this user materialised in a previous session, read back from
+      // IndexedDB so this very first fetch can ask for a delta. The replay
+      // context is rebuilt from the cached state itself, since `players` (and
+      // with it `genesis`) hasn't loaded yet. A stale cache just costs one
+      // hash mismatch and a full fetch.
       const userId = session?.user?.id
       const cached = userId ? await loadCachedGameState(gameId, userId) : null
-      // deltaContextRef is still null here: `genesis` needs `players`, and the
-      // listPlayers call below hasn't resolved yet. Rebuilding the context
-      // from the cached state itself (deltaReplayContext.ts) is what lets this
-      // very first request ask for a protocol-2 delta instead of falling back
-      // to the pre-#648 contract — which, for a cold open, is most opens.
-      // A stale cache just costs one hash mismatch and a full fetch.
       const replay = deltaContextRef.current ?? (cached ? buildDeltaReplayContextFromState(game, cached) : null)
       const snapshot = await fetchGameState(game, cached, replay)
       if (!cancelled && snapshot) applyGameStateSnapshot(snapshot)
@@ -605,20 +322,9 @@ export function GamePage() {
     const unsubscribePlayers = subscribeToPlayers(gameId, () => {
       void listPlayers(gameId).then(setPlayers)
     })
-    // Live status updates (e.g. the Owner canceling from another tab/device)
-    // — GamePage otherwise only fetches `game` once on mount, unlike
-    // LobbyPage which already subscribes for its own status-driven navigate.
-    // Merge onto the last known row rather than replacing it outright:
-    // Postgres logical replication omits a column from an UPDATE's "new"
-    // record when it's unchanged *and* TOASTed (stored out-of-line, which
-    // `settings` can be once it embeds a map-pool board — see
-    // GAME_LIST_COLUMNS's comment in gameApi.ts), and status/cancel updates
-    // never touch `settings`. A bare `setGame(payload.new)` then leaves
-    // `game.settings` `undefined` on this render, crashing every unguarded
-    // `game.settings.*` read below (issue #533).
-    const unsubscribeGame = subscribeToGame(gameId, (updated) =>
-      setGame((prev) => (prev ? { ...prev, ...updated } : updated)),
-    )
+    // Merge onto the last known row: Realtime omits an unchanged TOASTed
+    // column (a large `settings`) from an UPDATE's payload.
+    const unsubscribeGame = subscribeToGame(gameId, (updated) => setGame((prev) => (prev ? { ...prev, ...updated } : updated)))
 
     return () => {
       cancelled = true
@@ -626,162 +332,54 @@ export function GamePage() {
       unsubscribePlayers()
       unsubscribeGame()
     }
-    // Keyed on the room id only, not the whole `game` object: subscribeToGame
-    // above calls setGame on every `games` row change (e.g. a presence/visibility
-    // touch), and re-running this effect on those re-fetches the full GameState
-    // and tears down/rebuilds all three channels for no reason — see issue #441.
+    // Keyed on the room id only: subscribeToGame calls setGame on every row
+    // change, and re-running this would tear down every channel for nothing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game?.id])
 
-  // Player count for content resolution comes from `gameState.players.length`
-  // when available, not the live `players` row count — `gameState.players`
-  // is fixed at genesis and never shrinks afterward (elimination flags a
-  // player, it doesn't remove them, see engine/elimination.ts), so it's the
-  // self-contained source, the same reasoning `activeTaleIds`/`gameLength`
-  // below already follow. `players.length` is only a bootstrap fallback for
-  // the brief window before `gameState` has loaded, when nothing here is
-  // rendered yet anyway. Falling back to a live re-fetch of the `players`
-  // table let one render's content resolution (board-generation pool sizes,
-  // unit supply caps, ...) silently diverge from genesis's — confirmed
-  // against a reported 2-player game (issue #519) whose
-  // `boardSetup.tilesRemainingInTier` ended up permanently set to the
-  // *3*-player pool size for its next tile tier.
-  const contentPlayerCount = gameState?.players.length ?? players.length
-  const boardGenerationContent = useMemo(() => resolveBoardGenerationContent(contentPlayerCount), [contentPlayerCount])
-  // Tales (src/content/tales.json) and the achievement target chosen at
-  // game creation (games.settings.activeTaleIds/gameLength — see
-  // CreateGamePage.tsx's TaleSelector/GameLengthSelector) are carried into GameState itself
-  // once genesis is built (GameState.activeTaleIds/gameLength — see
-  // buildGenesisState), so once a game is under way this reads the
-  // running gameState, not the games row — self-contained the same way a
-  // RAF-STATE-1 export is. applyTaleModifiers is a no-op for a game with
-  // no Tales active (the default, and every game before this variant
-  // existed).
-  const taleContent = useMemo(
-    () => resolveTaleContent(gameState?.activeTaleIds ?? [], contentPlayerCount),
-    [contentPlayerCount, gameState?.activeTaleIds],
-  )
-  const unitContent = useMemo(() => applyTaleModifiers(resolveUnitContent(contentPlayerCount), taleContent), [contentPlayerCount, taleContent])
-  // A Tale can grant a real Trophy of its own (e.g. The Capital Tale) —
-  // merged onto the base achievements the same way Tale unit content is,
-  // so claiming it goes through the exact same claim/decline/game-length
-  // pipeline as a base achievement. A no-op for a game with no such Tale
-  // active, same convention as applyTaleModifiers.
-  const achievementContent = useMemo(
-    () => applyTaleAchievementModifiers(resolveAchievementContent(gameState?.gameLength), taleContent),
-    [gameState?.gameLength, taleContent],
-  )
-
   const isCreator = game?.created_by === session?.user.id
-  // Cancel is only offered while the room is genuinely Active (issue
-  // section 11) — a finished game still reads `game.status === 'active'`
-  // here too (see dbTypes.ts's GameRow comment), so the finer-grained
-  // engine status rules out canceling a game that's already over.
+  // A finished game still reads `game.status === 'active'` (see dbTypes.ts's
+  // GameRow comment), so the engine status rules out canceling a finished game.
   const canCancel = isCreator && game?.status === 'active' && gameState?.status !== 'completed'
-  // Admins (0017_admin_delete_any_game.sql) bypass both the ownership and
-  // status restrictions — the matching RLS policy is the real guard, same
-  // as LobbyPage.tsx's matching canDelete.
+  // Admins bypass both the ownership and status restrictions — the RLS
+  // policy is the real guard.
   const canDelete = (isCreator && game?.status === 'canceled') || isAdmin
-  // Visibility (issue section 4): Owner-only, any time short of canceled —
-  // not gameplay configuration, so it stays editable after the room leaves
-  // the lobby (see LobbyPage.tsx's matching toggle and setGameVisibility).
   const canEditVisibility = isCreator && game?.status !== 'canceled'
   const isHotseat = game?.play_mode === 'hotseat'
-  const isSeatedPlayer = players.some((p) => p.user_id === session?.user.id)
   /**
-   * Who may switch on admin mode (issue #391): the room owner or a site
-   * admin. Hotseat is excluded — it already lets one local device act as
-   * whoever's turn it is (pendingActorId-driven `me`, the same mechanism
-   * admin mode reuses below), so the toggle would be redundant there.
+   * Who may switch on admin mode: the room owner or a site admin. Hotseat is
+   * excluded — it already lets one device act as whoever's turn it is.
    */
   const canAdminOverride = (isCreator || isAdmin) && !isHotseat
-  /**
-   * Issue #534: with `lockRevealedInformationEnabled` on, undoing the tip's
-   * own entry can itself put an already-revealed CHOOSE_CARD/MOVE_TO_DECLINE
-   * pick back under wraps — the same case `requiresOwnerOverride`
-   * (supabase/functions/_shared/gameEnforcement.ts) blocks on resubmission
-   * (RULE_ENFORCEMENT_PLAN.md §4.4). Disabling the button here — mirroring
-   * `undo-action`'s own matching server-side check — stops the click from
-   * ever succeeding and leaving the *next* action the one that fails
-   * instead, stuck mid-reveal with no visible way forward.
-   */
-  const undoBlockedByRevealLock =
-    Boolean(gameState?.lockRevealedInformationEnabled) &&
-    !!gameState &&
-    undoWouldReopenRevealedPick(gameState) &&
-    !(adminModeActive && canAdminOverride)
 
-  /**
-   * Open spectating in history review mode (issue #105), not live — a
-   * non-seated visitor has no `me` and can't act regardless, but landing
-   * straight on the live board skips past the one review affordance
-   * actually meant for a spectator: scrubbing back through what already
-   * happened. Applies once per room load (autoReviewAppliedRef) so it
-   * doesn't fight a deliberate "Exit review" click later in the session.
-   */
-  useEffect(() => {
-    if (autoReviewAppliedRef.current || isSeatedPlayer || !gameState) return
-    autoReviewAppliedRef.current = true
-    setHistoryStepMode('turn')
-    setReviewIndex(gameState.actionHistory.length)
-  }, [isSeatedPlayer, gameState])
-
-  // Creation-time opt-out (CreateGamePage.tsx's checkbox, checked by default) for groups that don't
-  // want the extra tap every turn — when set, `me` just always follows
-  // whoever must act next, and the gate never has anything to catch it on.
+  // When set, `me` in hotseat just follows whoever must act next, and the
+  // pass-the-device gate never shows.
   const skipHotseatGate = game?.settings.skipHotseatPassGate ?? false
-  /**
-   * Whichever seated player must act next (see engine/turnOrder.ts) — used
-   * to know who the pass-the-device gate should hand the shared device to
-   * in hotseat, and who admin mode (below) should act as in live/async.
-   */
+  /** Whichever seated player must act next (@game-platform/sdk's turnOrder.ts). */
   const pendingActorId = gameState ? currentActorId(gameState) : null
   const needsHotseatGate = isHotseat && !skipHotseatGate && pendingActorId !== null && pendingActorId !== hotseatActivePlayerId
 
   /**
-   * `me` is "which seated player does this browser act on behalf of" — the
-   * one identity every submitted action's `playerId` and every panel's
-   * interactivity gate (`myPlayerId` throughout RoundView/BoardSetupView)
-   * derives from. Hotseat already makes this follow whoever must act next
-   * rather than a fixed signed-in identity (one shared device, many seats).
-   * Admin mode (issue #391) reuses exactly that mechanism for live/async:
-   * while enabled, the room owner or a site admin's `me` follows
-   * `pendingActorId` the same way, so every existing action panel — no
-   * changes needed there — lets them take the current turn on behalf of
-   * whichever player the game is waiting on. Falls back to the admin's own
-   * seat (or none) once nobody is pending, e.g. between rounds.
+   * `me` is "which seated player does this browser act on behalf of" — every
+   * submitted action's `playerId` derives from it. Hotseat makes it follow
+   * whoever must act next; admin mode does the same for the room owner or a
+   * site admin in live/async, falling back to their own seat once nobody is
+   * pending.
    */
   const me = isHotseat
     ? players.find((p) => p.id === (skipHotseatGate ? pendingActorId : hotseatActivePlayerId))
     : adminModeActive && canAdminOverride && pendingActorId
       ? (players.find((p) => p.id === pendingActorId) ?? players.find((p) => p.user_id === session?.user.id))
       : players.find((p) => p.user_id === session?.user.id)
-  /** The signed-in user's own seat, regardless of admin mode's `me` override above — who SET_ADMIN_MODE (issue #464) should narrate as having toggled it. */
+  /** The signed-in user's own seat, regardless of admin mode — who SET_ADMIN_MODE is narrated as. */
   const ownSeat = players.find((p) => p.user_id === session?.user.id)
-  // Concede (issue #172): only a seated player, in a game that's actually
-  // under way, who hasn't already been eliminated — mirrors CONCEDE's own
-  // engine-side rejection of an unknown/already-eliminated player
-  // (applyConcede in engine/applyAction.ts).
   const canConcede = !!me && gameState?.status === 'active' && !gameState.players.find((p) => p.id === me.id)?.eliminated
-  /**
-   * The board's terrain is locked in the moment tile placement finishes —
-   * unit placement (boardSetup's second sub-phase, see BoardSetupState in
-   * ../engine/types.ts) only ever adds starting units, which handleSaveMap's
-   * stripOccupants strips right back out anyway, so there's no reason to
-   * keep "Save this map" disabled for that whole sub-phase (issue #294).
-   * `active`/`completed` are always save-able too, same as before.
-   */
-  const canSaveMap = !!gameState && (gameState.status !== 'boardSetup' || gameState.boardSetup?.tileTierQueue.length === 0)
 
   /**
-   * Deterministically rebuilt from the game's row + seated players — see
-   * buildGenesisState's own doc comment (genesis itself isn't stored, same
-   * as GameState.actionHistory's). Hoisted out of turnReview/gameLog below
-   * so both share one build instead of two, and memoized on the actual
-   * player fields genesis reads (id/displayName/color — see makePlayer-style
-   * mapping in gameGenesis.ts), not just `players`' array identity, which
-   * changes on every listPlayers() refetch even when nothing genesis cares
-   * about actually changed.
+   * Deterministically rebuilt from the game's row + seated players
+   * (buildGenesisState) — genesis itself isn't stored. Memoized on the
+   * player fields genesis reads, not `players`' identity, which changes on
+   * every refetch.
    */
   const playersSignature = useMemo(() => JSON.stringify(players.map((p) => ({ id: p.id, name: p.display_name, color: p.color }))), [players])
   const genesis = useMemo(() => {
@@ -789,610 +387,85 @@ export function GamePage() {
     try {
       return buildGenesisState(game, players)
     } catch {
-      // Same "shouldn't be possible for a game this session is actually
-      // playing, but fail quiet rather than crash the page" stance
-      // turnReview/gameLog already took before this was hoisted out of them.
       return null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game, players.length, playersSignature])
 
-  // Assigned during render rather than in an effect so the very next fetch —
-  // including the mount one, which runs after this — already sees it. Null
-  // until the roster has loaded, which is simply "ask for a full state this
-  // time"; see deltaContextRef's own comment for why it is a ref at all.
-  deltaContextRef.current = genesis ? { genesis, unitContent, achievementContent, boardGenerationContent, taleContent } : null
+  // Assigned during render so the very next fetch already sees it.
+  deltaContextRef.current = genesis ? { genesis } : null
 
-  /**
-   * Turn boundaries across the ENTIRE actionHistory (issue #261 follow-up:
-   * "Show history" must be able to page all the way back through the whole
-   * game, not just what happened since the reviewer's own last turn) — see
-   * engine/turnReview.ts's findTurnStops. `fullTurnStops[0]` is always 0
-   * (genesis) and its last entry is always `gameState.actionHistory.length`
-   * (now); every entry in between is a point where the acting player
-   * changes. Each entry is itself a valid `reviewIndex` (see below), so
-   * "Show history"'s Prev/Next/slider just step across this array instead
-   * of the raw action-by-action `reviewIndex` "Review history" uses.
-   */
-  const fullTurnStops = useMemo(
-    () => (gameState ? findTurnStops(gameState.actionHistory, 0) : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [gameState?.actionHistory],
-  )
-  /**
-   * Where "Show history" defaults to on entry — right after `me`'s own last
-   * turn, so paging forward reveals each opponent's turn in order, while
-   * Prev can still walk all the way back to genesis (issue #261). An
-   * observer has no turn of their own to anchor to, so they start at
-   * genesis (0) instead.
-   *
-   * `findReviewWindowStart`'s raw result isn't always one of
-   * `fullTurnStops`'s own values, though: `me`'s own last action can land
-   * inside a simultaneous `selectCards`/`declinePurchase` group (see
-   * `ReviewPhaseGroup`'s doc comment) immediately before a DIFFERENT
-   * player's action within that same group — `findTurnStops` never draws a
-   * boundary there, since those groups intentionally don't split per actor.
-   * Every other bit of turn-mode logic (Prev/Next's `currentTurnPos`, the
-   * halo/recap lookups above) assumes `reviewIndex` is always one of
-   * `fullTurnStops`'s own values, so snap forward to the next real stop —
-   * this can only ever land later within the same still-open group (often
-   * exactly "now", if nothing outside that group followed), never skip past
-   * a turn `me` hasn't reviewed yet (issue #333: this mismatch is what left
-   * "Review history"'s Next button wrongly disabled the instant it opened,
-   * for a finished game where the reviewer's own last action fell inside
-   * the final round's decline/purchase phase).
-   */
-  const defaultTurnHistoryIndex = useMemo(() => {
-    if (!gameState) return 0
-    const rawStart = me ? findReviewWindowStart(gameState.actionHistory, me.id) : 0
-    if (!fullTurnStops) return rawStart
-    return fullTurnStops.find((stop) => stop >= rawStart) ?? fullTurnStops[fullTurnStops.length - 1]
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameState?.actionHistory, me?.id, fullTurnStops])
+  const isReviewingHistory = reviewIndex !== null
+  const reviewMaxIndex = gameState?.actionHistory.length ?? 0
 
-  /**
-   * The running narration log (see engine/gameLog.ts) — nothing about it is
-   * stored on GameState, so it's rebuilt from the full actionHistory the
-   * same way turnReview rebuilds its own windowed slice above, just without
-   * a window: every logged action, from genesis, gets its line(s). Unlike
-   * turnReview's window, there's no cheaper starting point available here —
-   * every action, from every player, always belongs in the full log. What
-   * IS avoidable is re-replaying the *entire* history from genesis on every
-   * single new action (which is what made this scale worse the longer a
-   * game went on): gameLogCacheRef keeps the last-computed {actionHistory,
-   * state, events} around, and on the very common case of the new
-   * actionHistory being exactly that same prefix plus newly-appended
-   * actions (checked cheaply via a boundary-entry comparison, not a full
-   * deep-equal — event-sourcing here only ever appends or, via Undo,
-   * truncates from the end, never rewrites an already-logged entry in
-   * place), only extendGameLog()s the new suffix on top of the cached
-   * state instead of replaying from genesis again. Falls back to a full
-   * buildGameLogFrom() whenever that invariant doesn't hold (a different
-   * game/players/content, or a history that no longer starts with the
-   * cached prefix — e.g. Undo followed by a different action).
-   */
-  const gameLogCacheRef = useRef<{
-    gameId: string
-    playersSignature: string
-    unitContent: typeof unitContent
-    achievementContent: typeof achievementContent
-    boardGenerationContent: typeof boardGenerationContent
-    taleContent: typeof taleContent
-    actionHistory: LoggedAction[]
-    state: EngineGameState
-    events: GameEvent[]
-  } | null>(null)
-
-  const gameLog = useMemo(() => {
-    if (!game || !genesis) return []
-    const actionHistory = gameState?.actionHistory ?? []
-    const cache = gameLogCacheRef.current
-
-    const cacheCoversPrefix =
-      !!cache &&
-      cache.gameId === game.id &&
-      cache.playersSignature === playersSignature &&
-      cache.unitContent === unitContent &&
-      cache.achievementContent === achievementContent &&
-      cache.boardGenerationContent === boardGenerationContent &&
-      cache.taleContent === taleContent &&
-      cache.actionHistory.length <= actionHistory.length &&
-      (cache.actionHistory.length === 0 ||
-        JSON.stringify(cache.actionHistory[cache.actionHistory.length - 1]) === JSON.stringify(actionHistory[cache.actionHistory.length - 1]))
-
+  /** The state to render — live, or replayed up to `reviewIndex`. */
+  const reviewState = useMemo(() => {
+    if (reviewIndex === null || !genesis || !gameState) return null
     try {
-      if (cacheCoversPrefix && cache) {
-        const newActions = actionHistory.slice(cache.actionHistory.length)
-        if (newActions.length === 0) return cache.events
-        const extended = extendGameLog(genesis, cache.actionHistory, cache.state, newActions, cache.events.length + 1, unitContent, achievementContent, boardGenerationContent, taleContent)
-        const events = [...cache.events, ...extended.events]
-        gameLogCacheRef.current = { ...cache, actionHistory, state: extended.state, events }
-        return events
-      }
-
-      const built = buildGameLogFrom(genesis, actionHistory, unitContent, achievementContent, boardGenerationContent, taleContent, game.created_at)
-      gameLogCacheRef.current = {
-        gameId: game.id,
-        playersSignature,
-        unitContent,
-        achievementContent,
-        boardGenerationContent,
-        taleContent,
-        actionHistory,
-        state: built.state,
-        events: built.events,
-      }
-      return built.events
+      return replayActions(genesis, gameState.actionHistory.slice(0, reviewIndex))
     } catch {
-      gameLogCacheRef.current = null
+      return null
+    }
+  }, [reviewIndex, genesis, gameState])
+  const displayState = isReviewingHistory ? reviewState : gameState
+
+  /** The narration log for whatever's on screen (@game-platform/sdk's gameLog.ts), masked for this viewer (redactGameLog). */
+  const visibleGameLog = useMemo(() => {
+    if (!genesis || !displayState) return []
+    try {
+      return redactGameLog(buildGameLog(genesis, displayState.actionHistory), displayState, me?.id ?? null)
+    } catch {
       return []
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [game, genesis, playersSignature, gameState?.actionHistory, unitContent, achievementContent, boardGenerationContent, taleContent])
+  }, [genesis, displayState, me?.id])
 
-  const reviewMaxIndex = gameState?.actionHistory.length ?? 0
-  const isReviewingHistory = reviewIndex !== null
-
-  /**
-   * Which other game (if any) to jump to via the header's "Next game"
-   * button (issue #396) — the most recently updated one, among the user's
-   * other games, that's actually waiting on one of their seats right now.
-   * Recomputed from `otherMyGames` (see the fetch effect above), which only
-   * refreshes on room load and tab-visibility change, so this can go stale
-   * while this tab sits open and another game's turn arrives — acceptable
-   * for a "something else needs you" nudge, same tradeoff MyGamesPage.tsx
-   * already makes for its turn highlighting.
-   */
+  /** The most recently updated other game that's waiting on one of this user's seats. */
   const nextGameNeedingInput = useMemo(() => {
-    const candidates = otherMyGames.filter(
-      (entry) => entry.game.id !== game?.id && !isMyGameFinished(entry) && !isMyGameCanceled(entry) && isMyGameTurn(entry),
-    )
+    const candidates = otherMyGames.filter((entry) => entry.game.id !== game?.id && !isMyGameFinished(entry) && !isMyGameCanceled(entry) && isMyGameTurn(entry))
     candidates.sort(
-      (a, b) =>
-        new Date(latestMyGameUpdatedAt(b.game, b.gameStateUpdatedAt)).getTime() -
-        new Date(latestMyGameUpdatedAt(a.game, a.gameStateUpdatedAt)).getTime(),
+      (a, b) => new Date(latestMyGameUpdatedAt(b.game, b.gameStateUpdatedAt)).getTime() - new Date(latestMyGameUpdatedAt(a.game, a.gameStateUpdatedAt)).getTime(),
     )
     return candidates[0] ?? null
   }, [otherMyGames, game?.id])
 
-  /**
-   * The state (for BoardSetupView/RoundView) and narration log (see
-   * engine/gameLog.ts) at `reviewIndex` (see its doc comment above) —
-   * reusing `gameLog` above as-is for the log would leak entries from after
-   * the reviewed point (and everyone else's future moves, in an async
-   * game), defeating the point of a spoiler-free "what did the board look
-   * like back then" view, so both are rebuilt from genesis up to
-   * `reviewIndex` specifically.
-   *
-   * Scrubbing through review (the Prev/Next buttons and slider) used to
-   * replay the *entire* prefix from genesis on every single step — the
-   * same O(n) per-step / O(n^2) over a scrub session that made the live
-   * narration log slow before it got gameLogCacheRef below. This keeps its
-   * own equivalent: `reviewCacheRef` remembers every state/log-so-far it's
-   * ever derived, indexed by how many actions had been applied, and only
-   * computes the actions between the highest index already cached and
-   * whatever's newly requested — because each step is derived from the one
-   * before it, walking forward to a never-before-seen index naturally
-   * back-fills every index in between too, so the cache ends up dense
-   * (0..maxIndex), not just holding whichever indices were explicitly
-   * visited. Revisiting any already-cached index (stepping back, or
-   * forward within ground already covered) is then a plain array lookup.
-   * Same prefix-validity/invalidation rule as gameLogCacheRef above
-   * (actionHistory only ever appends or, via Undo, truncates from the end)
-   * — a truncation invalidates the whole cache, since indices past the
-   * truncation point may now derive from different actions.
-   */
-  const reviewCacheRef = useRef<{
-    gameId: string
-    playersSignature: string
-    unitContent: typeof unitContent
-    achievementContent: typeof achievementContent
-    boardGenerationContent: typeof boardGenerationContent
-    taleContent: typeof taleContent
-    actionHistory: LoggedAction[]
-    states: EngineGameState[]
-    events: GameEvent[]
-    eventCountAtIndex: number[]
-  } | null>(null)
+  /** Header roster in current turn order, falling back to seat order. */
+  const headerPlayers = displayState ? displayState.turnOrder.map((id) => players.find((p) => p.id === id)).filter((p): p is PlayerRow => p !== undefined) : players
+  const eliminatedPlayers = displayState ? players.filter((p) => !displayState.turnOrder.includes(p.id)) : []
 
-  const { reviewState, reviewGameLog, turnHalos, previousTerritoryState, showCardChoiceRecap, cardChoiceRecapPhase, cardChoiceRecap } = useMemo((): {
-    reviewState: EngineGameState | null
-    reviewGameLog: GameEvent[]
-    turnHalos: TurnReview | null
-    previousTerritoryState: EngineGameState | null
-    showCardChoiceRecap: boolean
-    cardChoiceRecapPhase: EngineGameState['roundPhase'] | null
-    cardChoiceRecap: CardChoiceRecap | null
-  } => {
-    if (reviewIndex === null || !game || !genesis || !gameState)
-      return {
-        reviewState: null,
-        reviewGameLog: [],
-        turnHalos: null,
-        previousTerritoryState: null,
-        showCardChoiceRecap: false,
-        cardChoiceRecapPhase: null,
-        cardChoiceRecap: null,
-      }
-    const actionHistory = gameState.actionHistory
-    let cache = reviewCacheRef.current
-
-    const cacheCoversPrefix =
-      !!cache &&
-      cache.gameId === game.id &&
-      cache.playersSignature === playersSignature &&
-      cache.unitContent === unitContent &&
-      cache.achievementContent === achievementContent &&
-      cache.boardGenerationContent === boardGenerationContent &&
-      cache.taleContent === taleContent &&
-      cache.actionHistory.length <= actionHistory.length &&
-      (cache.actionHistory.length === 0 ||
-        JSON.stringify(cache.actionHistory[cache.actionHistory.length - 1]) === JSON.stringify(actionHistory[cache.actionHistory.length - 1]))
-
-    try {
-      if (!cacheCoversPrefix || !cache) {
-        const initialEvents: GameEvent[] =
-          genesis.status === 'boardSetup' ? [{ id: 'evt_1', turn: genesis.turn, playerId: null, message: 'Board setup begins', timestamp: '' }] : []
-        cache = {
-          gameId: game.id,
-          playersSignature,
-          unitContent,
-          achievementContent,
-          boardGenerationContent,
-          taleContent,
-          actionHistory,
-          states: [genesis],
-          events: initialEvents,
-          eventCountAtIndex: [initialEvents.length],
-        }
-      }
-
-      while (cache.states.length - 1 < reviewIndex) {
-        const fromIndex = cache.states.length - 1
-        const extended = extendGameLog(
-          genesis,
-          actionHistory.slice(0, fromIndex),
-          cache.states[fromIndex],
-          [actionHistory[fromIndex]],
-          cache.events.length + 1,
-          unitContent,
-          achievementContent,
-          boardGenerationContent,
-          taleContent,
-        )
-        if (!extended.ok) {
-          // A validly-logged action should never fail to reapply — bail
-          // defensively (caught below) rather than cache a duplicate state
-          // under the wrong index and silently desync every later index.
-          // Checked via extendGameLog's own `ok` flag, not "did the state
-          // change": a legacy stale forced follow-up entry (applyAction.ts's
-          // isStaleForcedFollowUp) is a legitimate no-op that leaves state
-          // at the exact same reference, which used to be indistinguishable
-          // from a genuine failure here.
-          throw new Error(`Review replay failed at action ${fromIndex}`)
-        }
-        cache.states.push(extended.state)
-        cache.events = [...cache.events, ...extended.events]
-        cache.eventCountAtIndex.push(cache.events.length)
-      }
-      cache.actionHistory = actionHistory
-      reviewCacheRef.current = cache
-
-      // "Show history" (turn mode) also highlights what happened during the
-      // single turn currently on screen — the diff between the previously
-      // replayed state just before this turn started and the one now shown
-      // (issue #261). Both ends are already in `cache.states` (dense up to
-      // `reviewIndex`), so this is a small, single-turn buildTurnReview
-      // call, not a fresh whole-game replay. Skipped at the default entry
-      // point (`defaultTurnHistoryIndex`) and at genesis (index 0) — there's
-      // no "just happened" turn to highlight at either (see
-      // `defaultTurnHistoryIndex`'s own doc comment: paging forward from
-      // there is what reveals each opponent's turn).
-      let turnHalos: TurnReview | null = null
-      // The territory-control "highlight changes" mode (issue #281) needs
-      // the same "state just before this point" boundary turnHalos already
-      // diffs against — reusing its exact prevStop (and the same
-      // defaultTurnHistoryIndex/genesis skip) keeps both features agreeing
-      // on what "just changed" means at any given point in turn mode. Action
-      // mode has no equivalent halo feature to share a boundary with, so it
-      // just uses the one action immediately prior.
-      let previousTerritoryState: EngineGameState | null = null
-      if (historyStepMode === 'turn' && reviewIndex > 0 && reviewIndex !== defaultTurnHistoryIndex && fullTurnStops) {
-        const pos = fullTurnStops.indexOf(reviewIndex)
-        if (pos > 0) {
-          const prevStop = fullTurnStops[pos - 1]
-          turnHalos = buildTurnReview(
-            cache.states[prevStop],
-            actionHistory.slice(prevStop, reviewIndex),
-            unitContent,
-            achievementContent,
-            boardGenerationContent,
-            taleContent,
-            genesis,
-            actionHistory.slice(0, prevStop),
-          )
-          previousTerritoryState = cache.states[prevStop]
-        }
-      } else if (historyStepMode === 'action' && reviewIndex > 0) {
-        previousTerritoryState = cache.states[reviewIndex - 1]
-      }
-
-      // The card-choice recap overlay's own "is this the first stop showing
-      // it" check (issue #326 follow-up, refined by #331) needs the
-      // roundPhase (and round number, see recapTurnFor) the PREVIOUS
-      // turn-stop actually replayed to — see shouldShowCardChoiceRecap's doc
-      // comment for why that can't be read off this stop's own action types.
-      // Computed independently of `previousTerritoryState` above: that one
-      // intentionally goes null at `defaultTurnHistoryIndex` (issue #261 —
-      // no "just happened" turn to halo-highlight there), but the recap
-      // should still reflect a real phase change at that same point. Both
-      // this stop's and the previous stop's phase go through
-      // `roundPhaseForRecap`, not the replayed state's raw `roundPhase` —
-      // see that function's doc comment for why a completed `declinePurchase`
-      // stop's raw `roundPhase` can't be trusted (issue #326's second
-      // follow-up).
-      let previousStop: { roundPhase: EngineGameState['roundPhase']; recapTurn: number } | null = null
-      if (historyStepMode === 'turn' && fullTurnStops) {
-        const pos = fullTurnStops.indexOf(reviewIndex)
-        if (pos > 0) {
-          const prevStop = fullTurnStops[pos - 1]
-          previousStop = { roundPhase: roundPhaseForRecap(actionHistory, prevStop, cache.states[prevStop]), recapTurn: recapTurnFor(actionHistory, prevStop, cache.states[prevStop]) }
-        }
-      }
-      const cardChoiceRecapPhase = roundPhaseForRecap(actionHistory, reviewIndex, cache.states[reviewIndex])
-      const recapTurn = recapTurnFor(actionHistory, reviewIndex, cache.states[reviewIndex])
-      const showCardChoiceRecap = shouldShowCardChoiceRecap(cardChoiceRecapPhase, recapTurn, previousStop, historyStepMode)
-      // Only actually re-derives the card-choice steps (a small, bounded
-      // replay — see cardChoicesForRecap's own doc comment) when the overlay
-      // will actually render; every other stop skips it entirely.
-      const cardChoiceRecap = showCardChoiceRecap
-        ? cardChoicesForRecap(actionHistory, cache.states, reviewIndex, recapTurn, unitContent, achievementContent, boardGenerationContent, taleContent)
-        : null
-
-      return {
-        reviewState: cache.states[reviewIndex],
-        reviewGameLog: cache.events.slice(0, cache.eventCountAtIndex[reviewIndex]),
-        turnHalos,
-        previousTerritoryState,
-        showCardChoiceRecap,
-        cardChoiceRecapPhase,
-        cardChoiceRecap,
-      }
-    } catch {
-      reviewCacheRef.current = null
-      return {
-        reviewState: null,
-        reviewGameLog: [],
-        turnHalos: null,
-        previousTerritoryState: null,
-        showCardChoiceRecap: false,
-        cardChoiceRecapPhase: null,
-        cardChoiceRecap: null,
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    reviewIndex,
-    game,
-    genesis,
-    gameState?.actionHistory,
-    playersSignature,
-    unitContent,
-    achievementContent,
-    boardGenerationContent,
-    taleContent,
-    historyStepMode,
-    fullTurnStops,
-    defaultTurnHistoryIndex,
-  ])
-
-  /**
-   * Per-viewer redacted copy of the narration log (issue #399) —
-   * `gameLog`/`reviewGameLog` above are the fully-revealing narration, kept
-   * shared/cached since they never differ by viewer; this applies
-   * redactGameLog against whichever state the log is currently sourced from
-   * (the live game, or `reviewState` while scrubbing history) so a
-   * still-secret CHOOSE_CARD pick reads as redacted for anyone but the
-   * player who made it, and automatically reveals once that round's
-   * selectCards phase resolves — see redactGameLog's own doc comment for why
-   * that can't just be decided once at narration time.
-   *
-   * Neither the room owner nor a site admin gets a free pass here (issue
-   * #456) — both see the same redacted log as any other player unless the
-   * admin-only "Cheat mode" toggle (issue #430, see cheatModeEnabled above)
-   * is explicitly switched on, same opt-in pattern as that toggle's "Move
-   * anywhere" board option.
-   */
-  const visibleGameLog = useMemo(() => {
-    const source = isReviewingHistory ? reviewGameLog : gameLog
-    if (isAdmin && cheatModeEnabled) return source
-    const redactionState = isReviewingHistory ? reviewState : gameState
-    if (!redactionState) return source
-    return redactGameLog(source, redactionState, me?.id ?? null)
-  }, [isReviewingHistory, reviewGameLog, gameLog, isAdmin, cheatModeEnabled, reviewState, gameState, me?.id])
-
-  /** The action most recently applied as of `reviewIndex`, for the review banner's label — null at genesis (reviewIndex 0). */
-  const reviewActionMeta = reviewIndex !== null && reviewIndex > 0 ? (gameState?.actionHistory[reviewIndex - 1] ?? null) : null
-
-  /** How many turns `fullTurnStops` covers — "Show history"'s slider/Prev/Next range. */
-  const turnPosCount = fullTurnStops ? fullTurnStops.length - 1 : 0
-  /** Where `reviewIndex` currently sits within `fullTurnStops`, for "Show history"'s slider — only meaningful (and always found) while `historyStepMode === 'turn'`, since that's the only mode that ever sets `reviewIndex` to one of `fullTurnStops`'s own values. */
-  const currentTurnPos = fullTurnStops && reviewIndex !== null ? fullTurnStops.indexOf(reviewIndex) : -1
-  /** The history banner's status text — branches on `historyStepMode` since "Review history" and "Show history" share the one banner but describe different units (actions vs. turns). */
-  const historyBannerLabel = (() => {
-    if (reviewIndex === null) return ''
-    if (historyStepMode !== 'turn') {
-      return reviewActionMeta ? `Turn ${reviewActionMeta.turn} — action ${reviewIndex} of ${reviewMaxIndex}` : 'Start of game (before any actions)'
-    }
-    if (reviewIndex === defaultTurnHistoryIndex && defaultTurnHistoryIndex === reviewMaxIndex) {
-      return me ? 'Nothing since your last turn.' : 'Nothing has happened yet.'
-    }
-    if (reviewIndex === 0) return 'Start of the game'
-    if (reviewIndex === defaultTurnHistoryIndex) return 'Right after your last turn'
-    // selectCards/declinePurchase are simultaneous — every player acts at once, so
-    // there's no single "next" player to name; show the phase instead (issue #324).
-    const group = gameState ? reviewPhaseGroupAt(gameState.actionHistory, reviewIndex) : null
-    if (group === 'selectCards') return `Select cards (${currentTurnPos} of ${turnPosCount})`
-    if (group === 'declinePurchase') return `Decline / Purchase (${currentTurnPos} of ${turnPosCount})`
-    const actorId = gameState?.actionHistory[reviewIndex - 1]?.action.playerId ?? null
-    const actorName = players.find((p) => p.id === actorId)?.display_name ?? 'Unknown'
-    return `${actorName}'s turn (${currentTurnPos} of ${turnPosCount})`
-  })()
-
-  const displayState = isReviewingHistory ? reviewState : gameState
-
-  /**
-   * The header roster (issue #707), reordered each round to start from
-   * `displayState.turnOrder[0]` — the current first player — rather than
-   * seat order, since first player rotates every round (see engine/round.ts)
-   * and this is the one place in the header a viewer can see whose "turn
-   * zero" it is without opening RoundView's sidebar. Falls back to the
-   * `players` roster's own (seat) order before a game has state to order by
-   * (lobby, or genesis still loading).
-   */
-  const headerPlayers = displayState
-    ? displayState.turnOrder.map((id) => players.find((p) => p.id === id)).filter((p): p is PlayerRow => p !== undefined)
-    : players
-
-  /**
-   * Does the whole header row still fit on one line? Drives the two header
-   * layouts (issue #640) — see the header's own comment in the JSX below,
-   * and ../hooks/useOneLineFit.ts for why this is measured rather than
-   * keyed off a breakpoint.
-   *
-   * The content key is everything that changes how wide the four groups
-   * want to be: the game name, the roster (count + display names), whether
-   * the chat button renders at all, the round/bank text, and the review
-   * button's label, which swaps between two different widths. Transient
-   * in-flight labels ("Undoing…") are deliberately left out — they last a
-   * moment, and a slightly stale latched width only ever delays the return
-   * to the one-line layout by one measurement.
-   */
-  const headerContentKey = [
-    game?.name ?? '',
-    playersSignature,
-    chatEnabled ? 'chat' : '',
-    displayState
-      ? `${displayState.turn}|${JSON.stringify(displayState.resourceBank)}|${displayState.turnOrder.join(',')}|${displayState.pendingPlayerIds.join(',')}`
-      : '',
-    isReviewingHistory ? 'review' : '',
-  ].join('\u0000')
-  const [headerRef, headerFitsOneLine] = useOneLineFit<HTMLElement>(headerContentKey)
-  const headerGroupClass = headerFitsOneLine ? 'flex w-max shrink-0 items-center gap-3' : 'flex flex-wrap items-center gap-3'
-
-  /**
-   * The "total score over time" series behind EndGameView's line chart —
-   * only worth deriving once the game is actually over, and only from the
-   * real (not history-review) state, so reviewing an earlier round never
-   * flickers the end-of-game chart's data. Keyed on actionHistory's length
-   * rather than `gameState` itself so an identical completed state refetched
-   * by a live subscription doesn't retrigger a full game replay for no
-   * reason (same rationale as playersSignature above).
-   */
-  const scoreHistory = useMemo(() => {
-    if (!genesis || !gameState || gameState.status !== 'completed') return null
-    return calculateScoreHistory(genesis, gameState.actionHistory, unitContent, achievementContent, boardGenerationContent, taleContent)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [genesis, gameState?.status, gameState?.actionHistory.length, unitContent, achievementContent, boardGenerationContent, taleContent])
-
-  /**
-   * Per-player, per-unit-kind "unit value" breakdown behind EndGameView's
-   * stacked bar chart (issue #335) — same "only once the game is over, keyed
-   * on actionHistory's length" rationale as scoreHistory above, since this
-   * also replays the whole game to attribute cumulative gold production per
-   * unit kind (./engine/unitValue.ts).
-   */
-  const unitValueDetail = useMemo(() => {
-    if (!genesis || !gameState || gameState.status !== 'completed') return null
-    return calculateUnitValueDetail(gameState, genesis, gameState.actionHistory, unitContent, achievementContent, boardGenerationContent, taleContent)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [genesis, gameState?.status, gameState?.actionHistory.length, unitContent, achievementContent, boardGenerationContent, taleContent])
-
-  /**
-   * Per-player gold-spending breakdown by category behind EndGameView's
-   * "Spending" stacked bar chart (issue #336 follow-up) — same "only once the
-   * game is over, keyed on actionHistory's length" rationale as
-   * unitValueDetail above, since this also replays the whole game
-   * (./engine/unitValue.ts).
-   */
-  const spendingBreakdown = useMemo(() => {
-    if (!genesis || !gameState || gameState.status !== 'completed') return null
-    return calculateGoldSpendingByCategory(genesis, gameState.actionHistory, unitContent, achievementContent, boardGenerationContent, taleContent)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [genesis, gameState?.status, gameState?.actionHistory.length, unitContent, achievementContent, boardGenerationContent, taleContent])
-
-  /**
-   * Preconditions shared by every write path below, including the
-   * ruleEnforcementEnabled branch (submitAction/handleUndo/handleRedo) that
-   * calls the Edge Functions directly and so bypasses writeWithRetry
-   * entirely — factored out so both paths reject the same way. Doesn't
-   * narrow `game`/`gameState`/`version`'s types (a plain function can't), so
-   * callers that need the narrowed values still check them again themselves;
-   * this exists to keep the *reasons* for rejecting in one place.
-   */
+  /** Preconditions shared by every write path below. */
   function writeGuardError(): string | null {
     if (!game || !gameState || version === null) return 'Game not loaded yet'
-    if (isReviewingHistory) {
-      // Belt-and-suspenders alongside passing myPlayerId={null} to every
-      // view below while reviewing, which already keeps their UI from
-      // calling any of these in the first place.
-      return 'Exit history review before making changes.'
-    }
-    if (game.status === 'canceled') {
-      // Belt-and-suspenders alongside 0008_room_lifecycle.sql's RLS policy,
-      // which is the actual guard against a stale/malicious client.
-      return 'This room has been canceled.'
-    }
+    if (isReviewingHistory) return 'Exit history review before making changes.'
+    if (game.status === 'canceled') return 'This room has been canceled.'
     return null
   }
 
   /**
-   * Runs one of the ruleEnforcementEnabled Edge Function calls
-   * (applyActionEnforced/undoActionEnforced/redoActionEnforced) and applies
-   * its result the same way writeWithRetry does on success — the Edge
-   * Function already did its own compare-and-swap server-side, so there's no
-   * client-side retry loop here (a 409 just surfaces as an ordinary error,
-   * same as any other rejected submission).
+   * Runs one of the rule-enforced Edge Function calls and applies its result.
+   * The Edge Function did its own compare-and-swap, so there's no retry loop
+   * here — a 409 surfaces as an ordinary error.
    */
   async function runEnforced(call: () => Promise<GameEnforcementResult>): Promise<ActionResult> {
     const guardError = writeGuardError()
     if (guardError) return { ok: false, error: guardError }
     const result = await call()
     if (!result.ok) return result
-    // `base` too, not just the rendered state: dropping it here would null
-    // latestBaseRef after every move and send the *next* request back to a
-    // full fetch — the exact cost issue #693 exists to remove.
+    // `base` too — dropping it would send the next request back to a full fetch.
     applyGameStateSnapshot({ state: result.state, base: result.base, version: result.version })
     return { ok: true, state: result.state }
   }
 
   /**
-   * Writes whatever `computeNext` derives from the current state, retrying
-   * against freshly refetched state (up to MAX_WRITE_RETRIES times) if the
-   * write loses the optimistic-concurrency race — see MAX_WRITE_RETRIES's
-   * comment for why this needs to be a transparent retry, not just an
-   * error the player has to notice and act on themselves. Always leaves
-   * `gameState`/`version` reflecting the latest known state, win or lose,
-   * so the UI never sits on stale data after a failed attempt.
-   *
-   * `computeNext` calls applyAction() directly for a client-trusted game
-   * (see submitAction below), and a freshly *submitted* PLACE_TILE always
-   * re-runs the same possibly-slow legality/room-search that
-   * BoardSetupView's own preview does (applyAction never trusts the
-   * client's own check — see applyAction's `trustedReplay` doc comment).
-   * Without a yield first, that synchronous search runs in the same tick as
-   * `setSubmitting(true)` above, before React ever gets to paint the
-   * "Sending…" badge — the tab just freezes with no feedback until it's
-   * done, then the board jumps straight to the placed tile (issue #520).
-   * Deferring one macrotask first is the same fix as issue #205's for the
-   * preview check (see TilePlacementPanel in BoardSetupView.tsx): it lets
-   * the browser paint whatever this attempt's `setSubmitting`/state already
-   * queued *before* the expensive part of computeNext blocks the thread.
+   * Client-trusted path: writes whatever `computeNext` derives from the
+   * current state, retrying against freshly refetched state (up to
+   * MAX_WRITE_RETRIES) if the write loses the optimistic-concurrency race.
+   * Yields one macrotask first so the "Sending…" badge paints before any
+   * expensive rules evaluation blocks the thread.
    */
   async function writeWithRetry(computeNext: (state: EngineGameState) => ActionResult): Promise<ActionResult> {
     const guardError = writeGuardError()
     if (guardError) return { ok: false, error: guardError }
-    if (!game || !gameState || version === null) return { ok: false, error: 'Game not loaded yet' } // unreachable — narrows for TS; writeGuardError() already proved this
+    if (!game || !gameState || version === null) return { ok: false, error: 'Game not loaded yet' } // narrows for TS
     let state = gameState
     let ver = version
     for (let attempt = 0; attempt < MAX_WRITE_RETRIES; attempt++) {
@@ -1412,170 +485,63 @@ export function GamePage() {
       ver = fresh.version
       applyGameStateSnapshot(fresh)
     }
-    return { ok: false, error: "Couldn't sync with the other player's moves — please try again." }
+    return { ok: false, error: "Couldn't sync with the other players' moves — please try again." }
   }
 
   /**
-   * RULE_ENFORCEMENT_PLAN.md §8 phase 8 (write-side half, per jinxbit's
-   * 2026-09-05 per-game opt-in): a ruleEnforcementEnabled game submits the
-   * raw Action to apply-action instead of computing+writing the resulting
-   * state itself — the Edge Function re-derives it server-side (§4.1's
-   * playerId check, §4.3's fast-forwarding, the CAS write), so the client's
-   * own applyAction call never runs for these games. Every other game (the
-   * default, and every game that existed before this flag) is completely
-   * unaffected — same direct writeWithRetry path as always, still
-   * fast-forwarding forced tile placements/card choices client-side, since
-   * applyAction() itself now folds that convergence into every call
-   * (§4.2/§4.3 — the state machine takes a forced single-option follow-up
-   * itself, not a UI effect).
+   * Submits one action. A rule-enforced game posts the raw Action to
+   * apply-action, which re-derives the result server-side; every other game
+   * runs applyAction() locally and writes the result directly.
    */
   async function submitAction(action: Action) {
     setSubmitting(true)
     try {
       const result = game?.settings.ruleEnforcementEnabled
         ? await runEnforced(() => applyActionEnforced(game.id, action, latestBaseRef.current, deltaContextRef.current ?? undefined))
-        : await writeWithRetry((state) => applyAction(state, action, unitContent, achievementContent, boardGenerationContent, taleContent))
+        : await writeWithRetry((state) => applyAction(state, action))
       setActionError(result.ok ? null : simpleError(result.error))
     } finally {
       setSubmitting(false)
     }
   }
 
-  /**
-   * Toggles room admin mode (issue #464) — submits SET_ADMIN_MODE like any
-   * other action (ruleEnforcementEnabled games reject this server-side
-   * unless the caller is actually the room owner or a site admin; the
-   * `canAdminOverride` menu item below already only renders it for them, on
-   * a client-trusted game). `playerId` is narration-only, same convention as
-   * Undo/Redo — `ownSeat` rather than `me`, so the log always attributes it
-   * to the actual signed-in owner/admin even if admin mode's own `me`
-   * override is (about to stop) making this browser act as someone else.
-   */
+  /** Toggles room admin mode. `playerId` is narration-only: the signed-in owner/admin's own seat, not admin mode's `me`. */
   async function handleToggleAdminMode() {
     await submitAction({ type: 'SET_ADMIN_MODE', playerId: ownSeat?.id ?? null, enabled: !adminModeActive })
   }
 
-  /**
-   * Concede (issue #172): a seated, not-yet-eliminated player gives up —
-   * treated identically to an automatic no-card elimination (see
-   * eliminatePlayer in engine/elimination.ts, and CONCEDE's dispatch in
-   * engine/applyAction.ts), removed from the board/turn order for the rest
-   * of the game and excluded from winning. Unlike every other action `me`
-   * submits below, this isn't gated on it being their turn or any
-   * particular round phase — a player can concede at any point once the
-   * game is active.
-   */
+  /** A seated, not-yet-eliminated player gives up — at any point once the game is active. */
   async function handleConcede() {
     if (!me) return
-    if (!window.confirm('Concede this game? You will be eliminated and cannot undo this by yourself — this cannot be undone.')) return
+    if (!window.confirm('Concede this game? You will be out of the game — this cannot be undone by yourself.')) return
     await submitAction({ type: 'CONCEDE', playerId: me.id })
   }
 
   /**
-   * Undo: any player, at any time, can roll the game back one action —
-   * deliberately not gated on `me`, unlike every other action here. `me` is
-   * "which specific player is this submission on behalf of" (a hotseat seat
-   * or the signed-in live player), which Undo has no use for since it
-   * doesn't submit a player-attributed action. That matters once the game
-   * ends: `me` for skip-gate hotseat games follows `currentActorId`, which
-   * is null once `status: 'completed'` (nobody's turn anymore) — and for
-   * gated hotseat games, a fresh page load of an already-completed game
-   * never shows the pass-device gate to set `hotseatActivePlayerId` in the
-   * first place, so `me` is null there too. Gating Undo on `me` would make
-   * it silently unavailable in both cases right when it's most wanted (fix
-   * up the final round after seeing the end-of-game screen). The actual
-   * write is still safe without it — RLS only lets a seated player of this
-   * game write game_state at all (0001_init_schema.sql), so a signed-in
-   * stranger with the room-code URL can click this but their write simply
-   * won't land.
-   *
-   * Genesis isn't stored anywhere (see GameState.actionHistory's doc
-   * comment) — it's deterministically rebuilt from the game's row + seated
-   * players (buildGenesisState, same logic LobbyPage.tsx used to start the
-   * game), since undoing needs it: unlike every other action, "step back
-   * one action" isn't a forward step from the current state, it's a shorter
-   * replay from the start (applyUndoAction, engine/undoRedo.ts) — which
-   * naturally unwinds `status: 'completed'` back to `'active'` when the
-   * undone action was the one that ended the game, since that status lives
-   * on the replayed GameState like everything else.
-   *
-   * Design change, issue #412: UNDO_ACTION is now a logged entry appended to
-   * `actionHistory` (see UndoAction's doc comment, engine/actions.ts)
-   * instead of truncating the array and stashing the popped entry in a
-   * client-local `redoStack` — so every client sees the same undo/redo
-   * state, surviving a reload or a different device, and the log itself
-   * needs no separate note about what got undone: gameLog.ts narrates the
-   * UNDO_ACTION entry directly. Recomputed fresh on each writeWithRetry
-   * attempt (not just once up front), since a retry replays against newer
-   * state than what `gameState` held when the button was clicked.
-   *
-   * A forced single-option follow-up the state machine took on its own
-   * (RULE_ENFORCEMENT_PLAN.md §4.2/§4.3) is folded into the SAME
-   * actionHistory entry as whatever triggered it (see applyAction.ts), so
-   * one Undo call here always reverts exactly the triggering action AND
-   * everything it forced together — nothing extra to walk back past
-   * (issue #131's original fix, since superseded by this design).
-   *
-   * Exception (issue #503, RULE_ENFORCEMENT_PLAN.md §4.4's refinement): the
-   * shared-pointer rewind below always reverts whichever entry sits at the
-   * tip of `actionHistory`, and `selectCards`/`decline` picks from different
-   * players interleave there in submission order, not turn order. If `me`
-   * still has their own unresolved pick standing in the still-open
-   * `selectCards` phase, clicking Undo must retract only that entry — not
-   * whichever other player happened to pick more recently. `RETRACT_CHOICE`
-   * is an ordinary action (not a pointer move), so it's dispatched through
-   * `submitAction` like any other and needs no special-casing there for
-   * either write path.
-   *
-   * Issue #505 gives the `decline` phase's own interleaving pair the same
-   * treatment: if `me` still has any of their own additions standing from
-   * the currently-open decline phase, Undo submits `RETRACT_DECLINE` with no
-   * `cardId` — retracting all of them in one action, even if another player
-   * has moved a card to decline more recently, as long as the phase (and so
-   * the information) is still open. See `shouldRetractOwnDecline`
-   * (`../lib/undoDecision.ts`) and `RetractDeclineAction`'s own doc comment
-   * for why "all at once" rather than one card at a time.
+   * Undo: any player, at any time — even after the game has ended — rolls
+   * the game back one logged entry. Deliberately not gated on `me` (which is
+   * null in some hotseat/post-game states); `me` only narrates who undid.
+   * Undo is a logged UNDO_ACTION replayed from genesis (@game-platform/sdk's undoRedo.ts),
+   * so every client sees the same result and it survives a reload.
    */
   async function handleUndo() {
     if (!game) return
     setUndoing(true)
     try {
-      if (me && gameState && shouldRetractOwnChoice(gameState, me.id)) {
-        await submitAction({ type: 'RETRACT_CHOICE', playerId: me.id })
-        return
-      }
-      if (me && gameState && shouldRetractOwnDecline(gameState, me.id)) {
-        await submitAction({ type: 'RETRACT_DECLINE', playerId: me.id })
-        return
-      }
-      // ruleEnforcementEnabled: delegate to undo-action instead of replaying
-      // client-side — same applyUndoAction, same walk-back, server-side.
       if (game.settings.ruleEnforcementEnabled) {
         const result = await runEnforced(() => undoActionEnforced(game.id, latestBaseRef.current, deltaContextRef.current ?? undefined))
         setActionError(result.ok ? null : simpleError(result.error))
         return
       }
-      const result = await writeWithRetry((state) => {
-        const genesis = buildGenesisState(game, players)
-        return applyUndoAction(genesis, state, me?.id ?? null, unitContent, achievementContent, boardGenerationContent, taleContent)
-      })
+      const result = await writeWithRetry((state) => applyUndoAction(buildGenesisState(game, players), state, me?.id ?? null))
       setActionError(result.ok ? null : simpleError(result.error))
     } catch (err) {
-      // applyUndoAction (../engine/undoRedo.ts) replays via ../engine/
-      // replay.ts, which throws "Replay failed at action ...: <reason>" if
-      // some earlier action in this game's history no longer replays cleanly —
-      // e.g. a rules change landed on the live site while this particular
-      // game was in progress, so an action genuinely accepted back then no
-      // longer validates against today's rules. That JSON-dump message is
-      // meant for a developer, not a player, so show a plain explanation
-      // instead and keep the raw detail in the console for a bug report.
+      // replayActions throws "Replay failed at action ..." if an earlier
+      // action no longer replays under the current rules (e.g. a rules change
+      // shipped mid-game). That message is for a developer, not a player.
       if (err instanceof Error && err.message.startsWith('Replay failed')) {
         console.error('Undo: history no longer replays cleanly', err)
-        setActionError(
-          simpleError(
-            "Can't undo: this game's history no longer replays under the current rules, so Undo isn't available for this game.",
-          ),
-        )
+        setActionError(simpleError("Can't undo: this game's history no longer replays under the current rules."))
       } else {
         setActionError(toAppError(err, 'Failed to undo'))
       }
@@ -1584,31 +550,17 @@ export function GamePage() {
     }
   }
 
-  /**
-   * Redo: appends a REDO_ACTION (see applyUndoAction's doc comment above and
-   * UndoAction's, engine/actions.ts) instead of resubmitting a stashed
-   * action payload — so if the game has moved on since the undo (e.g.
-   * another player branched off a new action, or someone else already
-   * redid/undid further), `applyRedoAction`'s own "is there anything to redo
-   * right now" check runs fresh against whatever `state` this
-   * writeWithRetry attempt actually sees, and fails cleanly rather than
-   * grafting a stale payload onto the wrong point in history.
-   */
+  /** Redo: appends a REDO_ACTION, re-checked fresh against the current state (see handleUndo). */
   async function handleRedo() {
     if (!game) return
     setRedoing(true)
     try {
-      // ruleEnforcementEnabled: delegate to redo-action instead of replaying
-      // client-side — see handleUndo's matching branch above.
       if (game.settings.ruleEnforcementEnabled) {
         const result = await runEnforced(() => redoActionEnforced(game.id, latestBaseRef.current, deltaContextRef.current ?? undefined))
         setActionError(result.ok ? null : simpleError(result.error))
         return
       }
-      const result = await writeWithRetry((state) => {
-        const genesis = buildGenesisState(game, players)
-        return applyRedoAction(genesis, state, me?.id ?? null, unitContent, achievementContent, boardGenerationContent, taleContent)
-      })
+      const result = await writeWithRetry((state) => applyRedoAction(buildGenesisState(game, players), state, me?.id ?? null))
       setActionError(result.ok ? null : simpleError(result.error))
     } catch (err) {
       setActionError(toAppError(err, 'Failed to redo'))
@@ -1624,14 +576,7 @@ export function GamePage() {
     setTimeout(() => setCopiedStateJson(false), 1500)
   }
 
-  /**
-   * The pretty-printed JSON above is unwieldy to paste into a bug report or
-   * chat (easily tens of KB). This copies a "game export" instead — a real
-   * JSON file (see gameStateExport.schema.json) whose gameStateZipped field
-   * gzip+base64-encodes the state, a fraction of the size and self-describing
-   * (schema/version) so it can be decoded back into the exact state it came
-   * from.
-   */
+  /** Copies a compact, self-describing game export (gameStateExport.ts) — handy for bug reports and test fixtures. */
   async function handleCopyStateExport() {
     if (!gameState) return
     setStateExportError(null)
@@ -1644,51 +589,13 @@ export function GamePage() {
     }
   }
 
-  /**
-   * Save this game's current board terrain to the map pool (issue #164) —
-   * the same pool src/pages/MapBuilderPage.tsx's dedicated build-a-map flow
-   * (issue #23) feeds, just sourced from a real game already under way
-   * instead of a from-scratch builder session. `stripOccupants` clears the
-   * board's unit/settlement occupancy first: a pool entry only ever seeds a
-   * future game's terrain (see beginBoardSetupWithPresetBoard), and this
-   * game's own unit ids on the board wouldn't mean anything there.
-   */
-  async function handleSaveMap() {
-    if (!gameState || !session) return
-    setSavingMap(true)
-    setMapSaveError(null)
-    try {
-      await saveMapToPool({ board: stripOccupants(gameState.board), playerCount: players.length, userId: session.user.id })
-      setMapSaved(true)
-      setTimeout(() => setMapSaved(false), 1500)
-    } catch (err) {
-      setMapSaveError(toAppError(err, 'Failed to save map'))
-    } finally {
-      setSavingMap(false)
-    }
-  }
-
-  /**
-   * "Duplicate as hot seat" (issue #414): snapshots this game's current
-   * state into a brand-new hotseat room this browser's account owns, with
-   * every seat turned into a local pass-and-play player — a practice/replay
-   * copy, not a live shared room. Available to anyone who can see this
-   * game's state (any signed-in user, once the room's left the lobby — same
-   * as "Copy game export"/"Save this map" above), not just the room's
-   * owner or a seated player, since duplicating doesn't touch the source
-   * room at all. Navigates straight into the new room once it's created.
-   */
+  /** Snapshots this game's current state into a brand-new hotseat room this account owns. The source room is untouched. */
   async function handleDuplicateAsHotseat() {
     if (!game || !gameState || !session) return
     setDuplicating(true)
     setDuplicateError(null)
     try {
-      const newGame = await duplicateGameAsHotseat({
-        sourceGame: game,
-        sourcePlayers: players,
-        sourceState: gameState,
-        hostUserId: session.user.id,
-      })
+      const newGame = await duplicateGameAsHotseat({ sourceGame: game, sourcePlayers: players, sourceState: gameState, hostUserId: session.user.id })
       navigate(`/game/${newGame.room_code}`)
     } catch (err) {
       setDuplicateError(toAppError(err, 'Failed to duplicate game'))
@@ -1748,62 +655,26 @@ export function GamePage() {
   if (roomNotFound) return <div className="p-8 text-neutral-400">Room {roomCode} not found.</div>
   if (!game) return <div className="p-8 text-neutral-400">Looking for room {roomCode}…</div>
 
+  const menuItemClass = 'px-3 py-2 text-left hover:bg-neutral-800 disabled:opacity-50'
+  // The room's game, at the rules version it was created with. Null when this
+  // deployment doesn't host it — the room still loads, its view doesn't.
+  const gameDefinition = findGameDefinition(game.game_type, game.settings.rulesVersion)
+  const gameUi = gameUiFor(game.game_type)
+  const turnLabel = gameDefinition?.turnLabel ?? 'Turn'
+  const reviewedEntry = reviewIndex !== null && reviewIndex > 0 ? (gameState?.actionHistory[reviewIndex - 1] ?? null) : null
+
   return (
     <div
-      className="mx-auto flex w-full max-w-4xl flex-col gap-6 p-8 lg:max-w-6xl xl:max-w-7xl"
+      className="mx-auto flex w-full max-w-4xl flex-col gap-6 p-8"
       onClick={(event) => {
-        // Reviewing history has no "save"/confirm step to protect — any
-        // click outside the review banner itself (the board, the sidebar,
-        // the header, anywhere) exits back to live play, the same as
-        // clicking "Back to live" (issue #285 follow-up: originally only
-        // the board's own hexes did this, via RoundView's onExitHistory).
+        // Any click outside the review banner exits history review.
         if (!isReviewingHistory) return
         if (reviewBannerRef.current?.contains(event.target as Node)) return
         setReviewIndex(null)
       }}
     >
-      {/*
-        Four groups (issue #629): 1.1 hamburger/name/next-game, 1.2
-        chat/player names, 1.3 round/bank, 1.4 undo/redo/review history.
-        PhaseBanner/BankResources used to render inside RoundView itself,
-        only while a round was active — they're exported from there
-        (RoundView.tsx) so this header can show them whenever there's any
-        state to read a turn/bank from (board setup and review included),
-        not just mid-round.
-
-        Two layouts, chosen by measurement rather than by a breakpoint
-        (issue #640 — `headerFitsOneLine`, ../hooks/useOneLineFit.ts, which
-        carries the full reasoning):
-
-        - Everything fits on one line: all four groups side by side,
-          round/bank third and undo/redo/review pushed flush right by
-          `ml-auto`. `flex-nowrap` with `w-max shrink-0` groups, so the row
-          can neither wrap nor squeeze a group — that is what keeps the
-          measurement honest (a shrunken group always "fits", so a
-          shrinkable row would latch to wide mode forever) and it is also
-          what this layout wants visually.
-        - It doesn't fit: the pre-#629 production layout returns.
-          Groups 1.1 and 1.2 flow together across as many lines as they
-          need, 1.4 is forced onto its own full-width line by `w-full` and
-          so is left-aligned (issue #640's two original asks), and 1.3 is
-          dropped from the header entirely — RoundView renders round/bank
-          itself again in this mode, via `showBankRow`, exactly where it
-          lived before #629.
-
-        Issue #640's first three attempts each picked the layout from a
-        fixed threshold instead (native `flex-wrap` line-packing, then
-        `flex-1`->`flex-auto`, then an `@2xl` container query). Whether the
-        four groups fit depends on the game name, the player count and
-        their display-name lengths, so no fixed threshold is right for every
-        game — and just past a wrong one this row wrapped and squeezed
-        undo/redo into a ~130px column beside the player names rather than
-        degrading gracefully. Don't reintroduce a breakpoint here.
-      */}
-      <header
-        ref={headerRef}
-        className={headerFitsOneLine ? 'flex flex-row flex-nowrap items-center gap-x-6' : 'flex flex-row flex-wrap items-center gap-x-6 gap-y-3'}
-      >
-        <div className={headerGroupClass}>
+      <header className="flex flex-wrap items-center gap-x-6 gap-y-3">
+        <div className="flex flex-wrap items-center gap-3">
           <div ref={menuRef} className="relative">
             <button
               type="button"
@@ -1831,8 +702,8 @@ export function GamePage() {
                     setMenuOpen(false)
                     navigate('/')
                   }}
-                  title="Leave this game and return to the main menu — the game itself keeps going, you can rejoin from the room code."
-                  className="px-3 py-2 text-left hover:bg-neutral-800"
+                  title="Return to the main menu — the game keeps going, and you can come back from the room code."
+                  className={menuItemClass}
                 >
                   Main menu
                 </button>
@@ -1845,8 +716,8 @@ export function GamePage() {
                       setMenuOpen(false)
                       void handleConcede()
                     }}
-                    title="Concede this game — you'll be eliminated and can no longer act, same as running out of cards."
-                    className="px-3 py-2 text-left text-red-400 hover:bg-neutral-800 disabled:opacity-50"
+                    title="Concede this game — you'll be out of the game and can no longer act."
+                    className={`${menuItemClass} text-red-400`}
                   >
                     Concede
                   </button>
@@ -1860,8 +731,8 @@ export function GamePage() {
                     setMenuOpen(false)
                     void handleCopyStateExport()
                   }}
-                  title="Copies a game state export (a small JSON file) to the clipboard — paste it into a bug report or chat, or save it as a .json file."
-                  className="px-3 py-2 text-left hover:bg-neutral-800 disabled:opacity-50"
+                  title="Copies a game state export (a small JSON file) to the clipboard — paste it into a bug report, or save it as a test fixture."
+                  className={menuItemClass}
                 >
                   Copy game export
                 </button>
@@ -1873,24 +744,10 @@ export function GamePage() {
                     setMenuOpen(false)
                     setShowStateJson((v) => !v)
                   }}
-                  title="Inspect the raw game state JSON — mainly useful for debugging or filing a bug report."
-                  className="px-3 py-2 text-left hover:bg-neutral-800 disabled:opacity-50"
+                  title="Inspect the raw game state JSON."
+                  className={menuItemClass}
                 >
                   {showStateJson ? 'Hide' : 'Show'} game state JSON
-                </button>
-                <div role="separator" className="my-1 border-t border-neutral-800" />
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={!canSaveMap || savingMap}
-                  onClick={() => {
-                    setMenuOpen(false)
-                    void handleSaveMap()
-                  }}
-                  title="Save this game's current board layout to the map pool, so a future game can start from it. Available once tile placement finishes — the terrain won't change after that."
-                  className="px-3 py-2 text-left hover:bg-neutral-800 disabled:opacity-50"
-                >
-                  {savingMap ? 'Saving map…' : 'Save this map'}
                 </button>
                 <button
                   type="button"
@@ -1900,12 +757,12 @@ export function GamePage() {
                     setMenuOpen(false)
                     void handleDuplicateAsHotseat()
                   }}
-                  title="Copy this game's current state into a brand-new hot seat room you own, with every seat turned into a local pass-and-play player. This game keeps going untouched."
-                  className="px-3 py-2 text-left hover:bg-neutral-800 disabled:opacity-50"
+                  title="Copy this game's current state into a brand-new hot seat room you own. This game keeps going untouched."
+                  className={menuItemClass}
                 >
                   {duplicating ? 'Duplicating…' : 'Duplicate as hot seat'}
                 </button>
-                {canEditVisibility ? (
+                {canEditVisibility && (
                   <button
                     type="button"
                     role="menuitem"
@@ -1915,23 +772,10 @@ export function GamePage() {
                       void handleToggleVisibility()
                     }}
                     title="Toggle whether this room is listed on the Public rooms screen."
-                    className="px-3 py-2 text-left hover:bg-neutral-800 disabled:opacity-50"
+                    className={menuItemClass}
                   >
                     Make {game.visibility === 'public' ? 'private' : 'public'}
                   </button>
-                ) : (
-                  isAdmin && (
-                    <div
-                      title={
-                        game.visibility === 'public'
-                          ? 'Public — listed on the Public rooms screen'
-                          : 'Private — only reachable via this room’s link/code'
-                      }
-                      className="px-3 py-2 text-left text-neutral-500"
-                    >
-                      {game.visibility === 'public' ? 'Public room' : 'Private room'}
-                    </div>
-                  )
                 )}
                 {canAdminOverride && (
                   <button
@@ -1942,29 +786,10 @@ export function GamePage() {
                       setMenuOpen(false)
                       void handleToggleAdminMode()
                     }}
-                    title="Admin mode: act on behalf of whichever player the game is currently waiting on, and permits discarding another player's undone action. Only available to the room owner and site admins — logged in the action history and game log while on."
-                    className={`px-3 py-2 text-left hover:bg-neutral-800 ${
-                      adminModeActive ? 'text-amber-400' : ''
-                    }`}
+                    title="Admin mode: act on behalf of whichever player the game is waiting on, and allow discarding another player's undone action. Room owner and site admins only — logged while on."
+                    className={`${menuItemClass} ${adminModeActive ? 'text-amber-400' : ''}`}
                   >
                     {adminModeActive ? 'Admin mode: ON' : 'Admin mode'}
-                  </button>
-                )}
-                {isAdmin && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    aria-pressed={cheatModeEnabled}
-                    onClick={() => {
-                      setMenuOpen(false)
-                      setCheatModeEnabled((v) => !v)
-                    }}
-                    title="Cheat mode: adds a 'Move anywhere' option to every unit (submitted as a normal action, for testing that the server's rule engine actually rejects an illegal move) and reveals hidden information in the log. Site admins only."
-                    className={`px-3 py-2 text-left hover:bg-neutral-800 ${
-                      cheatModeEnabled ? 'text-amber-400' : ''
-                    }`}
-                  >
-                    {cheatModeEnabled ? 'Cheat mode: ON' : 'Cheat mode'}
                   </button>
                 )}
                 {isAdmin && (
@@ -1976,17 +801,14 @@ export function GamePage() {
                       setMenuOpen(false)
                       setShowRoomConfig((v) => !v)
                     }}
-                    title="Show this room's configuration — map source, game length, Tales, and whether backend rule enforcement is on. Site admins only."
-                    className={`px-3 py-2 text-left hover:bg-neutral-800 ${showRoomConfig ? 'text-amber-400' : ''}`}
+                    title="Show this room's configuration. Site admins only."
+                    className={`${menuItemClass} ${showRoomConfig ? 'text-amber-400' : ''}`}
                   >
                     {showRoomConfig ? 'Hide' : 'Show'} room configuration
                   </button>
                 )}
                 {isAdmin && (
-                  <div
-                    title="Cumulative size of network traffic to and from Supabase during this session. Doesn't include realtime/websocket updates."
-                    className="px-3 py-2 text-left text-neutral-500"
-                  >
+                  <div title="Cumulative network traffic to and from Supabase this session (excluding realtime)." className="px-3 py-2 text-left text-neutral-500">
                     Session traffic: {trafficStats}
                   </div>
                 )}
@@ -2001,7 +823,7 @@ export function GamePage() {
                       void handleCancelRoom()
                     }}
                     title="Cancel this room — disables further play; it stays visible for reference until deleted."
-                    className="px-3 py-2 text-left text-red-400 hover:bg-neutral-800 disabled:opacity-50"
+                    className={`${menuItemClass} text-red-400`}
                   >
                     Cancel room
                   </button>
@@ -2016,7 +838,7 @@ export function GamePage() {
                       void handleDeleteRoom()
                     }}
                     title="Permanently delete this room."
-                    className="px-3 py-2 text-left text-red-400 hover:bg-neutral-800 disabled:opacity-50"
+                    className={`${menuItemClass} text-red-400`}
                   >
                     Delete room
                   </button>
@@ -2031,11 +853,7 @@ export function GamePage() {
             onClick={() => {
               if (nextGameNeedingInput) navigate(gamePath(nextGameNeedingInput))
             }}
-            title={
-              nextGameNeedingInput
-                ? `${nextGameNeedingInput.game.name} is waiting on you — click to switch to it.`
-                : "No other game is waiting on you right now."
-            }
+            title={nextGameNeedingInput ? `${nextGameNeedingInput.game.name} is waiting on you — click to switch to it.` : 'No other game is waiting on you right now.'}
             className={`rounded-md border px-3 py-1 text-sm hover:border-neutral-500 disabled:opacity-50 ${
               nextGameNeedingInput ? 'border-amber-500 text-amber-400' : 'border-neutral-700'
             }`}
@@ -2043,83 +861,63 @@ export function GamePage() {
             Next game
           </button>
         </div>
-        <div className={headerGroupClass}>
-          {/*
-            The chat toggle is a flex item inside the same wrapping `<ul>` as
-            the player names (issue #706), rather than a sibling before it —
-            two separate flex items in a wrapping row wrap independently, so
-            long display names could push the whole player list onto its own
-            line while stranding the button alone above it. As a `<li>` in
-            the same flow it always wraps together with the first player pill.
-          */}
-          <ul className="flex flex-wrap items-center gap-3 text-sm text-neutral-400">
-            {chatEnabled && (
-              <li>
-                <button
-                  type="button"
-                  onClick={() => setChatOpen((v) => !v)}
-                  aria-expanded={chatOpen}
-                  title={chatOpen ? 'Hide chat' : 'Show chat'}
-                  className="relative rounded-md border border-neutral-700 p-2 hover:border-neutral-500"
-                >
-                  <svg viewBox="0 0 20 20" className="h-5 w-5 fill-current" aria-hidden="true">
-                    <path d="M3 4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h1.5v3.25a.75.75 0 0 0 1.28.53L9.31 14H17a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H3Z" />
-                  </svg>
-                  {chatUnreadCount > 0 && (
-                    <span
-                      className="absolute -right-1 -top-1 rounded-full bg-sky-600 px-1.5 py-0.5 text-xs font-semibold leading-none text-white"
-                      aria-label={`${chatUnreadCount} unread message${chatUnreadCount === 1 ? '' : 's'}`}
-                    >
-                      {formatUnreadBadge(chatUnreadCount)}
-                    </span>
-                  )}
-                </button>
+
+        <ul className="flex flex-wrap items-center gap-3 text-sm text-neutral-400">
+          {chatEnabled && (
+            <li>
+              <button
+                type="button"
+                onClick={() => setChatOpen((v) => !v)}
+                aria-expanded={chatOpen}
+                title={chatOpen ? 'Hide chat' : 'Show chat'}
+                className="relative rounded-md border border-neutral-700 p-2 hover:border-neutral-500"
+              >
+                <svg viewBox="0 0 20 20" className="h-5 w-5 fill-current" aria-hidden="true">
+                  <path d="M3 4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h1.5v3.25a.75.75 0 0 0 1.28.53L9.31 14H17a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H3Z" />
+                </svg>
+                {chatUnreadCount > 0 && (
+                  <span
+                    className="absolute -right-1 -top-1 rounded-full bg-sky-600 px-1.5 py-0.5 text-xs font-semibold leading-none text-white"
+                    aria-label={`${chatUnreadCount} unread message${chatUnreadCount === 1 ? '' : 's'}`}
+                  >
+                    {formatUnreadBadge(chatUnreadCount)}
+                  </span>
+                )}
+              </button>
+            </li>
+          )}
+          {[...headerPlayers, ...eliminatedPlayers].map((p) => {
+            const enginePlayer = displayState?.players.find((ep) => ep.id === p.id)
+            // "Not pending" is always public (redaction never touches
+            // pendingPlayerIds), so it's a safe "already moved" marker.
+            const hasActed = displayState?.status === 'active' && enginePlayer && !enginePlayer.eliminated ? !displayState.pendingPlayerIds.includes(p.id) : false
+            return (
+              <li key={p.id} className={`flex items-center gap-1 ${enginePlayer?.eliminated ? 'opacity-40' : hasActed ? 'opacity-60' : ''}`}>
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: p.color }} />
+                {p.display_name}
+                {hasActed && (
+                  <span title="Already moved" className="text-emerald-400">
+                    ✓
+                  </span>
+                )}
               </li>
-            )}
-            {headerPlayers.map((p) => {
-              const enginePlayer = displayState?.players.find((ep) => ep.id === p.id)
-              // pendingPlayerIds is "still owed a turn this phase" for every
-              // active-status phase (see engine/turnOrder.ts) and, unlike
-              // chosenCardId, is never redacted under hiddenInformationEnabled
-              // (RoundView.tsx's PlayersStrip relies on the same property) —
-              // so "not pending" is a safe, always-visible "already moved".
-              const hasActedThisPhase =
-                displayState?.status === 'active' && enginePlayer && !enginePlayer.eliminated
-                  ? !displayState.pendingPlayerIds.includes(p.id)
-                  : false
-              return (
-                <li
-                  key={p.id}
-                  className={`flex items-center gap-1 ${enginePlayer?.eliminated ? 'opacity-40' : hasActedThisPhase ? 'opacity-60' : ''}`}
-                >
-                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: p.color }} />
-                  {p.display_name}
-                  {hasActedThisPhase && (
-                    <span title="Already acted this phase" className="text-emerald-400">
-                      ✓
-                    </span>
-                  )}
-                </li>
-              )
-            })}
-          </ul>
-        </div>
-        {headerFitsOneLine && displayState && (
-          <div className="flex w-max shrink-0 items-center gap-4">
-            <PhaseBanner state={displayState} />
-            <BankResources state={displayState} />
-          </div>
+            )
+          })}
+        </ul>
+
+        {displayState && (
+          <span className="text-sm text-neutral-400">
+            {displayState.status === 'completed' ? 'Game over' : `${turnLabel} ${displayState.turn} · ${gameDefinition?.describePhase(displayState.phase) ?? 'In progress'}`}
+          </span>
         )}
-        <div className={headerFitsOneLine ? 'ml-auto flex w-max shrink-0 items-center gap-2' : 'flex w-full flex-wrap items-center gap-2'}>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {submitting && <span className="text-xs text-neutral-500">Sending…</span>}
           <button
             type="button"
-            disabled={undoing || isReviewingHistory || !gameState || !historyPointer.canUndo || undoBlockedByRevealLock}
+            disabled={undoing || isReviewingHistory || !gameState || !historyPointer.canUndo}
             onClick={() => void handleUndo()}
-            title={
-              undoBlockedByRevealLock
-                ? "Undoing this would reopen a card pick that's already been revealed — only the room owner or an admin, with room admin mode on, may do that."
-                : 'Undo the last action — any player can do this, at any time, even after the game has ended. If you still have your own unrevealed card pick standing, this changes only your pick.'
-            }
+            title="Undo the last action — any player can do this, at any time, even after the game has ended."
             className="rounded-md border border-neutral-700 px-3 py-1 text-sm hover:border-neutral-500 disabled:opacity-50"
           >
             {undoing ? 'Undoing…' : 'Undo'}
@@ -2136,40 +934,13 @@ export function GamePage() {
           <button
             type="button"
             disabled={!gameState || reviewMaxIndex === 0}
-            onClick={() => {
-              if (isReviewingHistory) {
-                setReviewIndex(null)
-                return
-              }
-              setHistoryStepMode('turn')
-              setReviewIndex(defaultTurnHistoryIndex)
-            }}
-            title={
-              me
-                ? "Step through the game's history — turn by turn or action by action, switchable once open — starting right after your own last turn so you can review what every opponent did since. Unlike Undo, this never touches the live game."
-                : "Step through the game's history — turn by turn or action by action, switchable once open. Unlike Undo, this never touches the live game."
-            }
+            onClick={() => setReviewIndex(isReviewingHistory ? null : reviewMaxIndex)}
+            title="Step through the game's history action by action. Unlike Undo, this never touches the live game."
             className={`rounded-md border px-3 py-1 text-sm hover:border-neutral-500 disabled:opacity-50 ${
               isReviewingHistory ? 'border-amber-500 text-amber-400' : 'border-neutral-700'
             }`}
           >
             {isReviewingHistory ? 'Exit review' : 'Review history'}
-          </button>
-          <button
-            type="button"
-            onClick={() => setLiveTerritoryControlOn((v) => !v)}
-            title={
-              liveTerritoryControlOn
-                ? 'Territory control is shown. Click to hide it.'
-                : 'Outline every region a player currently controls on the map, the same way the victory screen does.'
-            }
-            aria-pressed={liveTerritoryControlOn}
-            aria-label={liveTerritoryControlOn ? 'Hide territory control' : 'Show territory control'}
-            className={`rounded-md border p-1.5 hover:border-neutral-500 ${
-              liveTerritoryControlOn ? 'border-amber-500 bg-amber-500/10 text-amber-300' : 'border-neutral-700 text-neutral-400'
-            }`}
-          >
-            <TerritoryTriangleIcon />
           </button>
         </div>
       </header>
@@ -2177,136 +948,42 @@ export function GamePage() {
       <ChatPanel gameId={game.id} players={players} canPost={!!ownSeat} open={chatOpen} onUnreadCountChange={setChatUnreadCount} />
 
       {isReviewingHistory && (
-        <div
-          ref={reviewBannerRef}
-          className="flex flex-wrap items-center gap-3 rounded-md border border-amber-700/40 bg-amber-500/10 p-3 text-sm text-amber-200"
-        >
+        <div ref={reviewBannerRef} className="flex flex-wrap items-center gap-3 rounded-md border border-amber-700/40 bg-amber-500/10 p-3 text-sm text-amber-200">
           <span className="font-medium">Reviewing history</span>
-          <button
-            type="button"
-            onClick={() => {
-              if (historyStepMode === 'turn') {
-                setHistoryStepMode('action')
-                return
-              }
-              // Switching into turn mode must land on the turn stop that
-              // completes whichever turn `reviewIndex` currently sits inside
-              // (or the exact stop it's already on) — turn mode's Prev/Next
-              // and `turnHalos` both assume `reviewIndex` is one of
-              // `fullTurnStops`'s own values (see `currentTurnPos` above), and
-              // this keeps the switch showing the same turn just reviewed
-              // instead of jumping elsewhere in the game.
-              const current = reviewIndex ?? 0
-              const target = fullTurnStops ? (fullTurnStops.find((stop) => stop >= current) ?? fullTurnStops[fullTurnStops.length - 1]) : current
-              setHistoryStepMode('turn')
-              setReviewIndex(target)
-            }}
-            title={
-              historyStepMode === 'turn'
-                ? 'Switch to stepping action by action instead of turn by turn.'
-                : 'Switch to stepping turn by turn instead of action by action.'
-            }
-            className="rounded-md border border-amber-700/60 px-2 py-0.5 hover:border-amber-400"
-          >
-            {historyStepMode === 'turn' ? 'Step by action' : 'Step by turn'}
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              setTerritoryControlMode((current) => {
-                const currentIndex = TERRITORY_CONTROL_MODES.findIndex((m) => m.mode === current)
-                return TERRITORY_CONTROL_MODES[(currentIndex + 1) % TERRITORY_CONTROL_MODES.length].mode
-              })
-            }
-            title={TERRITORY_CONTROL_MODES.find((m) => m.mode === territoryControlMode)?.title}
-            className={`rounded-md border px-2 py-0.5 hover:border-amber-400 ${
-              territoryControlMode === 'off' ? 'border-amber-700/60' : 'border-amber-500 bg-amber-500/10 text-amber-300'
-            }`}
-          >
-            {TERRITORY_CONTROL_MODES.find((m) => m.mode === territoryControlMode)?.label}
-          </button>
           <div className="flex items-center gap-2">
             <button
               type="button"
-              disabled={historyStepMode === 'turn' ? currentTurnPos <= 0 : reviewIndex === 0}
-              onClick={() => {
-                if (historyStepMode === 'turn') {
-                  if (fullTurnStops && currentTurnPos > 0) setReviewIndex(fullTurnStops[currentTurnPos - 1])
-                } else {
-                  setReviewIndex((i) => Math.max(0, (i ?? 0) - 1))
-                }
-              }}
-              title={historyStepMode === 'turn' ? 'Step back one turn.' : 'Step back one action.'}
+              disabled={reviewIndex === 0}
+              onClick={() => setReviewIndex((i) => Math.max(0, (i ?? 0) - 1))}
               className="rounded-md border border-amber-700/60 px-2 py-0.5 hover:border-amber-400 disabled:opacity-40"
             >
               ← Prev
             </button>
-            <input
-              type="range"
-              min={0}
-              max={historyStepMode === 'turn' ? turnPosCount : reviewMaxIndex}
-              value={historyStepMode === 'turn' ? Math.max(0, currentTurnPos) : (reviewIndex ?? 0)}
-              onChange={(e) => {
-                const value = Number(e.target.value)
-                if (historyStepMode === 'turn') {
-                  if (fullTurnStops) setReviewIndex(fullTurnStops[value])
-                } else {
-                  setReviewIndex(value)
-                }
-              }}
-              className="w-40"
-            />
+            <input type="range" min={0} max={reviewMaxIndex} value={reviewIndex ?? 0} onChange={(e) => setReviewIndex(Number(e.target.value))} className="w-40" />
             <button
               type="button"
-              disabled={historyStepMode === 'turn' ? currentTurnPos < 0 || currentTurnPos >= turnPosCount : reviewIndex === reviewMaxIndex}
-              onClick={() => {
-                if (historyStepMode === 'turn') {
-                  if (fullTurnStops && currentTurnPos >= 0 && currentTurnPos < turnPosCount) setReviewIndex(fullTurnStops[currentTurnPos + 1])
-                } else {
-                  setReviewIndex((i) => Math.min(reviewMaxIndex, (i ?? 0) + 1))
-                }
-              }}
-              title={historyStepMode === 'turn' ? 'Step forward one turn.' : 'Step forward one action.'}
+              disabled={reviewIndex === reviewMaxIndex}
+              onClick={() => setReviewIndex((i) => Math.min(reviewMaxIndex, (i ?? 0) + 1))}
               className="rounded-md border border-amber-700/60 px-2 py-0.5 hover:border-amber-400 disabled:opacity-40"
             >
               Next →
             </button>
           </div>
-          <span>{historyBannerLabel}</span>
-          <button
-            type="button"
-            onClick={() => setReviewIndex(null)}
-            className="ml-auto rounded-md border border-amber-700/60 px-3 py-1 font-medium hover:border-amber-400"
-          >
+          <span>{reviewedEntry ? `${turnLabel} ${reviewedEntry.turn} — action ${reviewIndex} of ${reviewMaxIndex}` : 'Start of game (before any actions)'}</span>
+          <button type="button" onClick={() => setReviewIndex(null)} className="ml-auto rounded-md border border-amber-700/60 px-3 py-1 font-medium hover:border-amber-400">
             Back to live
           </button>
         </div>
       )}
 
-      {stateExportError && (
-        <ErrorBanner message={stateExportError.message} details={stateExportError.details} onDismiss={() => setStateExportError(null)} />
-      )}
-
-      {copiedStateExport && !showStateJson && (
-        <div className="rounded-md bg-emerald-500/10 p-3 text-sm text-emerald-400">Game export copied to clipboard!</div>
-      )}
-
-      {mapSaveError && <ErrorBanner message={mapSaveError.message} details={mapSaveError.details} onDismiss={() => setMapSaveError(null)} />}
-
-      {mapSaved && <div className="rounded-md bg-emerald-500/10 p-3 text-sm text-emerald-400">Map saved to the pool!</div>}
-
-      {duplicateError && (
-        <ErrorBanner message={duplicateError.message} details={duplicateError.details} onDismiss={() => setDuplicateError(null)} />
-      )}
-
-      {lifecycleError && (
-        <ErrorBanner message={lifecycleError.message} details={lifecycleError.details} onDismiss={() => setLifecycleError(null)} />
-      )}
+      {stateExportError && <ErrorBanner message={stateExportError.message} details={stateExportError.details} onDismiss={() => setStateExportError(null)} />}
+      {copiedStateExport && !showStateJson && <div className="rounded-md bg-emerald-500/10 p-3 text-sm text-emerald-400">Game export copied to clipboard!</div>}
+      {duplicateError && <ErrorBanner message={duplicateError.message} details={duplicateError.details} onDismiss={() => setDuplicateError(null)} />}
+      {lifecycleError && <ErrorBanner message={lifecycleError.message} details={lifecycleError.details} onDismiss={() => setLifecycleError(null)} />}
 
       {game.status === 'canceled' && (
         <div className="rounded-md bg-neutral-800/60 p-3 text-sm text-neutral-300">
-          This room was canceled{isCreator ? '' : ' by the host'}. Play is disabled — it stays here for reference until{' '}
-          {isCreator ? 'you delete it.' : 'the host deletes it.'}
+          This room was canceled{isCreator ? '' : ' by the host'}. Play is disabled — it stays here for reference until {isCreator ? 'you delete it.' : 'the host deletes it.'}
         </div>
       )}
 
@@ -2316,9 +993,7 @@ export function GamePage() {
           <div className={game.settings.ruleEnforcementEnabled ? 'font-medium text-amber-400' : 'font-medium text-neutral-400'}>
             Backend rule enforcement: {game.settings.ruleEnforcementEnabled ? 'ON' : 'OFF'}
           </div>
-          <div className={usesRedactedReads(game) ? 'font-medium text-amber-400' : 'font-medium text-neutral-400'}>
-            Hidden information: {usesRedactedReads(game) ? 'ON' : 'OFF'}
-          </div>
+          <div className={usesRedactedReads(game) ? 'font-medium text-amber-400' : 'font-medium text-neutral-400'}>Hidden information: {usesRedactedReads(game) ? 'ON' : 'OFF'}</div>
           <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-neutral-300">
             <dt className="text-neutral-500">Play mode</dt>
             <dd>{game.play_mode}</dd>
@@ -2328,28 +1003,14 @@ export function GamePage() {
             <dd>
               {game.min_players}–{game.max_players}
             </dd>
-            <dt className="text-neutral-500">Game length</dt>
-            <dd>{game.settings.gameLength} achievements</dd>
-            <dt className="text-neutral-500">Map source</dt>
+            <dt className="text-neutral-500">Game</dt>
             <dd>
-              {game.settings.mapTemplateId
-                ? (listMapTemplates().find((t) => t.id === game.settings.mapTemplateId)?.name ?? game.settings.mapTemplateId)
-                : game.settings.mapPoolBoard
-                  ? `saved map (${game.settings.mapPoolMapId ?? 'unknown'})`
-                  : game.settings.mapPoolRandomAtStart
-                    ? 'random saved map (picked when the game starts)'
-                    : game.settings.soloBuildMap
-                      ? `interactive, built alone by ${game.settings.soloBuilderSelection === 'random' ? 'a random player' : 'the host'}`
-                      : 'interactive, built together'}
+              {gameDefinition?.title ?? game.game_type} (rules v{game.settings.rulesVersion ?? '?'})
             </dd>
+            <dt className="text-neutral-500">Game options</dt>
+            <dd>{gameDefinition ? gameDefinition.describeOptions(gameDefinition.normalizeOptions(game.settings.gameOptions)) : '—'}</dd>
             <dt className="text-neutral-500">Skip hotseat pass gate</dt>
             <dd>{game.settings.skipHotseatPassGate ? 'Yes' : 'No'}</dd>
-            <dt className="text-neutral-500">Tales</dt>
-            <dd>
-              {game.settings.activeTaleIds.length > 0
-                ? game.settings.activeTaleIds.map((id) => listTales().find((t) => t.id === id)?.name ?? id).join(', ')
-                : 'None'}
-            </dd>
             <dt className="text-neutral-500">Config version</dt>
             <dd>{game.config_version}</dd>
           </dl>
@@ -2359,25 +1020,14 @@ export function GamePage() {
       {showStateJson && gameState && (
         <div className="flex flex-col gap-2">
           <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => void handleCopyStateExport()}
-              title="Copies a game state export (a small JSON file) — easier to paste into a bug report or chat, or save as a .json file, than the full JSON below."
-              className="rounded-md border border-neutral-700 px-3 py-1 text-xs hover:border-neutral-500"
-            >
+            <button type="button" onClick={() => void handleCopyStateExport()} className="rounded-md border border-neutral-700 px-3 py-1 text-xs hover:border-neutral-500">
               {copiedStateExport ? 'Copied!' : 'Copy game export'}
             </button>
-            <button
-              type="button"
-              onClick={() => void handleCopyStateJson()}
-              className="rounded-md border border-neutral-700 px-3 py-1 text-xs hover:border-neutral-500"
-            >
+            <button type="button" onClick={() => void handleCopyStateJson()} className="rounded-md border border-neutral-700 px-3 py-1 text-xs hover:border-neutral-500">
               {copiedStateJson ? 'Copied!' : 'Copy JSON'}
             </button>
           </div>
-          <pre className="max-h-96 overflow-auto rounded-md border border-neutral-800 bg-neutral-900 p-4 text-xs text-neutral-300">
-            {JSON.stringify(gameState, null, 2)}
-          </pre>
+          <pre className="max-h-96 overflow-auto rounded-md border border-neutral-800 bg-neutral-900 p-4 text-xs text-neutral-300">{JSON.stringify(gameState, null, 2)}</pre>
         </div>
       )}
 
@@ -2391,109 +1041,42 @@ export function GamePage() {
 
       {!gameState && <p className="text-neutral-400">Setting up the game…</p>}
 
-      {needsHotseatGate && pendingActorId && !isReviewingHistory && (
-        <div className="flex flex-col items-center gap-4 rounded-md border border-neutral-800 p-12 text-center">
-          <p className="text-sm text-neutral-400">Pass the device to</p>
-          <p className="text-3xl font-semibold">{players.find((p) => p.id === pendingActorId)?.display_name ?? 'the next player'}</p>
-          <button
-            type="button"
-            onClick={() => setHotseatActivePlayerId(pendingActorId)}
-            className="rounded-md bg-indigo-600 px-6 py-2 font-medium text-white hover:bg-indigo-500"
-          >
-            I&apos;m ready — continue
-          </button>
+      {displayState?.status === 'completed' && (
+        <div className="rounded-md border border-yellow-800/60 bg-yellow-950/40 p-4 text-center">
+          <p className="text-lg font-semibold text-yellow-400">
+            {displayState.winnerPlayerIds.length === 0
+              ? 'Game over'
+              : `${displayState.winnerPlayerIds.map((id) => players.find((p) => p.id === id)?.display_name ?? 'Unknown').join(' & ')} ${displayState.winnerPlayerIds.length > 1 ? 'win' : 'wins'}!`}
+          </p>
         </div>
       )}
 
-      {(!needsHotseatGate || isReviewingHistory) && displayState?.status === 'boardSetup' && (
-        <BoardSetupView
-          state={displayState}
-          players={players}
-          myPlayerId={isReviewingHistory ? null : (me?.id ?? null)}
-          boardGenerationContent={boardGenerationContent}
-          onPlaceTile={(anchor: Coordinate, rotationSteps: number) => {
-            if (!me) return
-            void submitAction({ type: 'PLACE_TILE', playerId: me.id, anchor, rotationSteps })
-          }}
-          onPlaceUnit={(unitKind: string, coord: Coordinate) => {
-            if (!me) return
-            void submitAction({ type: 'PLACE_UNIT', playerId: me.id, unitKind, coord })
-          }}
-          submitting={submitting}
-        />
+      {needsHotseatGate && pendingActorId && !isReviewingHistory ? (
+        <div className="flex flex-col items-center gap-4 rounded-md border border-neutral-800 p-12 text-center">
+          <p className="text-sm text-neutral-400">Pass the device to</p>
+          <p className="text-3xl font-semibold">{players.find((p) => p.id === pendingActorId)?.display_name ?? 'the next player'}</p>
+          <button type="button" onClick={() => setHotseatActivePlayerId(pendingActorId)} className="rounded-md bg-indigo-600 px-6 py-2 font-medium text-white hover:bg-indigo-500">
+            I&apos;m ready — continue
+          </button>
+        </div>
+      ) : (
+        displayState &&
+        (gameUi ? (
+          <gameUi.View
+            state={displayState}
+            players={players}
+            myPlayerId={isReviewingHistory || game.status === 'canceled' ? null : (me?.id ?? null)}
+            submitting={submitting}
+            onAction={(action) => void submitAction(action)}
+          />
+        ) : (
+          <p className="rounded-md border border-neutral-800 p-4 text-sm text-neutral-400">
+            This room plays <span className="font-medium">{game.game_type}</span>, which this site doesn&apos;t host.
+          </p>
+        ))
       )}
 
-      {displayState?.status === 'completed' && (
-        <EndGameView
-          state={displayState}
-          players={players}
-          achievementContent={achievementContent}
-          taleContent={taleContent}
-          scoreHistory={scoreHistory?.snapshots}
-          achievementClaims={scoreHistory?.achievementClaims}
-          unitValueDetail={unitValueDetail}
-          spendingBreakdown={spendingBreakdown}
-        />
-      )}
-
-      {(!needsHotseatGate || isReviewingHistory) && displayState?.status === 'active' && (
-        <RoundView
-          state={displayState}
-          players={players}
-          myPlayerId={isReviewingHistory ? null : (me?.id ?? null)}
-          unitContent={unitContent}
-          achievementContent={achievementContent}
-          taleContent={taleContent}
-          unitPlateColors={unitPlateColors}
-          unitReserveDisplayMode={unitReserveDisplayMode}
-          confirmBeforeRevealingCards={confirmBeforeRevealingCards}
-          submitting={submitting}
-          turnReview={turnHalos}
-          showHistory={isReviewingHistory}
-          showBankRow={!headerFitsOneLine}
-          showCardChoiceRecap={showCardChoiceRecap}
-          cardChoiceRecapPhase={cardChoiceRecapPhase ?? undefined}
-          cardChoiceRecap={cardChoiceRecap ?? undefined}
-          cheatModeEnabled={isAdmin && cheatModeEnabled}
-          onExitHistory={() => setReviewIndex(null)}
-          territoryControlMode={territoryControlMode}
-          liveTerritoryControlOn={liveTerritoryControlOn}
-          previousHistoryState={previousTerritoryState}
-          gameLog={visibleGameLog}
-          onChooseCard={(cardId) => {
-            if (!me) return
-            void submitAction({ type: 'CHOOSE_CARD', playerId: me.id, cardId })
-          }}
-          onResolveUnit={(unitId, actionId, target) => {
-            if (!me) return
-            void submitAction({ type: 'RESOLVE_UNIT_ACTION', playerId: me.id, unitActions: [{ unitId, actionId, target }] })
-          }}
-          onResolveBulkAction={(unitIds, actionId) => {
-            if (!me) return
-            void submitAction({ type: 'RESOLVE_UNIT_ACTION', playerId: me.id, unitActions: unitIds.map((unitId) => ({ unitId, actionId })) })
-          }}
-          onResolveSupportedAction={(supportAssignments, primary) => {
-            if (!me) return
-            void submitAction({ type: 'RESOLVE_UNIT_ACTION', playerId: me.id, unitActions: [...supportAssignments, primary] })
-          }}
-          onPassActions={() => {
-            if (!me) return
-            void submitAction({ type: 'PASS_ACTIONS', playerId: me.id })
-          }}
-          onMoveToDecline={(cardId) => {
-            if (!me) return
-            void submitAction({ type: 'MOVE_TO_DECLINE', playerId: me.id, cardId })
-          }}
-          onPurchaseCard={(cardId) => {
-            if (!me) return
-            void submitAction({ type: 'PURCHASE_CARD', playerId: me.id, cardId })
-          }}
-          onPassPurchase={() => {
-            if (!me) return
-            void submitAction({ type: 'PASS_PURCHASE', playerId: me.id })
-          }}
-        />
-      )}
+      <GameLogPanel events={visibleGameLog} players={players} />
     </div>
   )
 }

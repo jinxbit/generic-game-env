@@ -1,7 +1,6 @@
-// Pure view logic for the Public Rooms screen (PublicRoomsPage.tsx) — issue
-// #40 sections 4 (Room Visibility) and 5 (Public Rooms Screen). Split out
-// from gameApi.ts's listPublicRooms the same way myGamesView.ts is split
-// from listMyGames, so grouping/status classification can be unit tested
+// Pure view logic for the Public Rooms screen (PublicRoomsPage.tsx) and
+// room visibility. Split out from gameApi.ts's listPublicRooms the same way
+// myGamesView.ts is split from listMyGames, so grouping/status classification can be unit tested
 // without a real Supabase project.
 
 import type { GameRow, PlayerListRow } from './dbTypes'
@@ -13,8 +12,8 @@ import { isMyTurnFor, latestUpdatedAt, pendingActorIdsFor, type GameStateSummary
  * MyGameEntry (see myGamesView.ts) — see GameStateSummary's doc comment
  * (gameCardView.ts) for exactly what it can and can't answer compared to the
  * full GameState this used to carry. listPublicRooms() (gameApi.ts) already
- * excludes canceled rooms — issue section 5: "Canceled and Deleted rooms do
- * not appear in the listing" — so unlike MyGameEntry there's no canceled
+ * excludes canceled rooms (canceled and deleted rooms never appear in the
+ * listing), so unlike MyGameEntry there's no canceled
  * case to classify here.
  */
 export interface PublicRoomEntry {
@@ -26,7 +25,7 @@ export interface PublicRoomEntry {
 }
 
 /**
- * The three buckets the Public Rooms screen groups by (issue section 5).
+ * The three buckets the Public Rooms screen groups by.
  * games.status can't tell "In Progress" from "Finished" apart on its own
  * (see dbTypes.ts's GameRow comment) — that distinction only exists once a
  * game_state row exists, via `stateSummary.status`.
@@ -38,12 +37,12 @@ export function publicRoomBucket(entry: PublicRoomEntry): PublicRoomBucket {
   return entry.stateSummary?.status === 'completed' ? 'finished' : 'inProgress'
 }
 
-/** Joinable per issue section 4: Active and Not Started, with a free seat. */
+/** Joinable: Active and Not Started, with a free seat. */
 export function isJoinable(entry: PublicRoomEntry): boolean {
   return publicRoomBucket(entry) === 'notStarted' && entry.players.length < entry.game.max_players
 }
 
-/** Observable per issue section 4: Active and In Progress. */
+/** Observable: Active and In Progress. */
 export function isObservable(entry: PublicRoomEntry): boolean {
   return publicRoomBucket(entry) === 'inProgress'
 }
@@ -76,8 +75,7 @@ function byLatestUpdatedDesc(a: PublicRoomEntry, b: PublicRoomEntry): number {
 }
 
 /**
- * Orders a bucket of in-progress rooms for a given viewer (issue #364,
- * section 1): rooms where it's `userId`'s turn come first, oldest-updated
+ * Orders a bucket of in-progress rooms for a given viewer: rooms where it's `userId`'s turn come first, oldest-updated
  * first (the ones that have been waiting longest for their input), then the
  * rest of the rooms, most-recently-updated first.
  */
@@ -88,8 +86,7 @@ export function orderInProgressForUser(entries: PublicRoomEntry[], userId: strin
 }
 
 /**
- * Orders a bucket of not-yet-started rooms for a given viewer (issue #364,
- * section 2): rooms `userId` is already seated in come first, then every
+ * Orders a bucket of not-yet-started rooms for a given viewer: rooms `userId` is already seated in come first, then every
  * other room — each group most-recently-updated first.
  */
 export function orderNotStartedForUser(entries: PublicRoomEntry[], userId: string): PublicRoomEntry[] {
@@ -100,7 +97,7 @@ export function orderNotStartedForUser(entries: PublicRoomEntry[], userId: strin
 
 /**
  * Buckets rooms for display, each most-recently-updated first — matching
- * the order the issue's section 5 lists the three groups in.
+ * the order the screen lists the three groups in.
  */
 export function groupPublicRooms(
   entries: PublicRoomEntry[],

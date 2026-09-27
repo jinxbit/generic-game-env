@@ -1,0 +1,6 @@
+{
+  "imports": {
+    "@game-platform/sdk": "../../packages/sdk/src/index.ts",
+    "@game-platform/unique-pick/rules": "../../packages/unique-pick/src/rules.ts"
+  }
+}

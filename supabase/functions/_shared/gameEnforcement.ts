@@ -1,44 +1,20 @@
-// Shared plumbing for RULE_ENFORCEMENT_PLAN.md §8 phase 6's apply-action/
-// undo-action/redo-action Edge Functions — §4.1's caller-seat resolution,
-// §4.4/§4.5's owner/admin-override check, and the game_state
-// compare-and-swap write, all in one place so the three functions (each its
-// own independent deploy unit, per Supabase's `_shared/` convention) don't
-// triplicate them. Imports `src/engine/`/`src/content/` directly and
-// unmodified, per RULE_ENFORCEMENT_PLAN.md §3's architecture decision ("Reuse
-// src/engine/'s pure, dependency-free TypeScript unmodified — no rule-logic
-// duplication between client and server") — unlike notify-discord-turn/
-// notify-web-push, which duplicate a few lines of turnOrder.ts by hand, this
-// is far too much surface (applyAction.ts alone is ~700 lines, with a dozen
-// more files behind it) to duplicate safely.
+// Shared plumbing for the apply-action/undo-action/redo-action/
+// get-game-state/start-game Edge Functions — caller-seat resolution, the
+// owner/admin-override check, redaction of responses, and the game_state
+// compare-and-swap write, all in one place so the functions (each its own
+// independent deploy unit, per Supabase's `_shared/` convention) don't
+// duplicate them. Imports `@game-platform/sdk`, the registered games and `src/lib/` directly and
+// unmodified: there is no rule-logic duplication between client and server.
 //
-// Verified (2026-09-05) against a local `supabase start` stack that both of
-// this file's original two open questions were real deploy blockers, now
-// fixed — see RULE_ENFORCEMENT_PLAN.md §8 phase 6 for the full story:
-// (1) the Edge Runtime does NOT honor `sloppy-imports` (tried per-function
-// deno.json, a workspace-root one, every placement) — `src/engine/`'s own
-// internal relative imports (e.g. `from './cards'`) all needed an explicit
-// `.ts` extension instead, safe here since `tsconfig.app.json` already sets
-// `allowImportingTsExtensions`; (2) `src/content/*.json` imports did need
-// the `with { type: 'json' }` attribute (added to `resolveContent.ts`).
-// With both fixed, all three functions boot and were smoke-tested against a
-// real local project (auth, authorization 403, a legal action's CAS write,
-// undo/redo). Not yet done: against an actually-deployed (not local)
-// project, and a genuine two-browser session — still phase 9.
+// The Edge Runtime does NOT honor `sloppy-imports`: every relative import
+// reachable from here must carry an explicit `.ts` extension (safe, since
+// `tsconfig.app.json` sets `allowImportingTsExtensions`), and JSON imports
+// need `with { type: 'json' }`. A missing extension only fails at deploy
+// time, not in CI.
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
-import { applyAction } from '../../../src/engine/applyAction.ts'
-import type { Action, LoggedAction } from '../../../src/engine/actions.ts'
-import { redoableTail } from '../../../src/engine/historyFold.ts'
-import { redactStateForPlayer, revealedGameStateView, toClientGameState, unredactedPrefix, type RedactedGameState, type RedactedGameStateDelta } from '../../../src/engine/redaction.ts'
-import { buildInFlightOverlay, needsInFlightOverlay } from '../../../src/engine/inFlightOverlay.ts'
+import './games.ts'
+import { applyAction, redoableTail, redactStateForPlayer, revealedGameStateView, toClientGameState, unredactedPrefix, buildInFlightOverlay, needsInFlightOverlay, type Action, type LoggedAction, type RedactedGameState, type RedactedGameStateDelta, type ActionResult, type GameState } from '@game-platform/sdk'
 import { hashGameStateView } from '../../../src/lib/gameStateHash.ts'
-import { applyTaleAchievementModifiers, applyTaleModifiers } from '../../../src/engine/tales.ts'
-import type { ActionResult, GameState } from '../../../src/engine/types.ts'
-import {
-  resolveAchievementContent,
-  resolveBoardGenerationContent,
-  resolveTaleContent,
-  resolveUnitContent,
-} from '../../../src/content/resolveContent.ts'
 import { buildGenesisState } from '../../../src/lib/gameGenesis.ts'
 import type { GameRow as FullGameRow, PlayerRow as FullPlayerRow } from '../../../src/lib/dbTypes.ts'
 import { compressGameStateForStorage, decompressGameStateFromStorage, type StoredGameState } from '../../../src/lib/gameStateCompression.ts'
@@ -58,7 +34,7 @@ export interface GameRow {
   id: string
   play_mode: 'hotseat' | 'live' | 'async'
   created_by: string
-  /** Room lifecycle status (0008_room_lifecycle.sql) — only get-game-state's read-visibility check (mirroring 0021_remove_observers.sql's RLS policy) uses this today; apply-action/undo-action/redo-action ignore it. */
+  /** Room lifecycle status — only get-game-state's read-visibility check (mirroring game_state's SELECT RLS policy) uses this; apply-action/undo-action/redo-action ignore it. */
   status: 'lobby' | 'active' | 'completed' | 'canceled'
 }
 export interface PlayerRow {
@@ -77,7 +53,7 @@ interface RawGameStateRow {
   version: number
 }
 
-/** Service-role client — every DB read/write these functions do is against this, not the caller's own RLS-scoped session (see this file's own doc comment: these functions enforce authorization themselves, the same reasoning RULE_ENFORCEMENT_PLAN.md §3 gives for choosing Edge Functions at all). */
+/** Service-role client — every DB read/write these functions do is against this, not the caller's own RLS-scoped session (these functions enforce authorization themselves). */
 export function serviceRoleClient(): SupabaseClient {
   return createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 }
@@ -107,13 +83,13 @@ export interface GameContext {
   game: GameRow
   players: PlayerRow[]
   gameState: GameStateRow
-  /** profiles.is_admin, checked from the DB rather than trusted from the client. The one caller get-game-state trusts with a still-secret pick (§4.5) — unlike isOwnerOrAdmin below, the room owner does NOT get this, per jinxbit's follow-up on issue #450: an owner is still just a player, with no rules reason to see another player's hidden information. */
+  /** profiles.is_admin, checked from the DB rather than trusted from the client. The one caller get-game-state trusts with still-secret information — unlike isOwnerOrAdmin below, the room owner does NOT get this: an owner is still just a player, with no reason to see another player's hidden information. */
   isAdmin: boolean
-  /** games.created_by or profiles.is_admin — §4.4/§4.5's write-side act-as-any-player/history-override carve-out. Deliberately broader than isAdmin: forcing an action through (e.g. for a stuck/AFK player) is an owner responsibility today, unrelated to reading someone else's still-secret state (see isAdmin above, and get-game-state/index.ts's use of isAdmin instead of this for its unredacted-read branch). */
+  /** games.created_by or profiles.is_admin — the write-side act-as-any-player/history-override carve-out. Deliberately broader than isAdmin: forcing an action through (e.g. for a stuck/AFK player) is an owner responsibility, unrelated to reading someone else's still-secret state (see isAdmin above). */
   isOwnerOrAdmin: boolean
 }
 
-/** Loads everything apply-action/undo-action/redo-action need about one game in one place, or null if the game/its state doesn't exist. */
+/** Loads everything apply-action/undo-action/redo-action/get-game-state need about one game in one place, or null if the game/its state doesn't exist. */
 export async function loadGameContext(supabase: SupabaseClient, gameId: string, callerUserId: string): Promise<GameContext | null> {
   const [{ data: game, error: gameError }, { data: players, error: playersError }, { data: gameState, error: stateError }] = await Promise.all([
     supabase.from('games').select('id, play_mode, created_by, status').eq('id', gameId).maybeSingle(),
@@ -140,15 +116,11 @@ export async function loadGameContext(supabase: SupabaseClient, gameId: string, 
 }
 
 /**
- * §4.1: is `callerUserId` entitled to submit `playerId`'s action? Hotseat is
- * explicitly out of scope (one shared `auth.uid()` covers every local seat —
- * see RULE_ENFORCEMENT_PLAN.md's Scope section), so any player enrolled in a
- * hotseat game may act for any seat in it, same as today's client-trusted
- * behavior. Live/async requires an exact (game, seat, caller) match. §4.5's
- * owner/admin override applies on top for live/async — issue #486 gives
- * hotseat its own carve-out from that check instead (apply-action/index.ts),
- * since it exists to stop one human discarding another human's undone move,
- * and hotseat has only one human to begin with.
+ * Is `callerUserId` entitled to submit `playerId`'s action? In hotseat one
+ * shared `auth.uid()` covers every local seat, so any player enrolled in a
+ * hotseat game may act for any seat in it. Live/async requires an exact
+ * (game, seat, caller) match. The room owner or a site admin may act for
+ * anyone (e.g. to unstick an AFK player).
  */
 export function isAuthorizedToActAs(ctx: GameContext, callerUserId: string, playerId: string): boolean {
   if (ctx.isOwnerOrAdmin) return true
@@ -157,10 +129,9 @@ export function isAuthorizedToActAs(ctx: GameContext, callerUserId: string, play
 }
 
 /**
- * get-game-state's read-visibility check — mirrors `game_state`'s current
- * SELECT RLS policies (0021_remove_observers.sql: seated player, or any
- * signed-in user once the game is past 'lobby'; 0024_admin_read_all_game_state.sql:
- * an admin, of anything, always) exactly, since a service-role-client Edge
+ * get-game-state's read-visibility check — mirrors `game_state`'s SELECT RLS
+ * policies (seated player, or any signed-in user once the game is past
+ * 'lobby'; an admin, of anything, always) exactly, since a service-role-client Edge
  * Function bypasses RLS entirely and so has to reimplement whatever gate RLS
  * would otherwise have provided. Deliberately keyed on `isAdmin`, not the
  * broader `isOwnerOrAdmin` — RLS itself gives the room owner no special read
@@ -173,27 +144,16 @@ export function canReadGameState(ctx: GameContext, callerUserId: string): boolea
 }
 
 /**
- * Write-side mirror of `get-game-state`'s redaction gate (see that
- * function's own doc comment for the condition and the admin/hotseat
- * carve-outs — this reuses the exact same one, keyed off the *result*
- * state's own `hiddenInformationEnabled`/nothing-play-mode-specific fields
- * rather than re-deriving it) — issue #478: apply-action/undo-action/
- * redo-action hand the caller back the very state their own compare-and-
- * swap just wrote, so without this the write response leaks exactly the
- * still-secret pick the read path withholds. Keyed on the caller's own seat
- * (`ctx.players`/`callerUserId`), not `action.playerId` — the owner/admin
- * override (§4.5) lets someone submit on another seat's behalf, but the
- * response still lands in *this* caller's own browser, so it's their own
- * knowledge that gates what they see back, exactly like a read.
+ * Write-side mirror of `get-game-state`'s redaction gate: apply-action/
+ * undo-action/redo-action hand the caller back the very state their own
+ * compare-and-swap just wrote, so without this the write response would leak
+ * exactly what the read path withholds. Keyed on the caller's own seat, not
+ * the action's `playerId` — the owner/admin override lets someone submit on
+ * another seat's behalf, but the response lands in *this* caller's browser.
  *
- * Always wraps in the `RedactedGameState` shape, even when nothing is
- * actually masked (`revealedGameStateView`) — same reasoning as
- * `get-game-state`: every caller gets one predictable shape, so
- * `gameApi.ts`'s callers can unconditionally run the response through
- * `toClientGameState` rather than sniffing which shape came back. That
- * collapse is a lossless round trip whenever nothing was masked (see
- * `toClientGameState`'s own doc comment), so this is not a behavior change
- * for a game without `hiddenInformationEnabled`.
+ * Always wraps in the `RedactedGameState` shape, even when nothing is masked
+ * (`revealedGameStateView`), so every caller gets one predictable shape and
+ * `gameApi.ts` can unconditionally run it through `toClientGameState`.
  */
 export function redactedResponseState(ctx: GameContext, callerUserId: string, state: GameState): RedactedGameState {
   const shouldRedact = state.hiddenInformationEnabled && ctx.game.play_mode !== 'hotseat'
@@ -203,108 +163,35 @@ export function redactedResponseState(ctx: GameContext, callerUserId: string, st
 }
 
 /**
- * §4.4's owner-override condition, adapted to the actually-shipped
- * marker-based history model (issue #412's UNDO_ACTION/REDO_ACTION entries +
- * resolveHistory, ./historyFold.ts) rather than historyPointer.ts's
- * separate-pointer-column design that turned out unnecessary (§6 of the
- * plan): appending `submittedByPlayerId`'s new action to the raw
- * `actionHistory` already makes resolveHistory prune any un-redone tail
- * automatically (see historyFold.test.ts's branching cases) — this just
- * checks, before that happens, whether that tail contains anyone else's
- * action, which is the one case §4.4 says needs the room owner (extended by
- * §4.5 to `profiles.is_admin` too — both already folded into
- * ctx.isOwnerOrAdmin).
+ * Whether appending `submittedByPlayerId`'s new action would discard another
+ * player's undone action. Appending to the raw `actionHistory` while the undo
+ * pointer sits behind the tip prunes the un-redone tail automatically
+ * (resolveHistory, packages/sdk/src/historyFold.ts) — this checks, before that
+ * happens, whether that tail contains anyone else's action.
  *
- * Only decides WHETHER an override is needed, not whether the caller has
- * one — since issue #464, that's no longer just `ctx.isOwnerOrAdmin`: the
- * caller (apply-action/index.ts) must also check `GameState.adminModeActive`
- * (toggled by SET_ADMIN_MODE, src/engine/actions.ts) — being the room owner
- * or a site admin is no longer sufficient by itself, it's a privilege that
- * has to be deliberately switched on first. Also unconditional here on play
- * mode — issue #486: this function has no `GameContext` to read `play_mode`
- * from, so its caller skips calling it at all for a hotseat game instead
- * (same reasoning as isAuthorizedToActAs's hotseat branch above: one shared
- * `auth.uid()` covers every seat, so there is no second human whose undone
- * move could be discarded).
- *
- * `lockRevealedInformationEnabled` (issue #529,
- * GameState.lockRevealedInformationEnabled — see that field's own doc
- * comment) closes a second gap the "someone else's action" check above
- * doesn't: a player who was the *last* to pick in a simultaneous
- * `selectCards`/`decline` phase can undo straight back to before their own
- * pick and resubmit a different one — only their own entry sits in the
- * discarded tail, so the check above sees nothing to protect, even though
- * that pick already resolved the phase and so was already revealed to
- * everyone. When on, a branch that would discard *any*
- * `CHOOSE_CARD`/`MOVE_TO_DECLINE` entry — regardless of whose — needs the
- * same override, not just one that discards another player's. This is safe
- * to apply unconditionally on entry type rather than first checking whether
- * that particular phase had actually resolved: a still-*open* pick never
- * needs branching to retract in the first place — `RETRACT_CHOICE`/
- * `RETRACT_DECLINE` (RULE_ENFORCEMENT_PLAN.md §4.4's refinement) are
- * ordinary forward actions the caller can always submit directly for their
- * own still-pending pick, with no owner-override check at all — so any
- * `CHOOSE_CARD`/`MOVE_TO_DECLINE` a client instead reaches via undo+resubmit
- * is, by construction, one that already resolved.
- *
- * Issue #547 gives `RETRACT_CHOICE` one further, still-forward-only reach:
- * the caller's own pick, even after some *other* player's resolved the
- * `selectCards` phase, as long as nothing has happened in `actions` since —
- * see `canRetractChoiceAfterReveal` (src/engine/applyAction.ts). That path
- * is self-gated on `lockRevealedInformationEnabled` inside the engine
- * itself rather than through this function, since it's still a forward
- * submission with nothing in `redoableTail` to check — `RETRACT_DECLINE` has
- * no equivalent yet (its own post-resolve case would mean reversing
- * `beginPurchasePhase`'s possible cascade into a finished round, not just a
- * phase flip — see the issue's own applyRetractChoice doc comment for why
- * that's out of scope for now).
+ * Only decides WHETHER an override is needed, not whether the caller has one:
+ * that takes the room owner or a site admin (`ctx.isOwnerOrAdmin`) *with*
+ * room admin mode switched on (`GameState.adminModeActive`, toggled by
+ * SET_ADMIN_MODE) — checked by apply-action itself. Also unconditional on
+ * play mode: apply-action skips calling this for a hotseat game, where one
+ * shared `auth.uid()` covers every seat and there's no second human whose
+ * undone move could be discarded.
  */
-export function requiresOwnerOverride(rawHistory: LoggedAction[], submittedByPlayerId: string, lockRevealedInformationEnabled: boolean): boolean {
-  const tail = redoableTail(rawHistory)
-  if (tail.some((entry) => entry.action.playerId !== submittedByPlayerId)) return true
-  return lockRevealedInformationEnabled && tail.some((entry) => entry.action.type === 'CHOOSE_CARD' || entry.action.type === 'MOVE_TO_DECLINE')
+export function requiresOwnerOverride(rawHistory: LoggedAction[], submittedByPlayerId: string): boolean {
+  return redoableTail(rawHistory).some((entry) => actionPlayerId(entry.action) !== submittedByPlayerId)
+}
+
+function actionPlayerId(action: Action): string | null {
+  return 'playerId' in action ? action.playerId : null
 }
 
 /**
- * GameState.activeTaleIds/gameLength + player count -> every content bundle
- * applyAction's dispatch needs, mirroring GamePage.tsx's own resolution
- * order (tale content first, since it modifies the other two).
- *
- * Player count comes from `state.players.length`, not a fresh `players`
- * table read (contrast `ctx.players` in GameContext, which is deliberately
- * live — see isAuthorizedToActAs/canReadGameState, which need the *current*
- * roster for auth) — `state.players` is fixed at genesis and never shrinks
- * afterward (elimination flags a player, it doesn't remove them, see
- * elimination.ts), so it's the self-contained source CLAUDE.md's "read them
- * from GameState, not the games row" already asks for elsewhere
- * (activeTaleIds/gameLength above). Using a live count here instead let one
- * request's content resolution (board-generation pool sizes, unit supply
- * caps, ...) silently diverge from genesis's — confirmed against a reported
- * 2-player game (issue #519) whose `boardSetup.tilesRemainingInTier` ended
- * up permanently set to the *3*-player pool size for its next tile tier,
- * because whatever `players` read happened to run for that one request
- * returned 3 rows.
+ * Applies `action` against `state` via applyAction (packages/sdk/src/applyAction.ts)
+ * — the same entry point GamePage.tsx's submitAction uses client-side, so
+ * forced follow-ups fold into the same actionHistory entry here and there.
  */
-export function resolveGameContent(state: GameState) {
-  const playerCount = state.players.length
-  const boardGenerationContent = resolveBoardGenerationContent(playerCount)
-  const taleContent = resolveTaleContent(state.activeTaleIds, playerCount)
-  const unitContent = applyTaleModifiers(resolveUnitContent(playerCount), taleContent)
-  const achievementContent = applyTaleAchievementModifiers(resolveAchievementContent(state.gameLength), taleContent)
-  return { unitContent, achievementContent, boardGenerationContent, taleContent }
-}
-
-/**
- * Applies `action` against `state.state`, resolving this game's content
- * bundles and delegating to applyAction (src/engine/applyAction.ts) — the
- * same entry point GamePage.tsx's submitAction uses client-side, so both
- * forced tile placements and forced card choices/declines (§4.3) fast-
- * forward identically here and there, folded into the same actionHistory
- * entry as `action` itself.
- */
-export function applyActionFullyEnforced(state: GameState, action: Action): ActionResult {
-  const content = resolveGameContent(state)
-  return applyAction(state, action, content.unitContent, content.achievementContent, content.boardGenerationContent, content.taleContent)
+export function applyActionEnforced(state: GameState, action: Action): ActionResult {
+  return applyAction(state, action)
 }
 
 /**
@@ -316,8 +203,7 @@ export function applyActionFullyEnforced(state: GameState, action: Action): Acti
  * is expected to happen occasionally under concurrent submissions, not a bug).
  *
  * This is the one path (shared by apply-action/undo-action/redo-action, and
- * only ever invoked for `ruleEnforcementEnabled` games — see GamePage.tsx's
- * branch in submitAction/handleUndo/handleRedo) that gzip+base64-compresses
+ * only ever invoked for `ruleEnforcementEnabled` games) that gzip+base64-compresses
  * `state` before it's written, shrinking the stored row — which shrinks both
  * every subscribed client's Realtime broadcast of it and every later REST
  * read (getGameState/listMyGames/etc. in gameApi.ts). A client-trusted game's
@@ -340,9 +226,9 @@ export async function writeGameStateCAS(supabase: SupabaseClient, gameId: string
 
 /**
  * Full game/player rows, beyond loadGameContext's narrow projection — needed
- * only by undo-action/redo-action, to rebuild genesis (buildGenesisState,
- * src/lib/gameGenesis.ts) the same way GamePage.tsx's handleUndo/handleRedo
- * do client-side today. apply-action never needs genesis: a live submission
+ * only by undo-action/redo-action/start-game, to rebuild genesis
+ * (buildGenesisState, src/lib/gameGenesis.ts) the same way GamePage.tsx's
+ * handleUndo/handleRedo do client-side. apply-action never needs genesis: a live submission
  * only ever steps forward from the current stored GameState.
  */
 export async function loadFullGameAndPlayers(supabase: SupabaseClient, gameId: string): Promise<{ game: FullGameRow; players: FullPlayerRow[] } | null> {
@@ -363,8 +249,7 @@ export { buildGenesisState }
  * client reports it (gameApi.ts sets it when `applyReplayDelta` gives up).
  *
  * The point of carrying this at all: the server cannot otherwise tell a
- * healthy cold start — a client with no cache yet, which is expected and which
- * issue #688 exists to make rarer — from a client whose local rebuild
+ * healthy cold start — a client with no cache yet, which is expected — from a client whose local rebuild
  * *disagreed with the server*. Both arrive as "protocol 2, no cursor". The
  * second is the one worth watching: a hash mismatch means this client's engine
  * and ours produced different states from the same actions, which is exactly
@@ -394,17 +279,14 @@ export interface StateResponseRequest {
 }
 
 /**
- * One line per state response, into the Edge Function logs (todo.md #145).
+ * One line per state response, into the Edge Function logs.
  *
  * Deliberately a log line and not a counter table: a row per request would put
- * a PostgREST round trip back on the hot path to measure a change whose whole
- * point was removing round trips — the same mistake that made issue #648's
- * first attempt double Edge Function latency (todo.md #139). stdout costs
- * nothing and Supabase already collects it.
+ * a PostgREST round trip back on the hot path. stdout costs nothing and
+ * Supabase already collects it.
  *
  * `evt` is a fixed string so the Logs Explorer has something exact to filter
- * on. The only other console writers in supabase/functions/ are the turn-ping
- * functions' `notify_discord_turn`/`notify_web_push` lines (todo.md #151).
+ * on.
  */
 function logStateResponse(fields: Record<string, unknown>): void {
   console.log(JSON.stringify({ evt: 'state_response', ...fields }))
@@ -424,10 +306,10 @@ function logStateResponse(fields: Record<string, unknown>): void {
  *
  * Three response shapes, picked by what the caller asked for:
  *
- *   - `protocol: 2` with a usable `sinceActionIndex` (issue #648): the actions
+ *   - `protocol: 2` with a usable `sinceActionIndex`: the actions
  *     it may replay, an overlay for what a replay cannot reach, and a hash to
  *     check the result against. No materialised state at all.
- *   - `sinceActionIndex` alone (issue #647): `stateWithoutHistory` plus the
+ *   - `sinceActionIndex` alone: `stateWithoutHistory` plus the
  *     appended log.
  *   - Neither: the whole view, as it always was.
  *
@@ -456,12 +338,10 @@ export function respondWithState(
 
   if (typeof sinceActionIndex === 'number' && Number.isInteger(sinceActionIndex) && sinceActionIndex >= 0) {
     const safePrefixLength = unredactedPrefix(view.actionHistory).length
-    // `<=`, not `<`: the safe prefix is NOT monotonic. With
-    // HIDDEN_INFORMATION_PLAN.md §5.3's reveal high-water mark dropped,
-    // masking derives strictly from the *current* roundPhase/pendingPlayerIds
-    // (see redactStateForPlayer's doc comment), so a newly-opened phase can
-    // re-mask entries this viewer was already shown and move the prefix
-    // backwards. A caller asking from beyond it falls through to a full
+    // `<=`, not `<`: the safe prefix is NOT monotonic. Masking derives
+    // strictly from the *current* state (see redactStateForPlayer's doc
+    // comment), so an undo can re-mask entries this viewer was already shown
+    // and move the prefix backwards. A caller asking from beyond it falls through to a full
     // response here, which is exactly right — it has entries it is no longer
     // entitled to replay from.
     if (sinceActionIndex <= safePrefixLength) {
@@ -493,10 +373,9 @@ export function respondWithState(
       }
       return tagged('history-delta', 'protocol-1', { ok: true, ...delta, version }, { append: actionHistoryAppend.length })
     }
-    // Asked from beyond the safe prefix: the phase re-masked entries this
-    // caller already held. Distinct from a cold start, and worth counting
-    // separately — measured under 1% of reads, so a rise means something
-    // changed about how often phases re-open.
+    // Asked from beyond the safe prefix: entries this caller already held
+    // were re-masked. Distinct from a cold start, and worth counting
+    // separately.
     if (protocolVersion >= 2) {
       return tagged('full', 'prefix-moved-back', { ok: true, state: view, stateHash: hashGameStateView(toClientGameState(view)), version }, {})
     }

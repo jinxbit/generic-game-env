@@ -1,26 +1,31 @@
 name: Repair Supabase Migration History
 
-# One-off, manually-triggered fix for a specific problem: the remote
-# database already has all of supabase/migrations/*.sql applied (it was
-# originally built up by hand in the Supabase SQL editor), but Supabase's
+# Manually-triggered fix for one specific problem: the remote database
+# already has supabase/migrations/0001_baseline.sql's schema in place (e.g.
+# it was built up by hand in the Supabase SQL editor), but Supabase's
 # tracking table (supabase_migrations.schema_migrations) has no record of
-# that, so `supabase db push` tries to replay every migration from scratch
-# and fails on the very first statement that already exists.
+# that, so `supabase db push` tries to replay the baseline and trips over
+# objects that already exist.
 #
 # `supabase migration repair --status applied` only inserts rows into that
 # tracking table — it does not run any migration SQL against the database.
-# Before relying on it, use the Supabase dashboard's Table Editor to eyeball
-# that the schema already matches what the migrations define (e.g. profiles
-# has an is_admin column from 0017, map_pool exists from 0016, observers
-# does NOT exist since 0021 dropped it). If some migrations turn out not to
-# be applied yet, do not run this — fix the remote schema (or the
-# migrations) first, then use `supabase db push` normally.
+# Before relying on it, run audit-and-fix-migrations.yml (read-only by
+# default) or eyeball the Table Editor to confirm the schema already matches
+# the baseline (e.g. profiles has is_admin, game_state_meta has a `phase`
+# column, and no map_pool or observers table exists). If it doesn't, do not
+# run this — fix the remote schema first, then use `supabase db push`.
+#
+# NOT for a project whose history still lists the pre-squash migrations
+# (0002 … 0035, 00051). Its schema differs from the baseline, and marking
+# the baseline applied would hide that. Rebuild pre-production with
+# rebuild-preproduction.yml instead; any other such project needs a
+# hand-written migration from its schema to the baseline's.
 
 on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Type YES to mark every migration below as applied in the remote history table (no schema SQL is executed)'
+        description: 'Type YES to mark the baseline migration as applied in the remote history table (no schema SQL is executed)'
         required: true
         default: 'no'
 
@@ -46,13 +51,9 @@ jobs:
       - name: Show migration status before repair
         run: supabase migration list
 
-      - name: Mark all local migrations as applied
+      - name: Mark the baseline migration as applied
         if: ${{ github.event.inputs.confirm == 'YES' }}
-        run: |
-          supabase migration repair --status applied \
-            0001 0002 0003 0004 0005 00051 0006 0007 0008 0009 0010 \
-            0011 0012 0013 0014 0015 0016 0017 0018 0019 0020 0021 \
-            0022 0023 0024
+        run: supabase migration repair --status applied 0001
 
       - name: Show migration status after repair
         if: ${{ github.event.inputs.confirm == 'YES' }}
@@ -61,4 +62,4 @@ jobs:
       - name: Skipped (confirmation not given)
         if: ${{ github.event.inputs.confirm != 'YES' }}
         run: |
-          echo "::notice::confirm input was '${{ github.event.inputs.confirm }}', not 'YES' — no repair was performed. Re-run this workflow with confirm=YES once you've verified the remote schema already matches the migrations."
+          echo "::notice::confirm input was '${{ github.event.inputs.confirm }}', not 'YES' — no repair was performed. Re-run this workflow with confirm=YES once you've verified the remote schema already matches the baseline migration."

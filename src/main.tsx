@@ -2,6 +2,8 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import './index.css'
+// Registers this deployment's games before anything runs their rules.
+import './games/registry'
 
 const root = createRoot(document.getElementById('root')!)
 

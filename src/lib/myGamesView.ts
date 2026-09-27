@@ -29,15 +29,15 @@ export interface MyGameEntry {
 
 /**
  * The status that actually matters for this screen. games.status (the DB
- * row) only ever tracks 'lobby' -> 'active' (-> 'canceled') — 'boardSetup'
- * and 'completed' live exclusively in game_state.state.status (see
+ * row) only ever tracks 'lobby' -> 'active' (-> 'canceled') — 'completed'
+ * lives exclusively in game_state.state.status (see
  * dbTypes.ts's GameRow comment and GamePage.tsx's status checks, mirrored
  * into game_state_meta.status), so a finished game still shows games.status:
  * 'active' unless we look at stateSummary instead. 'canceled' is the one
  * value that *is* authoritative on games.status — it's checked first, ahead
  * of stateSummary.
  */
-export type MyGameStatus = 'lobby' | 'boardSetup' | 'active' | 'completed' | 'canceled'
+export type MyGameStatus = 'lobby' | 'active' | 'completed' | 'canceled'
 
 export function myGameStatus(entry: MyGameEntry): MyGameStatus {
   if (entry.game.status === 'canceled') return 'canceled'

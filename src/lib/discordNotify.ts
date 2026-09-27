@@ -10,6 +10,10 @@
 // signed-in player's *own* webhook to confirm it's wired up correctly —
 // that's not a leak since nothing about a co-player's webhook is exposed.
 
+// Also imported by supabase/functions/notify-discord-turn, so the message
+// format has one definition — this module is in the Edge Function graph:
+// keep it free of app-only imports.
+
 const WEBHOOK_URL_PATTERN = /^https:\/\/(?:discord\.com|discordapp\.com)\/api\/webhooks\/\d+\/[\w-]+$/
 
 export function isDiscordWebhookUrl(url: string): boolean {
@@ -22,35 +26,40 @@ export function isDiscordWebhookUrl(url: string): boolean {
  * own user ID, not Supabase's internal identity row ID. `null` if the user never
  * signed in with Discord (e.g. the guest auth bypass).
  *
- * Mirrored in supabase/functions/notify-discord-turn/index.ts, which can't
- * import from src/ — keep the two in sync if this ever changes.
+ * Also used server-side by supabase/functions/notify-discord-turn.
  */
 export function discordUserIdFromIdentities(identities: { provider: string; id: string }[] | null | undefined): string | null {
   return identities?.find((identity) => identity.provider === 'discord')?.id ?? null
 }
 
-// Mirrored in supabase/functions/notify-discord-turn/index.ts, which sends
-// the real pings — that Edge Function can't import from src/, so keep the
-// two in sync if this ever changes.
+// The real pings are built by supabase/functions/notify-discord-turn with
+// this same function; the "Send test" button uses it too. Game-agnostic: the
+// title, turn label and phase label come from the game's own definition.
 export function turnNotificationMessage(params: {
+  /** The game's name (GameDefinition.title), or the site's for a message not about one game. */
+  title: string
+  /** What the turn number counts (GameDefinition.turnLabel), e.g. "Round". */
+  turnLabel: string
   displayName: string
   /** Discord snowflake ID to `@mention` (so the recipient is actually pinged), or null to fall back to the bold display name. */
   discordUserId: string | null
   roomName: string
   roomCode: string
-  phase: string
-  /** Round number, or null while still in board setup (pre-round 1, no round number to show). */
+  /** The game's label for the current phase (e.g. "Picking"), or null to leave it out. */
+  phase: string | null
+  /** Turn/round number (GameState.turn), or null to leave it out. */
   round: number | null
   /** Deep link to the game, or null if the SITE_URL Edge Function secret isn't set — falls back to the room code. */
   gameUrl: string | null
 }): string {
-  const roundText = params.round === null ? '' : ` (Round ${params.round})`
+  const details = [params.round === null ? null : `${params.turnLabel} ${params.round}`, params.phase].filter((part): part is string => !!part)
+  const detailText = details.length > 0 ? ` (${details.join(' · ')})` : ''
   // With a game link, the room name itself becomes the link instead of pasting
   // the raw URL below — without one, fall back to the room code on its own line.
   const roomName = params.gameUrl ? `[${params.roomName}](${params.gameUrl})` : params.roomName
   const fallback = params.gameUrl ? '' : `\nRoom \`${params.roomCode}\``
   const mention = params.discordUserId ? `<@${params.discordUserId}>` : `**${params.displayName}**`
-  return `**Rise & Fall** — ${mention}, it's your turn to **${params.phase}** in **${roomName}**${roundText}.${fallback}`
+  return `**${params.title}** — ${mention}, it's your turn in **${roomName}**${detailText}.${fallback}`
 }
 
 /**

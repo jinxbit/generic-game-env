@@ -1,7 +1,7 @@
-// Site-wide chat name coloring (issue #581, CHAT_PLAN.md §15). Unlike
+// Site-wide chat name coloring (CHAT_PLAN.md §15). Unlike
 // in-game chat (colored from the sender's actual PlayerRow.color), a
-// site-wide sender has no seat or stored color at all, and the issue asks
-// for the color to be "persistent" without adding one: hashing the display
+// site-wide sender has no seat or stored color at all, and we want
+// the color to be "persistent" without adding one: hashing the display
 // name deterministically gives every client the same color for the same
 // name, with nothing to store or sync.
 

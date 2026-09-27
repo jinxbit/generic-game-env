@@ -1,58 +1,25 @@
 import { describe, expect, it } from 'vitest'
-import { buildGenesisState } from '../gameGenesis'
-import { GAME_STATE_EXPORT_SCHEMA, decodeGameStateExport, encodeGameStateExport } from '../gameStateExport'
-import type { GameRow, GameSettings, PlayerRow } from '../dbTypes'
+import { act, newGame, pickAll } from '@game-platform/unique-pick/testing'
+import type { GameState } from '@game-platform/sdk'
+import { GAME_STATE_EXPORT_SCHEMA, GAME_STATE_EXPORT_VERSION, decodeGameStateExport, encodeGameStateExport } from '../gameStateExport'
 
-function makeGame(overrides: Partial<GameRow> = {}, settingsOverrides: Partial<GameSettings> = {}): GameRow {
-  return {
-    id: 'game_1',
-    room_code: 'ABCDE',
-    name: 'Test room',
-    play_mode: 'hotseat',
-    status: 'lobby',
-    min_players: 2,
-    max_players: 4,
-    created_by: 'auth_1',
-    created_at: '',
-    updated_at: '',
-    settings: {
-      mapTemplateId: null,
-      mapPoolBoard: null,
-      mapPoolMapId: null,
-      mapPoolRandomAtStart: false,
-      soloBuildMap: false,
-      soloBuilderSelection: 'owner',
-      soloBuilderId: null,
-      soloBuilderUnitOrder: 'last',
-      soloBuilderTurnOrder: null,
-      skipHotseatPassGate: false,
-      ruleEnforcementEnabled: false,
-      hiddenInformationEnabled: false,
-      lockRevealedInformationEnabled: false,
-      activeTaleIds: [],
-      gameLength: 4,
-      ...settingsOverrides,
-    },
-    config_version: 0,
-    visibility: 'private',
-    ...overrides,
+/** A few rounds into a 6-player game, so there's a realistic amount of repetitive JSON to compress. */
+function playedState(): GameState {
+  let state = newGame({ players: 6, playMode: 'hotseat', options: { targetScore: 30, maxRounds: 30 } })
+  for (let round = 0; round < 5; round++) {
+    state = pickAll(state, { p1: 1, p2: 2, p3: 3, p4: 3, p5: 4, p6: 5 })
   }
-}
-
-function makePlayers(): PlayerRow[] {
-  return [
-    { id: 'p1', game_id: 'game_1', user_id: 'auth_1', display_name: 'Alice', avatar_url: null, seat_index: 0, color: '#ef4444', is_active: true, joined_at: '', ready_for_version: 0 },
-    { id: 'p2', game_id: 'game_1', user_id: 'auth_2', display_name: 'Bob', avatar_url: null, seat_index: 1, color: '#3b82f6', is_active: true, joined_at: '', ready_for_version: 0 },
-  ]
+  return act(state, { type: 'CONCEDE', playerId: 'p6' })
 }
 
 describe('gameStateExport', () => {
   it('round-trips a real game state through encode/decode', async () => {
-    const state = buildGenesisState(makeGame(), makePlayers())
+    const state = playedState()
 
     const encoded = await encodeGameStateExport(state)
     const parsed = JSON.parse(encoded)
     expect(parsed.schema).toBe(GAME_STATE_EXPORT_SCHEMA)
+    expect(parsed.version).toBe(GAME_STATE_EXPORT_VERSION)
     expect(typeof parsed.gameStateZipped).toBe('string')
 
     const envelope = await decodeGameStateExport(encoded)
@@ -61,7 +28,7 @@ describe('gameStateExport', () => {
   })
 
   it('is dramatically smaller than the pretty-printed JSON it replaces', async () => {
-    const state = buildGenesisState(makeGame({}, { mapTemplateId: 'classic' }), makePlayers())
+    const state = playedState()
     const pretty = JSON.stringify(state, null, 2)
 
     const encoded = await encodeGameStateExport(state)

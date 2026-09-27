@@ -1,6 +1,5 @@
 import { gunzipFromBase64, gzipToBase64 } from './gzip.ts'
-import type { GameState } from '../engine/types.ts'
-
+import type { GameState } from '@game-platform/sdk'
 /**
  * Compressed encoding for `game_state.state`, applied only on the write path
  * that's exclusive to `ruleEnforcementEnabled` games — see
@@ -15,27 +14,26 @@ import type { GameState } from '../engine/types.ts'
  * rollout: a legacy/client-trusted row with no `__gz` key round-trips through
  * `decompressGameStateFromStorage` unchanged.
  *
- * Duplicates `status`/`roundPhase`/`turn`/`pendingPlayerIds`/`turnOrder`/
- * `boardSetup` in plaintext alongside the gzip blob (issue #451): the
- * `game_state_sync_meta` DB trigger (0027_game_state_meta_pending_players.sql)
- * reads exactly these fields straight off `new.state` with `->>`/`->` — it
- * has no way to gunzip `__gz` first, so without this a rule-enforced game's
- * `game_state_meta` projection (which every listing screen's "finished"/
- * "your turn" classification reads — see gameCardView.ts) silently rotted to
- * `status: 'unknown'` the moment the game's first enforced write landed,
- * including the write that actually finishes the game. No new information
- * exposure: these fields already sit inside the same `state` column, visible
- * to the same RLS-gated audience, just gzipped — duplicating a few of them
- * in plaintext doesn't reveal anything a reader couldn't already decompress.
+ * Duplicates `status`/`phase`/`turn`/`pendingPlayerIds`/`activePlayerId`/
+ * `turnOrder` in plaintext alongside the gzip blob: the
+ * `game_state_sync_meta` DB trigger (the baseline migration) reads these
+ * fields straight off `new.state` with `->>`/`->` — it has no way to gunzip
+ * `__gz` first, so without them a rule-enforced game's `game_state_meta`
+ * projection (which every listing screen's "finished"/"your turn"
+ * classification reads — see gameCardView.ts) would read `status: 'unknown'`.
+ * No new information exposure: these fields already sit inside the same
+ * `state` column, visible to the same RLS-gated audience, just gzipped —
+ * duplicating a few of them in plaintext doesn't reveal anything a reader
+ * couldn't already decompress.
  */
 export interface CompressedGameState {
   __gz: string
   status: GameState['status']
-  roundPhase: GameState['roundPhase']
+  phase: GameState['phase']
   turn: GameState['turn']
   pendingPlayerIds: GameState['pendingPlayerIds']
+  activePlayerId: GameState['activePlayerId']
   turnOrder: GameState['turnOrder']
-  boardSetup: GameState['boardSetup']
 }
 
 export type StoredGameState = GameState | CompressedGameState
@@ -48,11 +46,11 @@ export async function compressGameStateForStorage(state: GameState): Promise<Com
   return {
     __gz: await gzipToBase64(JSON.stringify(state)),
     status: state.status,
-    roundPhase: state.roundPhase,
+    phase: state.phase,
     turn: state.turn,
     pendingPlayerIds: state.pendingPlayerIds,
+    activePlayerId: state.activePlayerId,
     turnOrder: state.turnOrder,
-    boardSetup: state.boardSetup,
   }
 }
 

@@ -4,27 +4,34 @@ Guidance for working in this repo. Read this before making changes.
 
 ## What this is
 
-**Rise & Fall** — a private, non-commercial web app for playing an original
-turn-based strategy board game (hex map, tile-laying setup, unit-kind cards,
-achievements, VP scoring) remotely (live/async) or on one shared device
-(hotseat). Vite + React 19 + TypeScript + Tailwind v4 on the frontend,
-Supabase (Postgres + RLS + Realtime + Auth + Edge Functions) on the backend,
-Vercel for hosting.
+A **generic platform for turn-based board games** played remotely
+(live/async) or on one shared device (hotseat): accounts, rooms and lobbies,
+an event-sourced rules framework with shared undo/redo, server-side rule
+enforcement, hidden information, realtime sync, chat and notifications.
+Vite + React 19 + TypeScript + Tailwind v4 on the frontend, Supabase
+(Postgres + RLS + Realtime + Auth + Edge Functions) on the backend, Vercel
+for hosting.
 
-All code, UI, and copy are original. Do not add third-party rulebook text,
-card text, or artwork.
+This repo is an npm-workspaces monorepo and the **main platform repo**.
+Games are packages: the rules framework is `packages/sdk`
+(`@game-platform/sdk`), and each game is its own package — here only the
+example game, **Unique Pick** (`packages/unique-pick`), which exists to
+exercise every platform feature and is the test fixture. A game can live in
+its own repo and be installed. One deployment hosts whichever games
+`src/games/registry.ts` registers. Read `packages/unique-pick/README.md`
+before building or changing a game.
 
 ## Commands
 
 ```bash
 npm install          # or npm ci
 npm run dev          # Vite dev server on :5173
-npm run test         # vitest run — 62 files / ~1130 tests, ~35s
+npm run test         # vitest run (app + packages) — ~60 files / ~600 tests, ~25s
 npm run test:watch   # vitest watch
 npm run test:smoke   # smoke-test a LIVE Supabase project (needs SMOKE_* env vars)
 npm run seed:preview # put one finished game into a LIVE project and LEAVE it there
 npm run lint         # oxlint (not eslint) — sub-second
-npm run build        # tsc -b (3 projects) + vite build — ~10s
+npm run build        # tsc -b (3 projects) + vite build
 ```
 
 CI (`.github/workflows/ci.yml`) runs `lint`, `test`, `build` in that order on
@@ -55,7 +62,7 @@ ignores anything with an open PR and `automerge.yml` only ever acts on a
 **successful** CI run. The hourly sweep now comments `@claude` on such a PR
 (a comment being what starts `claude.yml`), once per head commit and at most
 three times, then stands down on the PR saying a human is needed rather than
-spending runs on it — `todo.md` #110. The issue is closed by `automerge.yml` when its PR
+spending runs on it. The issue is closed by `automerge.yml` when its PR
 merges — not by the PR body's `Closes #N`, which comes from a `push`-triggered
 workflow and so can be written by a stale copy of itself on an older branch. Both that workflow and `smoke.yml`'s
 failure reporting need the `AUTOMATION_TOKEN` secret, because GitHub does not
@@ -71,121 +78,133 @@ build need no env vars.
 ## Architecture — the layering rules that matter
 
 ```
-src/engine/    pure rules engine — no React, no Supabase, no I/O, no JSON imports
-src/content/   hand-authored game data (JSON + schemas) + resolveContent.ts
-src/lib/       Supabase client, typed queries (gameApi.ts), storage encoding
+packages/sdk/  @game-platform/sdk: game-agnostic rules framework + registry + game contract — no React, no Supabase, no I/O
+packages/<game>/ one package per game: `rules` entry (a GameDefinition, server-safe) + `view` entry (React)
+src/games/     the deployment's game list: registry.ts (rules, imported everywhere rules run) + ui.ts (views)
+src/site.ts    site branding (title, tagline) — also read by vite.config.ts
+src/lib/       Supabase client, typed queries (gameApi.ts), genesis, storage encoding, delta protocol
 src/hooks/     React hooks (auth, admin, display name, preferences)
-src/pages/     routed screens (see src/App.tsx)
-src/components/ UI, incl. HexBoard / RoundView / BoardSetupView
-supabase/      migrations + Edge Functions (rule enforcement, notifications)
-src/test/      vitest setup, an in-process production-like Supabase stack, fixtures
+src/pages/     routed screens (see src/App.tsx); GamePage.tsx is the in-game shell
+src/components/ platform UI (chat, log, cards, settings, auth)
+supabase/      migrations (one baseline + later) and Edge Functions (enforcement, redaction, notifications)
+src/test/      vitest setup, an in-process production-like Supabase stack, replay fixtures
 ```
 
-Four invariants hold across the whole codebase. Breaking any of them will
+Five invariants hold across the whole codebase. Breaking any of them will
 break replay, the Edge Functions, or both:
 
-1. **`applyAction()` (`src/engine/applyAction.ts`) is the only place game
-   rules run.** UI and network layers treat `GameState` as opaque and mutate
-   it exclusively by dispatching an `Action` (`src/engine/actions.ts`). Never
-   hand-edit a `GameState` outside the engine.
-2. **The engine never imports content JSON.** Callers resolve
-   `src/content/*.json` into content-agnostic bundles (`UnitContent`,
-   `AchievementContent`, `BoardGenerationContent`, `TaleContent`) via
-   `src/content/resolveContent.ts` and pass them in as explicit params. Every
-   one defaults to an `EMPTY_*` constant so callers that don't need content
-   aren't forced to supply it. Keep this pattern for any new content.
+1. **`applyAction()` (`packages/sdk/src/applyAction.ts`) is the only place
+   game rules run.** UI and network layers treat `GameState` as opaque and
+   change it exclusively by dispatching an `Action`. Framework actions
+   (CONCEDE, UNDO_ACTION, REDO_ACTION, SET_ADMIN_MODE) are handled by the SDK;
+   every other action goes to the rules of the game the state belongs to,
+   found in the registry (`packages/sdk/src/registry.ts`) by the state's
+   `gameType`/`rulesVersion`.
+2. **The framework never knows a game, and games never know the app.** The
+   SDK reads nothing inside `GameState.game`; everything game-specific goes
+   through `GameDefinition` (rules, labels, options) and `GameUi` (view,
+   options form). Game packages depend only on the SDK — never on `src/`.
+   Platform screens get game names/labels from the definition
+   (`findGameDefinition(game.game_type, …)`) and render games through
+   `src/games/ui.ts`. Anything that runs rules must import
+   `src/games/registry.ts` first (the browser entry, `supabase/functions/_shared/games.ts`
+   and `src/test/setup.ts` do).
 3. **Event sourcing.** `GameState.actionHistory` is append-only and never
    pruned or reordered. Current state = genesis (`buildGenesisState`,
    `src/lib/gameGenesis.ts`, a deterministic function of the `games` row +
-   seated `players`) replayed through `replayActions`
-   (`src/engine/replay.ts`). Undo/redo are themselves logged actions folded
-   in by `resolveHistory` (`src/engine/historyFold.ts`) — not a client-local
-   stack. Anything that makes replay non-deterministic (randomness, clock
-   reads, ambient state) is a bug.
-4. **One submitted action → exactly one `actionHistory` entry.** `applyAction`
-   internally converges any *forced* single-option follow-up (a one-card
-   hand's `CHOOSE_CARD`, a forced tile placement, an owed decline that
-   exactly matches hand+discard) to a fixed point inside the same dispatch,
-   folded into the same log entry. Don't reintroduce per-step entries or an
-   "automatic" flag — see `RULE_ENFORCEMENT_PLAN.md` §4.2/§4.3 for the full
-   history of why.
+   seated `players`) replayed through `replayActions` (`@game-platform/sdk`).
+   Undo/redo are themselves logged actions folded in by `resolveHistory`
+   (`packages/sdk/src/historyFold.ts`) — not a client-local stack. Anything that
+   makes replay non-deterministic (randomness, clock reads, ambient state) is
+   a bug; randomness must be rolled before genesis and stored in
+   `games.settings`. A game always replays under the `rulesVersion` it
+   started with (pinned in `games.settings.rulesVersion` and on the state), so
+   a replay-incompatible rules change ships as a new version registered
+   alongside the old one.
+4. **One submitted action → exactly one `actionHistory` entry.** A forced
+   single-option follow-up (`GameDefinition.nextForcedAction`) is dispatched
+   inside the same `applyAction` call and folded into the same log entry.
+   Don't reintroduce per-step entries or an "automatic" flag.
+5. **`pendingPlayerIds` is always "who may act right now".** The game keeps
+   it accurate (`[activePlayerId]` in a sequential turn, several ids in a
+   simultaneous phase, `[]` otherwise); notifications, listing badges,
+   hotseat hand-off and admin mode all read it, and the DB projects it into
+   `game_state_meta`.
 
-`GameState` is `src/engine/types.ts`; DB row shapes are
-`src/lib/dbTypes.ts` — deliberately separate types, don't merge them.
+`GameState` is `packages/sdk/src/types.ts`; DB row shapes are `src/lib/dbTypes.ts`
+— deliberately separate types, don't merge them.
 
 ## The two write paths
 
 Per-game flag `games.settings.ruleEnforcementEnabled` selects which one a
-game uses. It reads as `false` for any game predating it (`createGame()`
-defaults it to `false` when omitted). `CreateGamePage.tsx` no longer offers a
-checkbox for it at all (issue #552, superseding issue #432's checked-by-
-default checkbox; `RULE_ENFORCEMENT_PLAN.md` §10) — it always passes `true`,
-so every game created through the UI is enforced, with no creator opt-out.
-The client-trusted path itself isn't removed: it's still what every
-pre-#552 game runs on, and still what `createGame()` gives any other caller
-that omits the flag (tests included).
+game uses. It reads as `false` when absent (`createGame()` defaults it to
+`false` when omitted). `CreateGamePage.tsx` always passes `true`, so every
+game created through the UI is enforced; the client-trusted path remains for
+other callers (tests, admin import, duplicate-as-hotseat of a client-trusted
+game).
 
 `games.settings.hiddenInformationEnabled` (only meaningful alongside rule
-enforcement) follows the same split: `createGame()` still defaults it to
-`false` when omitted — that's the contract for every caller that doesn't
-pass it, tests and pre-existing games included — but `CreateGamePage.tsx`
-also no longer offers a checkbox for this (issue #552, superseding issue
-#481's checked-by-default checkbox): since rule enforcement is now always on
-too, it always passes `hiddenInformationAvailable`, so a game created
-through the UI hides in-progress picks unless it's hotseat, where hiding is
-never offered or submitted (`src/lib/hiddenInformationEligibility.ts`;
-`HIDDEN_INFORMATION_PLAN.md`). This changes new games only — no existing
-game's stored settings change.
+enforcement) follows the same split: `createGame()` defaults it to `false`,
+and `CreateGamePage.tsx` passes `hiddenInformationAvailable`
+(`src/lib/hiddenInformationEligibility.ts`) — on for every non-hotseat game.
 
 `GamePage.tsx`'s `submitAction` branches on it:
 
-- **Client-trusted (every older game):** the client runs
-  `applyAction()` itself and writes `game_state` directly, with an
-  optimistic-concurrency retry loop against the `version` column
-  (`writeWithRetry`). State is stored as a plain JSON `GameState`.
+- **Client-trusted:** the client runs `applyAction()` itself and writes
+  `game_state` directly, with an optimistic-concurrency retry loop against
+  the `version` column (`writeWithRetry`). State is stored as plain JSON.
 - **Rule-enforced:** the client posts the raw `Action` to the
   `apply-action` / `undo-action` / `redo-action` Edge Functions. The server
   resolves the caller's seat from their JWT, rejects any action whose
   `playerId` isn't theirs, re-derives the state, and does its own
   compare-and-swap write. RLS forbids direct client writes for these games.
-  State is stored gzip+base64 under `__gz`, with
-  `status`/`roundPhase`/`turn`/`pendingPlayerIds`/`turnOrder`/`boardSetup`
-  duplicated in plaintext so the `game_state_sync_meta` trigger can still
-  project `game_state_meta` (`src/lib/gameStateCompression.ts`).
+  State is stored gzip+base64 under `__gz`, with `status`/`phase`/`turn`/
+  `pendingPlayerIds`/`activePlayerId`/`turnOrder` duplicated in plaintext so
+  the `game_state_sync_meta` trigger can still project `game_state_meta`
+  (`src/lib/gameStateCompression.ts`).
 
-Read paths handle both encodings per-row via `decompressGameStateFromStorage`,
-so no coordinated rollout is needed. Any change touching submission, undo, or
-storage must work on **both** paths.
+Read paths handle both encodings per-row via `decompressGameStateFromStorage`.
+Any change touching submission, undo, or storage must work on **both** paths.
 
-The same split now starts at genesis, not just at the first action.
-`LobbyPage.tsx`'s Start Game (`gameApi.ts`'s `startGameFromLobby()`) branches
-on `ruleEnforcementEnabled` too: client-trusted still builds
-`buildGenesisState()` locally and inserts `game_state` directly, unchanged;
-rule-enforced instead posts `{ gameId }` to the `start-game` Edge Function,
-which re-fetches the roster itself, builds the same genesis server-side, and
-does the authoritative insert plus the `games.status` flip to `'active'`
-under a service-role client. `0029_start_game_edge_function.sql` blocks a
-direct client from doing either write (the `game_state` INSERT, and the
-`games` `'lobby' -> 'active'` transition) once a game is enforced — the
-latter lives in the `enforce_game_status_transition` trigger rather than a
-plain RLS policy, since the rule needs both the row's old and new status in
-one check. See `RULE_ENFORCEMENT_PLAN.md` §10 (2026-09-11 update, issue
-#519) for why this closed a real bug, not just a theoretical gap.
+The split starts at genesis: `LobbyPage.tsx`'s Start Game
+(`gameApi.ts`'s `startGameFromLobby()`) builds genesis locally for a
+client-trusted game, but posts `{ gameId }` to the `start-game` Edge Function
+for an enforced one, which re-fetches the roster itself and does the insert
+plus the `games.status` flip under a service-role client. The baseline
+migration blocks a direct client from doing either write for an enforced
+game (the latter in the `enforce_game_status_transition` trigger, since it
+needs both the old and new status).
+
+**Hidden information.** A hidden-information game reads through the
+`get-game-state` Edge Function, and the write functions redact their
+responses the same way (`redactedResponseState`). What's secret is the
+game's call (`GameDefinition.redactGame`/`isActionSecret`); the framework
+(`packages/sdk/src/redaction.ts`) masks the state, replaces secret log entries
+with `HIDDEN_ACTION` placeholders, and the client keeps only the log prefix
+before the first one (`unredactedPrefix`). The delta read protocol
+(`respondWithState` in `supabase/functions/_shared/gameEnforcement.ts`,
+`src/lib/replayDelta.ts`) has the client replay new log entries itself, lay
+an in-flight overlay (`packages/sdk/src/inFlightOverlay.ts`) over the result, and
+verify it against a server hash.
 
 ## Supabase / Edge Function gotchas
 
-- **Edge Functions import `src/engine/`, `src/content/`, and `src/lib/`
-  directly and unmodified** (`supabase/functions/_shared/gameEnforcement.ts`).
-  There is no rule-logic duplication between client and server, and there
-  must not be.
+- **Edge Functions import the SDK, the registered games' `rules` entries, and
+  `src/lib/` directly and unmodified.** There is no rule-logic duplication
+  between client and server, and there must not be. Bare package specifiers
+  resolve through `supabase/functions/import_map.json`, wired to every
+  function in `supabase/config.toml`; `src/test/__tests__/edgeFunctionImports.test.ts`
+  fails if a reachable specifier isn't mapped, a mapped file is missing, or a
+  function isn't wired. **Adding a game means adding its `rules` entry to the
+  import map.**
 - **The Edge Runtime does not honor `sloppy-imports`.** Every relative import
   in the graph reachable from `supabase/functions/` must carry an explicit
-  `.ts` extension, and JSON imports need `with { type: 'json' }`. Engine
-  files in that graph (`applyAction.ts`, `undoRedo.ts`, `replay.ts`,
-  `tales.ts`, …) use extensions; UI-only ones (`gameLog.ts`, `turnReview.ts`,
-  `redaction.ts`, `unitValue.ts`, `index.ts`) don't. **If you add an import to
-  a server-reachable file, use the `.ts` extension** — a missing one only
-  fails at deploy time, not in CI.
+  `.ts` extension, and JSON imports need `with { type: 'json' }`. That graph
+  includes all of `packages/sdk/src/` (except `ui.ts`/`testing.ts`), every
+  game's `rules` entry and what it imports, `src/games/registry.ts`,
+  `src/site.ts`, and the `src/lib/` modules the functions import. A missing
+  extension only fails at deploy time, not in CI. Never let React or the
+  `view` entry of a game into that graph.
 - **`main` is pre-production, not production.** `.github/workflows/deploy-supabase.yml`
   deploys to the **Preview** Supabase project on push to `main`, and to
   production on push to the `production` branch — which is only ever
@@ -198,17 +217,20 @@ one check. See `RULE_ENFORCEMENT_PLAN.md` §10 (2026-09-11 update, issue
   deploy`. A `src/lib` change is a backend change. A migration that would cut
   off the live app must not land alone. See `DELIVERY_PIPELINE_PLAN.md` §3 for
   why the topology is this way round, and §4 for the environments.
-- Migrations are numbered `NNNN_name.sql` and applied in lexicographic order
-  (note `00051_` sorts between `0005_` and `0006_`). Migration history on the
-  live project has drifted before; `audit-and-fix-migrations.yml` verifies
-  each migration's actual effect against a real schema dump. Read its header
-  comment before touching it — several "obvious" grep patterns there are
-  wrong against real `pg_dump` output.
+- Migrations are numbered `NNNN_name.sql` and applied in lexicographic order.
+  The history was squashed into `0001_baseline.sql` when this platform was
+  extracted from its first game; add new migrations after it, never edit it
+  once a project has applied it. `audit-and-fix-migrations.yml` verifies each
+  migration's actual effect against a real schema dump — read its header
+  comment before touching it.
 - Tables: `games`, `players`, `game_state`, `game_state_meta`, `profiles`,
-  `push_subscriptions`, `map_pool` (`observers` was added then removed).
+  `push_subscriptions`, `app_config`, `chat_messages`, `chat_read_status`.
   Per-game config lives in the `games.settings` jsonb column rather than new
-  columns — add pregame toggles there (`GameSettings` in `dbTypes.ts`), no
-  migration needed.
+  columns — add pregame toggles there (`GameSettings` in `dbTypes.ts`), and
+  game-specific options under `settings.gameOptions` (opaque to the platform;
+  the game's `normalizeOptions` makes sense of them). `games.game_type` is the
+  one game-related column: which registered game the room plays, immutable.
+  Adding a game needs no migration.
 - A local stack (`supabase start` / `db push` / `functions serve`,
   `supabase/config.toml`) needs Docker, which the sandbox doesn't have. The
   `@claude` GitHub Action runner does — it preinstalls the Supabase CLI and
@@ -218,43 +240,44 @@ one check. See `RULE_ENFORCEMENT_PLAN.md` §10 (2026-09-11 update, issue
 
 - Vitest, jsdom environment, globals enabled, `@testing-library/react` +
   `jest-dom` (`src/test/setup.ts`, config lives in `vite.config.ts`).
-- Engine tests are the backbone (`src/engine/__tests__/`) — pure, fast, and
-  the right place to pin any rules change.
+- SDK tests (`packages/sdk/src/__tests__/`) pin the framework's invariants,
+  using the example game as their fixture; each game's rules tests live in
+  its own package (`packages/unique-pick/src/__tests__/`). Both are pure and
+  fast — the right place to pin any rules change. Vitest runs them from the
+  repo root along with everything else.
 - `src/test/supabaseStack/` is an **in-process stack that behaves like
   production**: real `@supabase/supabase-js` clients over a patched `fetch`,
-  the real Edge Function handlers, the migrations' RLS, the
+  the real Edge Function handlers, the migrations' RLS (transcribed in
+  `database.ts` — keep it in sync with the migrations), the
   `game_state_sync_meta` trigger, `version` CAS, and gzip-at-rest. Only
   Postgres and the Deno runtime are doubles, so it runs on a plain Node CI
   runner with no Docker.
 - **Regression-testing a real game is a drop-in:** save a game export into
   `src/test/fixtures/productionGames/<name>.json` (from GamePage's "Copy game
-  export") plus an optional `.room.json` sidecar declaring final scores and
-  winners. `productionGames.test.ts` globs the folder — no registration step.
-  See that folder's README.
-- Prefer adding a fixture or an engine test over a component test when a bug
-  is reproducible at the rules level.
+  export") plus an optional `.room.json` sidecar declaring the winners.
+  `productionGames.test.ts` globs the folder — no registration step. See
+  that folder's README.
+- Prefer adding a fixture or an engine/game test over a component test when a
+  bug is reproducible at the rules level.
 - `src/test/productionSmoke/` replays those same fixtures against the **live**
   project through the deployed Edge Functions (`npm run test:smoke`,
-  `.github/workflows/smoke.yml`, after each Supabase deploy and
-  nightly; which project it tests comes from the deploy's own `deploy-target`
+  `.github/workflows/smoke.yml`, after each Supabase deploy and nightly;
+  which project it tests comes from the deploy's own `deploy-target`
   artifact, and a failure files an issue carrying a redacted tail of the run —
   mentioning `@claude` for Preview, not for production). It is deliberately
-  unreachable from `npm run test`: vitest's
-  default `include` matches `*.test.*`, and those files are `*.smoke.ts` under
-  their own config. The runner itself is covered on every PR by
-  `src/test/__tests__/productionSmokeRunner.test.ts`, which points it at the
-  in-process stack. Read that folder's README before changing it — its
-  isolation rules (private room, `play_mode: 'live'` so no notification can
-  fire, delete the room *before* the throwaway users) are load-bearing.
+  unreachable from `npm run test`: vitest's default `include` matches
+  `*.test.*`, and those files are `*.smoke.ts` under their own config. The
+  runner itself is covered on every PR by
+  `src/test/__tests__/productionSmokeRunner.test.ts`. Read that folder's
+  README before changing it — its isolation rules (private room,
+  `play_mode: 'live'` so no notification can fire, delete the room *before*
+  the throwaway users) are load-bearing.
 - `src/test/previewSeed/` is the same provisioning aimed the other way: it
-  replays a fixture into a live project and **deliberately leaves the finished
-  game there**, public, for manual testing (`npm run seed:preview`,
-  `.github/workflows/seed-preview.yml`, pre-production only — that workflow
-  refuses to run against production because nothing cleans up after it). Its
-  `*.seed.ts` entry point is unreachable from `npm run test` and from
-  `npm run test:smoke`: the three configs match `*.test.*`, `*.smoke.ts` and
-  `*.seed.ts` respectively, and those sets are disjoint. The seeder itself is
-  covered on every PR by `src/test/__tests__/previewSeedRunner.test.ts`.
+  replays a fixture into a live project and **deliberately leaves the
+  finished game there**, public, for manual testing (`npm run seed:preview`,
+  `.github/workflows/seed-preview.yml`, pre-production only). Its `*.seed.ts`
+  entry point is unreachable from `npm run test` and `npm run test:smoke`.
+  Covered on every PR by `src/test/__tests__/previewSeedRunner.test.ts`.
 
 ## Code style
 
@@ -269,34 +292,26 @@ one check. See `RULE_ENFORCEMENT_PLAN.md` §10 (2026-09-11 update, issue
   service worker), `tsconfig.node.json` (`vite.config.ts`),
   `tsconfig.sw.json` (`src/sw.ts`, WebWorker lib).
 - **This codebase documents heavily in doc comments** — most modules open
-  with a comment explaining not just what they do but which ruling or issue
-  drove the design. When you change behavior these comments describe, update
-  them in the same commit; they are the real design record.
+  with a comment explaining not just what they do but why. When you change
+  behavior these comments describe, update them in the same commit; they are
+  the real design record.
 
 ## Documentation map
 
 | File | What it is |
 | --- | --- |
-| `README.md` | Setup and operations: Supabase, Discord/Google OAuth, Discord + Web Push turn notifications, guest auth, hotseat, server-side rule enforcement, game-state export, and what is and isn't built. |
-| `todo.md` | The de-facto changelog: 70 numbered entries, each a problem, its investigation, and what shipped. **Check here first when touching anything that looks like it has history.** |
-| `PROJECT_PLAN.md` | Overall roadmap and open decisions. |
-| `RULE_ENFORCEMENT_PLAN.md` | The server-authority design: enforcement model, forced-action semantics, `ruleEnforcementEnabled` rollout, phases. |
-| `HIDDEN_INFORMATION_PLAN.md` | Redaction of simultaneous-phase secrets (`src/engine/redaction.ts`). |
-| `CHAT_PLAN.md` | Site-wide + in-game chat design (issue #466) — not yet implemented. |
-| `VARIANTS_PLAN.md` | Guilds & Tales variants — 23 Tales designed, a handful implemented. |
-| `UnitActions.md` | Per-unit-action implementation checklist + resolved rules questions. |
-| `ELO_SYSTEM_PLAN.md` | Rating system design (not built). |
-| `DELIVERY_PIPELINE_PLAN.md` | How a change reaches production: the pre-production environment, branch topology, what auto-merges and what never does (design agreed, not built). |
-| `PRODUCTION_DEPLOYMENT.md` | The production deployment runbook: preconditions, how to promote, what to watch afterwards, how to recover, and how a hotfix reaches production without dragging pre-production with it. |
-| `src/content/README.md` | **The most important single doc**: every content file's fields, the board-generation rules, achievements/VP, resources, and Tales, each cross-referenced to the engine module that implements it. |
+| `README.md` | Setup and operations: Supabase, Discord/Google OAuth, Discord + Web Push notifications, guest auth, hotseat, server-side rule enforcement, game-state export. |
+| `packages/unique-pick/README.md` | **How a game package works**: the `GameDefinition`/`GameUi` contract, the rules every game must follow, rules versions, and starting a game in its own repo. |
+| `packages/sdk/README.md` | The framework package: entry points and how the registry fits together. |
+| `CHAT_PLAN.md` | Site-wide + in-game chat design record. |
+| `DELIVERY_PIPELINE_PLAN.md` | How a change reaches production: the pre-production environment, branch topology, what auto-merges and what never does. |
+| `PRODUCTION_DEPLOYMENT.md` | The production deployment runbook: preconditions, how to promote, what to watch afterwards, how to recover, and hotfixes. |
 
 ## Working conventions
 
 - Branch, commit, and push as instructed; don't open a PR unless asked.
 - Keep changes minimal and in the style of the surrounding code.
-- Tales/variant content is opt-in per game (`GameState.activeTaleIds`) and
-  must stay inert for a base game — a game with no Tales active never reads
-  `tales.json`.
 - Settings that matter to a running game are copied onto `GameState` at
-  genesis (`activeTaleIds`, `gameLength`) so a running game and its export
-  stay self-contained; read them from `GameState`, not the `games` row.
+  genesis (`gameType`, `rulesVersion`, `options`, `hiddenInformationEnabled`)
+  so a running game and its export stay self-contained; read them from
+  `GameState`, not the `games` row.

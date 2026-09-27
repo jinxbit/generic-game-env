@@ -9,8 +9,8 @@
 //
 // The fourth lifecycle event, **game finished**, is not here: it is a
 // `game_state` UPDATE, exactly what notify-discord-turn's own webhook
-// already delivers, so it lives there (todo.md #100). Watching that table
-// from here too meant a second hook and a second function invocation on
+// already delivers, so it lives there. Watching that table
+// from here too would mean a second hook and a second function invocation on
 // every action write in every game, to catch the one write per game that
 // completes it.
 //
@@ -31,6 +31,7 @@
 // regardless of RLS.
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
+import { gameLabels } from '../_shared/games.ts'
 
 const WEBHOOK_URL_PATTERN = /^https:\/\/(?:discord\.com|discordapp\.com)\/api\/webhooks\/\d+\/[\w-]+$/
 
@@ -39,6 +40,8 @@ interface GameRow {
   room_code: string
   name: string
   play_mode: string
+  /** Which registered game the room plays — names it in the notification. */
+  game_type: string
   status: string
 }
 
@@ -108,7 +111,7 @@ async function notifyPlayers(
 }
 
 async function fetchGame(supabase: SupabaseClient, gameId: string): Promise<GameRow | null> {
-  const { data } = await supabase.from('games').select('id, room_code, name, play_mode, status').eq('id', gameId).maybeSingle()
+  const { data } = await supabase.from('games').select('id, room_code, name, play_mode, status, game_type').eq('id', gameId).maybeSingle()
   return (data as GameRow | null) ?? null
 }
 
@@ -129,7 +132,7 @@ async function handlePlayerJoined(
   if (!game || game.play_mode !== 'async') return new Response('not an async game', { status: 200 })
 
   const others = await fetchPlayers(supabase, newPlayer.game_id, newPlayer.id)
-  const message = `**Rise & Fall** — **${newPlayer.display_name}** joined ${roomText(game.name, game.room_code, gameUrlFor(game.room_code))}.`
+  const message = `**${gameLabels(game.game_type).title}** — **${newPlayer.display_name}** joined ${roomText(game.name, game.room_code, gameUrlFor(game.room_code))}.`
   await notifyPlayers(supabase, others, message)
   return new Response('ok', { status: 200 })
 }
@@ -148,9 +151,9 @@ async function handleGameStatusChange(
   const room = roomText(newGame.name, newGame.room_code, gameUrlFor(newGame.room_code))
   let message: string | null = null
   if (oldGame.status === 'lobby' && newGame.status === 'active') {
-    message = `**Rise & Fall** — ${room} has started!`
+    message = `**${gameLabels(newGame.game_type).title}** — ${room} has started!`
   } else if (newGame.status === 'canceled') {
-    message = `**Rise & Fall** — ${room} was canceled.`
+    message = `**${gameLabels(newGame.game_type).title}** — ${room} was canceled.`
   }
   if (!message) return new Response('no relevant status change', { status: 200 })
 

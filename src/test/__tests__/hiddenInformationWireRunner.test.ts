@@ -1,11 +1,10 @@
 // @vitest-environment node
 //
 // Runs the hidden-information wire check (../productionSmoke/
-// hiddenInformationWire.ts, HIDDEN_INFORMATION_PLAN.md §8 phase 9) against
-// the in-process stack instead of a real project — same reasoning as
-// productionSmokeRunner.test.ts: a mistake in the check's own provisioning
-// or assertions is better caught here, on every PR, than at 3am against
-// Preview.
+// hiddenInformationWire.ts) against the in-process stack instead of a real
+// project — same reasoning as productionSmokeRunner.test.ts: a mistake in the
+// check's own provisioning or assertions is better caught here, on every PR,
+// than at 3am against Preview.
 //
 // Realtime is left off (`includeRealtime: false`): the in-process stack
 // (../supabaseStack/) patches only `fetch`, not WebSocket, so there is no
@@ -15,7 +14,8 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createProductionStack, type ProductionStack } from '../supabaseStack/index.ts'
-import { checkHiddenInformationWire } from '../productionSmoke/hiddenInformationWire.ts'
+import { buildHiddenInformationFixture, checkHiddenInformationWire } from '../productionSmoke/hiddenInformationWire.ts'
+import { gameData } from '../supabaseStack/sampleGame.ts'
 
 describe('hidden-information wire check runner', () => {
   let stack: ProductionStack
@@ -31,15 +31,23 @@ describe('hidden-information wire check runner', () => {
     return { url: stack.url, anonKey: stack.anonKey, serviceRoleKey: stack.serviceRoleKey }
   }
 
-  it.each(['selectCards', 'decline'] as const)('proves no secret crosses the wire during a %s phase, and that it is revealed once resolved', async (phase) => {
-    const report = await checkHiddenInformationWire(config(), phase, { includeRealtime: false })
-    expect(report.phase).toBe(phase)
+  it('builds a fixture that ends mid-round, with revealed history behind it and one secret pick in flight', () => {
+    const fixture = buildHiddenInformationFixture()
+    expect(fixture.game.settings).toMatchObject({ ruleEnforcementEnabled: true, hiddenInformationEnabled: true })
+    expect(fixture.finalState).toMatchObject({ status: 'active', turn: 2 })
+    expect(gameData(fixture.finalState).rounds).toHaveLength(1)
+    expect(fixture.finalState.pendingPlayerIds).toHaveLength(2)
+    expect(fixture.finalState.actionHistory.at(-1)?.action.type).toBe('PICK_NUMBER')
+  })
+
+  it('proves no secret crosses the wire while a round is open, and that it is revealed once resolved', async () => {
+    const report = await checkHiddenInformationWire(config(), { includeRealtime: false })
     expect(report.gameId).toBeTruthy()
     expect(report.realtimeChecked).toBe(false)
   }, 60_000)
 
   it('leaves nothing behind', async () => {
-    await checkHiddenInformationWire(config(), 'selectCards', { includeRealtime: false })
+    await checkHiddenInformationWire(config(), { includeRealtime: false })
     expect(stack.db.table('games')).toEqual([])
     expect(stack.db.table('players')).toEqual([])
     expect(stack.db.table('game_state')).toEqual([])

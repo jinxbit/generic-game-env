@@ -17,23 +17,25 @@
 // That one webhook feeds two different pings. Besides "it's your turn", this
 // function also sends the **game finished** lifecycle ping, because a game
 // finishing *is* a `game_state` UPDATE — same table, same event, same
-// payload. It lived in notify-discord-lifecycle at first (issue #77), which
-// meant a second hook and a second function invocation on every action write
-// in every game to catch the one write per game that completes it. The other
-// three lifecycle events are on other tables and are still that function's;
-// see its doc comment, and todo.md #100 for the fold.
+// payload. Watching it from notify-discord-lifecycle instead would mean a
+// second hook and a second function invocation on every action write in
+// every game to catch the one write per game that completes it. The other
+// three lifecycle events are on other tables and are that function's; see
+// its doc comment.
 //
 // `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` are provided automatically
 // in the Edge Function runtime — the service-role key is what lets this
 // read any player's `profiles.discord_webhook_url` regardless of RLS
-// (0013_discord_notify_backend.sql drops the old co-player-read policy,
-// since browsers no longer need that access), and lets it call
+// (`profiles` is own-row readable only, since no browser needs another
+// player's webhook URL), and lets it call
 // `auth.admin.getUserById` to resolve each player's Discord snowflake ID
 // (from their Discord OAuth identity) so the ping can `@mention` them —
 // a plain name in a webhook message doesn't actually notify anyone.
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
-import { type GameStateRow, justFinished, newlyPendingActorIds, phaseLabel } from '../_shared/turnNotify.ts'
+import { gameLabels } from '../_shared/games.ts'
+import { discordUserIdFromIdentities, turnNotificationMessage } from '../../../src/lib/discordNotify.ts'
+import { type GameStateRow, justFinished, newlyPendingActorIds, phaseLabel, turnNumber } from '../_shared/turnNotify.ts'
 
 // --- Discord ---
 
@@ -55,31 +57,9 @@ function gameUrlFor(roomCode: string): string | null {
 
 const WEBHOOK_URL_PATTERN = /^https:\/\/(?:discord\.com|discordapp\.com)\/api\/webhooks\/\d+\/[\w-]+$/
 
-// Kept in sync with src/lib/discordNotify.ts's turnNotificationMessage — see
-// that file's doc comment for why this Edge Function can't just import it.
-function turnNotificationMessage(params: {
-  displayName: string
-  discordUserId: string | null
-  roomName: string
-  roomCode: string
-  phase: string
-  round: number | null
-  gameUrl: string | null
-}): string {
-  const roundText = params.round === null ? '' : ` (Round ${params.round})`
-  // With a game link, the room name itself becomes the link instead of pasting
-  // the raw URL below — without one, fall back to the room code on its own line.
-  const roomName = params.gameUrl ? `[${params.roomName}](${params.gameUrl})` : params.roomName
-  const fallback = params.gameUrl ? '' : `\nRoom \`${params.roomCode}\``
-  const mention = params.discordUserId ? `<@${params.discordUserId}>` : `**${params.displayName}**`
-  return `**Rise & Fall** — ${mention}, it's your turn to **${params.phase}** in **${roomName}**${roundText}.${fallback}`
-}
-
-// Kept in sync with src/lib/discordNotify.ts's discordUserIdFromIdentities —
-// see that file's doc comment for why this Edge Function can't just import it.
-function discordUserIdFromIdentities(identities: { provider: string; id: string }[] | null | undefined): string | null {
-  return identities?.find((identity) => identity.provider === 'discord')?.id ?? null
-}
+// The message itself (turnNotificationMessage) and the Discord-ID lookup
+// (discordUserIdFromIdentities) come from src/lib/discordNotify.ts, shared
+// with the "Send test" button, so the two can't drift apart.
 
 // --- Logging ---
 //
@@ -89,8 +69,8 @@ function discordUserIdFromIdentities(identities: { provider: string; id: string 
 // and what Discord answered. Before this the function logged nothing: a
 // skipped ping returned 200 with its reason only in the response body, which
 // the invocation list doesn't show, and a Discord rejection (429 rate limit,
-// 404 deleted webhook) was swallowed outright — so the missed action-phase
-// pings of todo.md #150 were invisible (todo.md #151). Never log a webhook
+// 404 deleted webhook) was swallowed outright — so missed pings were
+// invisible. Never log a webhook
 // URL: its token is what lets anyone post into that player's channel.
 interface SendOutcome {
   playerId?: string
@@ -103,7 +83,7 @@ interface SendOutcome {
 
 interface InvocationLog {
   gameId?: string
-  phase?: string
+  phase?: string | null
   round?: number | null
   nowPending?: string[]
   sends?: SendOutcome[]
@@ -140,7 +120,7 @@ function roomText(name: string, roomCode: string, url: string | null): string {
 }
 
 async function handleGameFinished(supabase: SupabaseClient, gameId: string, log: InvocationLog): Promise<Response> {
-  const { data: game } = await supabase.from('games').select('room_code, name, play_mode').eq('id', gameId).maybeSingle()
+  const { data: game } = await supabase.from('games').select('room_code, name, play_mode, game_type').eq('id', gameId).maybeSingle()
   // Live players watched it end over Realtime; hotseat is one shared device.
   // Same async-only rule as the turn ping below.
   if (!game || game.play_mode !== 'async') return new Response('not an async game', { status: 200 })
@@ -156,7 +136,7 @@ async function handleGameFinished(supabase: SupabaseClient, gameId: string, log:
       players.map((p: { user_id: string }) => p.user_id),
     )
 
-  const message = `**Rise & Fall** — ${roomText(game.name, game.room_code, gameUrlFor(game.room_code))} has finished!`
+  const message = `**${gameLabels(game.game_type).title}** — ${roomText(game.name, game.room_code, gameUrlFor(game.room_code))} has finished!`
   const webhookByUserId = new Map(((profiles ?? []) as { user_id: string; discord_webhook_url: string | null }[]).map((p) => [p.user_id, p.discord_webhook_url]))
   log.sends = await Promise.all(
     (players as { user_id: string }[]).map(async (player) => ({
@@ -217,7 +197,7 @@ async function handle(req: Request, log: InvocationLog): Promise<Response> {
 
   const { data: game, error: gameError } = await supabase
     .from('games')
-    .select('room_code, name, play_mode')
+    .select('room_code, name, play_mode, game_type')
     .eq('id', gameId)
     .maybeSingle()
   if (gameError) return new Response(`game lookup failed: ${gameError.message}`, { status: 500 })
@@ -226,8 +206,9 @@ async function handle(req: Request, log: InvocationLog): Promise<Response> {
   if (!game || game.play_mode !== 'async') return new Response('not an async game', { status: 200 })
 
   const gameUrl = gameUrlFor(game.room_code)
-  const phase = phaseLabel(payload.record.state)
-  const round = payload.record.state.status === 'active' ? payload.record.state.turn : null
+  const phase = phaseLabel(payload.record.state, game.game_type)
+  const labels = gameLabels(game.game_type)
+  const round = turnNumber(payload.record.state)
   log.phase = phase
   log.round = round
 
@@ -265,6 +246,8 @@ async function handle(req: Request, log: InvocationLog): Promise<Response> {
       const outcome = await sendDiscordNotification(
         webhookUrl,
         turnNotificationMessage({
+          title: labels.title,
+          turnLabel: labels.turnLabel,
           displayName: player.display_name,
           discordUserId,
           roomName: game.name,

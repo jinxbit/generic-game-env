@@ -1,14 +1,13 @@
 import { compressGameStateForStorage, decompressGameStateFromStorage, type CompressedGameState } from './gameStateCompression'
-import type { GameState } from '../engine/types'
-
+import type { GameState } from '@game-platform/sdk'
 /**
- * IndexedDB-backed cache of the client-materialised `GameState` (issue
- * #688): the only client-side persistence in the app before this was a
- * sign-in redirect path in `sessionStorage` (`pendingRedirect.ts`), so a
- * cold open — closing the tab and reopening hours later, the app's normal
- * async usage pattern — always paid for a full `get-game-state` fetch, even
- * though #647 already taught that Edge Function to answer with just the
- * entries logged since a `sinceActionIndex` the caller already holds.
+ * IndexedDB-backed cache of the client-materialised `GameState`: without
+ * it the only client-side persistence in the app is a sign-in redirect path
+ * in `sessionStorage` (`pendingRedirect.ts`), so a cold open — closing the
+ * tab and reopening hours later, the app's normal async usage pattern —
+ * would always pay for a full `get-game-state` fetch, even though that Edge
+ * Function can answer with just the entries logged since a
+ * `sinceActionIndex` the caller already holds.
  * `GamePage.tsx` reads this on mount to seed that delta request, and writes
  * it after every applied snapshot, so the *next* cold open has a cursor to
  * send instead of nothing.
@@ -16,8 +15,8 @@ import type { GameState } from '../engine/types'
  * This is a **seed for a delta request, never something rendered ahead of
  * the server confirming it** — `fetchGameState` (GamePage.tsx) only ever
  * uses a `loadCachedGameState` result as `getGameStateRedacted`'s `previous`
- * parameter, exactly the same role `latestGameStateRef` already plays for a
- * same-session refetch (issue #647). Nothing here renders before that
+ * parameter, exactly the same role GamePage's `latestBaseRef` already plays for a
+ * same-session refetch. Nothing here renders before that
  * fetch resolves. Also: this only ever helps a `usesRedactedReads` game —
  * `getGameState` (the client-trusted/no-hidden-information path) has no
  * delta parameter to seed at all, so `fetchGameState` just ignores whatever
@@ -40,31 +39,30 @@ import type { GameState } from '../engine/types'
  *   request against a newer one's rules.
  * - **userId**: not really "checked" so much as structural — the store's
  *   key embeds it, so a lookup for the current session's `userId` can only
- *   ever return that user's own entry, the same property issue #688 asks
- *   for ("scoping the entry to userId also stops a shared browser handing
- *   one account's view to the next").
+ *   ever return that user's own entry — which also stops a shared browser
+ *   handing one account's view to the next.
  * - **stateHash**: an FNV-1a hash of the raw (pre-compression) state,
  *   recomputed after decompression and compared to what was stored. This is
  *   deliberately a self-consistency check — it catches a corrupted or
  *   partially-written IndexedDB entry — not a check against anything the
  *   server reports; the server has no notion of a content hash for a given
- *   version (#647 only ever agreed on lengths — see
- *   `applyRedactedGameStateDelta` in `../engine/redaction.ts`), and this
- *   issue is explicit about building against #647's existing request shape
- *   rather than inventing a new one.
+ *   version (the delta protocol only ever agrees on lengths — see
+ *   `applyRedactedGameStateDelta` in `@game-platform/sdk's redaction.ts`), and this
+ *   cache deliberately builds against that existing request shape rather
+ *   than inventing a new one.
  * - **version too new / not recognised**: not checked here at all — it
  *   falls out of `get-game-state`'s existing contract for free. A
  *   `sinceActionIndex` outside `[0, safePrefixLength]` already makes that
  *   Edge Function answer with a full response, byte for byte, the same as
- *   omitting it (issue #647's doc comment on `getGameStateRedacted`).
+ *   omitting it (see `getGameStateRedacted`'s doc comment).
  */
 
-const DB_NAME = 'riseAndFall'
+const DB_NAME = 'gamePlatform'
 const DB_VERSION = 1
 const STORE_NAME = 'gameStateCache'
 const SAVED_AT_INDEX = 'savedAt'
 
-/** How many entries survive an eviction pass — see `evictOldEntries` below. Comfortably covers every game a player plausibly has open at once, while keeping total storage a small multiple of one late-game state (issue #688's ~76 KB raw figure; gzip cuts that substantially, see gameStateCompression.test.ts). Exported for evictOldEntries's own test to assert against, not used by any other caller. */
+/** How many entries survive an eviction pass — see `evictOldEntries` below. Comfortably covers every game a player plausibly has open at once, while keeping total storage a small multiple of one late-game state (gzip cuts that substantially, see gameStateCompression.test.ts). Exported for evictOldEntries's own test to assert against, not used by any other caller. */
 export const MAX_ENTRIES = 20
 
 interface CachedGameStateEntry {
@@ -124,8 +122,8 @@ function openDb(): Promise<IDBDatabase | null> {
 
 /**
  * Deletes the oldest entries (by `savedAt`) until at most `MAX_ENTRIES`
- * remain, so a player who accumulates games indefinitely (see issue #687,
- * the same unbounded-growth shape on the server side) doesn't grow this
+ * remain, so a player who accumulates games indefinitely (the same
+ * unbounded-growth shape `listMyGames` caps on the server side) doesn't grow this
  * store without bound. Runs in the same transaction as the write that
  * triggered it, so a crash mid-eviction never leaves the store double-
  * counted or half-cleaned relative to what was actually persisted.
@@ -183,7 +181,7 @@ export async function saveCachedGameState(gameId: string, userId: string, versio
     })
     db.close()
   } catch {
-    // Degrade silently (issue #688) — quota exhaustion, a blocked/disabled
+    // Degrade silently — quota exhaustion, a blocked/disabled
     // store, private browsing, etc. are all just "no cache from here on".
   }
 }

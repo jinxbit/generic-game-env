@@ -9,8 +9,10 @@
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="Rise & Fall Web" />
-    <title>Rise & Fall Web</title>
+    <meta name="apple-mobile-web-app-title" content="%SITE_SHORT_NAME%" />
+    <meta name="description" content="%SITE_TAGLINE%" />
+    <!-- Filled in from src/site.ts at build time (vite.config.ts's siteBranding plugin). -->
+    <title>%SITE_TITLE%</title>
   </head>
   <body>
     <div id="root"></div>

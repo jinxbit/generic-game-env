@@ -1,7 +1,7 @@
 // One production smoke run: for each eligible game fixture, open an isolated
 // room on a real Supabase project, replay the whole recorded game through the
-// deployed Edge Functions, check it finishes exactly where it finished in
-// production, and delete everything it made.
+// deployed Edge Functions, check it finishes exactly where the recording
+// finished, and delete everything it made.
 //
 // What this catches that `npm run test` cannot: a migration that didn't apply,
 // an Edge Function that didn't deploy or won't boot, an RLS policy edited in
@@ -15,11 +15,10 @@
 // against the in-process stack, which is what keeps this file itself honest
 // in CI rather than only when it fails at 3am against production.
 
-import { calculateVPBreakdown } from '../../engine/victoryPoints.ts'
-import type { GameState } from '../../engine/types.ts'
+import type { GameState } from '@game-platform/sdk'
 import type { CompressedGameState } from '../../lib/gameStateCompression.ts'
 import { divergentStateFields, type ProductionGameFixture } from '../fixtures/productionGames/loadFixtures.ts'
-import { expectedFinalState, normalizeForComparison, replayFixtureThroughStack } from '../supabaseStack/replayFixture.ts'
+import { normalizeForComparison, replayFixtureThroughStack } from '../supabaseStack/replayFixture.ts'
 import { DEFAULT_MAX_AVERAGE_ACTION_MS, provisionLiveRoom, type LiveProjectConfig, type LiveRoom } from './liveProject.ts'
 
 export interface SmokeReport {
@@ -28,7 +27,6 @@ export interface SmokeReport {
   gameId?: string
   skippedReason?: string
   actionsSubmitted?: number
-  foldedEntries?: number
   durationMs?: number
   /** Mean of `ReplayOutcome.actionDurationsMs` — see `maxAverageActionMs` on `LiveProjectConfig`. */
   averageActionMs?: number
@@ -43,7 +41,7 @@ export type SmokeLogger = (message: string) => void
 /**
  * Rebuilds `fixture` as one describing the live room, so the shared replay
  * routine can drive it unchanged. Exported for
- * ./hiddenInformationWire.ts (HIDDEN_INFORMATION_PLAN.md §8 phase 9), which
+ * ./hiddenInformationWire.ts and ../previewSeed/seedFinishedGame.ts, which
  * reuses this same provisioning rather than a second path to a live project,
  * then keeps driving the same room past where a fixture replay would stop.
  */
@@ -57,10 +55,10 @@ export function fixtureForRoom(fixture: ProductionGameFixture, room: LiveRoom): 
   // left to surface as a mystery diff.
   //
   // `hiddenInformationEnabled` is the second such field, for the same reason:
-  // the room overrides it on (runProductionSmoke below), and no export has it
-  // set. Nothing in src/engine/ reads it — only redaction.ts does — so the
-  // game replays identically either way, and the flag is reconciled here
-  // rather than showing up as a divergence on every run.
+  // the room overrides it on (runProductionSmoke below) whatever the export
+  // recorded. The rules never read it — only the redaction plumbing does —
+  // so the game replays identically either way, and the flag is reconciled
+  // here rather than showing up as a divergence on every run.
   const finalState: GameState = {
     ...remapped.expectedFinalState,
     playMode: room.game.play_mode,
@@ -72,12 +70,8 @@ export function fixtureForRoom(fixture: ProductionGameFixture, room: LiveRoom): 
     players: room.players,
     genesis: room.genesis,
     finalState,
-    expected: { finalScoreByPlayerId: remapped.expectedScoreByPlayerId, winnerPlayerIds: remapped.expectedWinnerPlayerIds },
+    expected: { winnerPlayerIds: remapped.expectedWinnerPlayerIds, finalScoreByPlayerId: remapped.expectedScoreByPlayerId },
     userIdForPlayer: remapped.userIdForPlayer,
-    finalScores(state: GameState) {
-      const breakdown = calculateVPBreakdown(state, fixture.content.achievementContent, fixture.content.taleContent)
-      return Object.fromEntries(state.players.map((player) => [player.id, breakdown[player.id]?.total ?? 0]))
-    },
     // Identifies a seat by colour only, never by displayName: this feeds
     // console.log and assertion messages, which a failed run's log tail
     // becomes a public GitHub issue's body (smoke.yml's "Redact the run
@@ -96,11 +90,14 @@ function assertThat(condition: boolean, message: string): asserts condition {
 /**
  * A fixture is eligible only if it was played on the rule-enforced path.
  * Forcing enforcement onto a client-trusted game would replay it against
- * rules it was never played under — and at least one checked-in game
- * genuinely cannot survive that (see the hotseat owner-override gap pinned in
- * ../__tests__/supabaseStack.test.ts). Skipping is reported, not silent.
+ * checks it was never played under (the owner-override check, per-seat
+ * authorization), which a real client-trusted game need not survive.
+ * Skipping is reported, not silent. Also what the preview seeder picks its
+ * default fixture by (../previewSeed/seedFinishedGame.seed.ts).
+ *
+ * Returns why a fixture is skipped, or null when it is eligible.
  */
-function eligibility(fixture: ProductionGameFixture): string | null {
+export function smokeEligibility(fixture: ProductionGameFixture): string | null {
   if (!fixture.game.settings.ruleEnforcementEnabled) {
     return 'played on the client-trusted write path, so it never exercised the deployed Edge Functions'
   }
@@ -118,7 +115,7 @@ export async function runProductionSmoke(
   const reports: SmokeReport[] = []
 
   for (const fixture of fixtures) {
-    const skippedReason = eligibility(fixture)
+    const skippedReason = smokeEligibility(fixture)
     if (skippedReason) {
       log(`skip  ${fixture.name}: ${skippedReason}`)
       reports.push({ fixture: fixture.name, skippedReason })
@@ -127,13 +124,11 @@ export async function runProductionSmoke(
 
     const startedAt = Date.now()
     log(`start ${fixture.name}: provisioning a room for ${fixture.finalState.players.length} throwaway players`)
-    // Hidden information on, whatever the export recorded: none of the
-    // checked-in fixtures was played with it, so without this override the
-    // replay never reaches `redactStateForPlayer` against a deployed project
-    // and the only live coverage of redaction is ./hiddenInformationWire.ts's
-    // single leak check. With it, every one of this fixture's writes comes
-    // back redacted for the acting seat — which is why `LiveRoom` hands the
-    // replay `readTrueState` (../supabaseStack/replayFixture.ts).
+    // Hidden information on, whatever the export recorded, so every replay —
+    // not only a fixture that happened to be played with it — reaches
+    // `redactStateForPlayer` against a deployed project: every one of this
+    // fixture's writes comes back redacted for the acting seat, and every
+    // protocol-2 delta has to be rebuilt through the in-flight overlay.
     const room = await provisionLiveRoom(config, fixture, { hiddenInformation: true })
     try {
       const roomFixture = fixtureForRoom(fixture, room)
@@ -150,7 +145,7 @@ export async function runProductionSmoke(
       log(`      replaying ${roomFixture.finalState.actionHistory.length} actions through the deployed Edge Functions`)
       const outcome = await replayFixtureThroughStack(room, roomFixture)
 
-      // And it finishes where production finished it.
+      // And it finishes where the recording finished.
       const stored = await room.readGameState()
       assertThat(stored !== null, `[${fixture.name}] the game_state row vanished mid-replay.`)
       assertThat(
@@ -207,19 +202,17 @@ export async function runProductionSmoke(
       // Everything else about the game, not just the bottom line. Compared
       // field by field with keys sorted — a state assembled by the deployed
       // engine and one parsed from an export are never in the same key order.
-      const expectedState = expectedFinalState(roomFixture, outcome)
-      const diverged = divergentStateFields(normalizeForComparison(stored.state), normalizeForComparison(expectedState))
+      const diverged = divergentStateFields(normalizeForComparison(stored.state), normalizeForComparison(roomFixture.finalState))
       assertThat(
         diverged.length === 0,
-        `[${fixture.name}] the finished state differs from the one this game ended on in production (on ${diverged.join(', ')}).`,
+        `[${fixture.name}] the finished state differs from the one this game was recorded ending on (on ${diverged.join(', ')}).`,
       )
 
       // A round-trip regression should fail here, clearly, rather than only
       // surface as the whole run eventually blowing its 900s cap — the
-      // opaque failure mode todo.md #139 hit. Every entry that reached
-      // submitLoggedEntry counts — a folded entry (no round trip) doesn't —
-      // so a fully-folded fixture (none seen in practice) skips the check
-      // rather than dividing by zero.
+      // opaque failure mode todo.md #139 hit. An empty history (which
+      // eligibility already rules out) skips the check rather than dividing
+      // by zero.
       const averageActionMs =
         outcome.actionDurationsMs.length === 0
           ? 0
@@ -239,7 +232,6 @@ export async function runProductionSmoke(
         fixture: fixture.name,
         gameId: room.game.id,
         actionsSubmitted: outcome.version,
-        foldedEntries: outcome.foldedEntryIndices.length,
         durationMs: Date.now() - startedAt,
         averageActionMs,
         deltaResponses,

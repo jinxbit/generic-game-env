@@ -1,25 +1,16 @@
 /**
- * Applying a protocol-2 delta (issue #648): the pure half of the delta read
- * and write paths — no Supabase client, no network, nothing that reads the
+ * Applying a protocol-2 delta: the pure half of the delta read and write
+ * paths — no Supabase client, no network, nothing that reads the
  * environment.
  *
  * It lives here rather than in `gameApi.ts` for the reason `DeltaReplayContext`
- * does (todo.md #147): that module imports `./supabase`, which throws at
- * import time when the app's env vars are absent, so nothing in the repo can
- * test — or reuse — anything that lives inside it. This is the routine the
- * whole protocol rests on, and it was reimplemented twice over in tests
- * (`writePathRedaction.test.ts`'s "the way gameApi.ts's applyReplayDelta
- * does") precisely because it could not be imported. `gameApi.ts` re-exports
- * everything here, so callers are unaffected by the move.
+ * does: that module imports `./supabase`, which throws at import time when
+ * the app's env vars are absent, so nothing could test or reuse it there.
+ * `gameApi.ts` re-exports everything here.
  */
-import { extendReplay, replayToBase } from '../engine/replay'
-import { applyInFlightOverlay, type InFlightOverlay } from '../engine/inFlightOverlay'
+import { extendReplay, replayToBase, applyInFlightOverlay, type InFlightOverlay, type RedactedLoggedAction, type GameState as EngineGameState, type LoggedAction } from '@game-platform/sdk'
 import { hashGameStateView } from './gameStateHash'
 import type { DeltaReplayContext } from './deltaReplayContext'
-import type { RedactedLoggedAction } from '../engine/redaction'
-import type { GameState as EngineGameState } from '../engine/types'
-import type { LoggedAction } from '../engine/actions'
-
 /**
  * Why a rebuild gave up, reported back to the server on the retry so the
  * telemetry can separate a healthy cold start from a client whose engine
@@ -55,7 +46,7 @@ export interface ReplayDeltaResponse {
  *
  * That last one is what the whole design rests on. A PWA holding a stale
  * bundle after a rules change is normal operation here, and without the check
- * such a client would render a board that quietly disagreed with everyone
+ * such a client would render a game that quietly disagreed with everyone
  * else's. With it, engine skew costs one full fetch and nothing else.
  *
  * Shared by the read path and the write path deliberately: they receive the
@@ -70,15 +61,7 @@ export function applyReplayDelta(
   if (delta.actionHistoryFrom !== previous.actionHistory.length) return { ok: false, reason: 'cursor-mismatch' }
   let base: EngineGameState
   try {
-    base = extendReplay(
-      replay.genesis,
-      previous,
-      delta.actionHistoryAppend as unknown as LoggedAction[],
-      replay.unitContent,
-      replay.achievementContent,
-      replay.boardGenerationContent,
-      replay.taleContent,
-    )
+    base = extendReplay(replay.genesis, previous, delta.actionHistoryAppend as unknown as LoggedAction[])
   } catch {
     return { ok: false, reason: 'replay-failed' }
   }
@@ -90,17 +73,17 @@ export function applyReplayDelta(
 
 
 /**
- * `replayToBase` (../engine/replay) with a `DeltaReplayContext` unpacked and a
+ * `replayToBase` (@game-platform/sdk's replay.ts) with a `DeltaReplayContext` unpacked and a
  * failure turned into `undefined`: a client running an older engine than the
  * server can fail to replay an action it does not understand, and the caller's
  * answer to that is simply not to cache, not to crash.
  *
- * Measured at 10-130ms for a completed game, which is why it belongs to a cold
- * open and every other path extends incrementally instead.
+ * A full replay, which is why it belongs to a cold open and every other path
+ * extends incrementally instead.
  */
 export function deriveBaseFromView(view: EngineGameState, replay: DeltaReplayContext): EngineGameState | undefined {
   try {
-    return replayToBase(replay.genesis, view, replay.unitContent, replay.achievementContent, replay.boardGenerationContent, replay.taleContent)
+    return replayToBase(replay.genesis, view)
   } catch {
     return undefined
   }

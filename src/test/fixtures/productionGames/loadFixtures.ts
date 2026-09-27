@@ -119,8 +119,9 @@ export function divergentStateFields(left: GameState, right: GameState): string[
  * Everything genesis depends on is carried on the state itself: `gameId`,
  * which game it is and at which rules version (`gameType`/`rulesVersion` —
  * the room's `game_type` and pinned `settings.rulesVersion`), `playMode`,
- * `hiddenInformationEnabled`, the game's creation-time `options` and
- * `randomSeed` (copied onto GameState at genesis for exactly this reason), and the seats —
+ * `hiddenInformationEnabled`, `lockRevealedInformationEnabled`, the game's
+ * creation-time `options` (copied onto GameState at genesis for exactly this
+ * reason), the random numbers setup drew (`setupRandom`), and the seats —
  * `players` is in seat order and never shrinks, so it *is* the roster, and
  * each seat's `authUserId` names who sat there.
  *
@@ -153,7 +154,7 @@ function reconstructRoom(finalState: GameState, overrides: RoomOverrides): { gam
     ruleEnforcementEnabled: true,
     hiddenInformationEnabled: finalState.hiddenInformationEnabled ?? false,
     gameOptions: finalState.options,
-    ...(finalState.randomSeed !== undefined ? { randomSeed: finalState.randomSeed } : {}),
+    ...(finalState.lockRevealedInformationEnabled ? { lockRevealedInformationEnabled: true } : {}),
     ...overrides.settings,
     // Not overridable: replay has to run the exact rules the game was played
     // under, and a sidecar that said otherwise would only fail the
@@ -187,7 +188,7 @@ function reconstructRoom(finalState: GameState, overrides: RoomOverrides): { gam
 export function buildFixture(name: string, envelope: { exportedAt: string; gameState: GameState }, overrides: RoomOverrides = {}): ProductionGameFixture {
   const finalState = envelope.gameState
   const { game, players } = reconstructRoom(finalState, overrides)
-  const genesis = buildGenesisState(game, players)
+  const genesis = buildGenesisState(game, players, finalState.setupRandom)
 
   const replayed = replayActions(genesis, finalState.actionHistory)
   const diverged = divergentStateFields(normalizeStateForComparison(replayed), normalizeStateForComparison(finalState))

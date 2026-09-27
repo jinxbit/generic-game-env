@@ -1,4 +1,4 @@
-import { applyAction } from './applyAction.ts'
+import { applyLoggedAction } from './applyAction.ts'
 import type { LoggedAction } from './actions.ts'
 import type { GameState } from './types.ts'
 import { resolveHistory } from './historyFold.ts'
@@ -10,6 +10,9 @@ import { resolveHistory } from './historyFold.ts'
  * a pure, deterministic reducer, replaying the same actions against the same
  * genesis always reconstructs the exact same state; the stored GameState is
  * just a cached shortcut so nothing has to replay from scratch on every read.
+ *
+ * Each entry is re-applied with the random numbers recorded on it
+ * (applyLoggedAction), so replay never needs the seed that produced them.
  *
  * Throws if any logged action is rejected — a genesis mismatch or a
  * corrupted history, either of which means the replayed state can no longer
@@ -24,7 +27,7 @@ import { resolveHistory } from './historyFold.ts'
 export function replayActions(genesis: GameState, history: LoggedAction[]): GameState {
   let state = genesis
   for (const entry of resolveHistory(history).effective) {
-    const result = applyAction(state, entry.action)
+    const result = applyLoggedAction(state, entry)
     if (!result.ok) {
       throw new Error(`Replay failed at action ${JSON.stringify(entry.action)}: ${result.error}`)
     }
@@ -57,7 +60,7 @@ export function extendReplay(genesis: GameState, base: GameState, append: Logged
   }
   let state = base
   for (const entry of append) {
-    const result = applyAction(state, entry.action)
+    const result = applyLoggedAction(state, entry)
     if (!result.ok) throw new Error(`Delta replay failed at ${JSON.stringify(entry.action)}: ${result.error}`)
     state = result.state
   }

@@ -63,6 +63,26 @@ export function resolveHistory(history: LoggedAction[]): ResolvedHistory {
 }
 
 /**
+ * How many gameplay entries are currently in effect — the position the next
+ * submitted gameplay action will take. Undoing a move and making another
+ * puts it at the same position, which is what lets the server derive a
+ * move's random numbers from its position (seededSource, ./random.ts) so
+ * that undo can't be used to reroll.
+ */
+export function gameplayPosition(history: LoggedAction[]): number {
+  return walkHistory(history).pointer
+}
+
+/**
+ * The gameplay entry a bare Undo would revert right now — the last one in
+ * effect — or null when there's nothing to undo.
+ */
+export function undoTarget(history: LoggedAction[]): LoggedAction | null {
+  const { substantive, pointer } = walkHistory(history)
+  return pointer > 0 ? substantive[pointer - 1] : null
+}
+
+/**
  * The gameplay entries currently sitting behind the tip — exactly what a
  * fresh action submitted right now would push out of reach of REDO_ACTION.
  * The owner-override check (requiresOwnerOverride,

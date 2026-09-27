@@ -20,7 +20,8 @@ describe('createNewGame', () => {
     const setup = vi.spyOn(game, 'setup')
     createNewGame({ gameId: 'g1', gameType: 'unique-pick', playMode: 'async', players: seeds })
 
-    expect(setup.mock.calls[0]).toHaveLength(1)
+    // The lobby, and the Random setup may draw from.
+    expect(setup.mock.calls[0]).toHaveLength(2)
     const [lobby] = setup.mock.calls[0]
     expect(lobby).toEqual({
       gameId: 'g1',
@@ -45,13 +46,9 @@ describe('createNewGame', () => {
     })
   })
 
-  it("carries the room's random seed onto the lobby and genesis, and adds no key for a seedless game", () => {
-    const setup = vi.spyOn(game, 'setup')
-    const genesis = createNewGame({ gameId: 'g1', gameType: 'unique-pick', playMode: 'live', players: seeds, randomSeed: 'abc123' })
-    expect(setup.mock.calls[0][0].randomSeed).toBe('abc123')
-    expect(genesis.randomSeed).toBe('abc123')
-
-    expect('randomSeed' in createNewGame({ gameId: 'g1', gameType: 'unique-pick', playMode: 'live', players: seeds })).toBe(false)
+  it('carries lockRevealedInformationEnabled onto genesis only when on, so older genesis states are unchanged', () => {
+    expect(createNewGame({ gameId: 'g1', gameType: 'unique-pick', playMode: 'live', players: seeds, lockRevealedInformationEnabled: true }).lockRevealedInformationEnabled).toBe(true)
+    expect('lockRevealedInformationEnabled' in createNewGame({ gameId: 'g1', gameType: 'unique-pick', playMode: 'live', players: seeds })).toBe(false)
   })
 
   it("returns whatever the game's setup returns — active, with options and game data", () => {

@@ -51,14 +51,14 @@ export interface GameSettings {
    */
   rulesVersion?: number
   /**
-   * The game's random seed (./randomSeed.ts), rolled once by createGame() and
-   * copied onto `GameState.randomSeed` at genesis — the only randomness a
-   * game's rules may use (@game-platform/sdk's `gameRandom`). Never changed
-   * after creation: changing it would change genesis. Readable by everyone
-   * who can read the room, so it is not a secret. Absent for a room created
-   * before seeds existed.
+   * Whether undoing a move that revealed hidden or random information needs
+   * the room owner or an admin with room admin mode on
+   * (@game-platform/sdk's isUndoLockedByReveal). Copied onto
+   * `GameState.lockRevealedInformationEnabled` at genesis; never changed
+   * after creation. Meaningless for hotseat, where one device plays every
+   * seat. Absent = false; CreateGamePage.tsx checks it by default.
    */
-  randomSeed?: string
+  lockRevealedInformationEnabled?: boolean
 }
 
 /**

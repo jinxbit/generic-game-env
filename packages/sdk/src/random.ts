@@ -1,27 +1,32 @@
-// Seeded randomness for game rules.
+// Randomness for game rules, without breaking replay.
 //
-// Rules must be deterministic (see ./gameDefinition.ts): the whole game is
-// replayed from genesis on every undo, every server-side submission, every
-// client delta rebuild and in every test, so `Math.random()` inside a hook
-// would roll differently on each replay. Instead each game carries one random
-// seed, rolled once when its room is created (src/lib/randomSeed.ts), stored
-// in `games.settings.randomSeed` and copied onto `GameState.randomSeed` at
-// genesis (./createGame.ts). Everything here is a pure function of that seed
-// plus the keys a game passes in — same inputs, same numbers, on every
-// machine, forever. Never change the generator or how keys are mixed in: it
-// would change every existing game's replay.
+// Rules must be deterministic (see ./gameDefinition.ts): a game is replayed
+// from genesis on every undo, every server-side submission, every client
+// delta rebuild and in every test. So a rule never rolls for itself. The
+// framework hands `setup`, `applyAction` and `onPlayerEliminated` a `Random`,
+// and every number a hook draws from it is *recorded*: on the log entry the
+// draw happened in (`LoggedAction.random`, ./actions.ts), or, for `setup`, on
+// the state (`GameState.setupRandom`, ./types.ts). Replaying an entry feeds
+// the recorded numbers back instead of rolling again, so replay needs no
+// seed and reproduces exactly what happened, on any client.
 //
-// A game derives a separate stream for each random event by passing keys
-// that identify it — `gameRandom(lobby, 'setup')` for a shuffled deck at
-// setup, `gameRandom(state, 'roll', state.turn)` for a roll during a turn. A
-// stream is fully determined by its keys, so undoing a move and making it
-// again rolls the same result: players can't reroll by undoing.
+// Only the first application of an action rolls fresh numbers, and who rolls
+// them is the caller's business, passed in as a `Uint32Source`:
 //
-// The seed is not secret. It is readable by everyone in the room (it lives
-// in the `games` row and on the GameState every client replays), so a
-// determined player can compute any roll in advance. Use it for randomness
-// that is public as soon as it happens — a random first player, a board
-// layout, dice — not to hide information from players.
+//   - a rule-enforced game: the Edge Functions, from a seed that never leaves
+//     the server (`game_secrets`, supabase/migrations/0002_game_secrets.sql),
+//     keyed by the move's position in the game (`seededSource`) — so undoing
+//     a move and making it again draws the same numbers;
+//   - a client-trusted game: the client itself (src/lib/randomSource.ts),
+//     which that path has to trust anyway.
+//
+// A client replaying a game can see every number already drawn in the log
+// entries it is allowed to see — that is, what has happened. It cannot see
+// what will be drawn next: that needs the seed. A game with hidden
+// information marks an entry whose draws are still secret with
+// `isActionSecret`, and redaction (./redaction.ts) withholds the numbers with
+// the entry. Setup draws are on every copy of the state, so anything decided
+// in `setup` is public; draw a secret (a card into a hand) when it's dealt.
 
 /** A deterministic random stream. Stateful: each call advances it. */
 export interface Random {
@@ -35,27 +40,24 @@ export interface Random {
   shuffle<T>(items: readonly T[]): T[]
 }
 
+/** Fresh 32-bit unsigned integers — where a first application's draws come from. */
+export type Uint32Source = () => number
+
 /**
- * The stream for `seed` and `keys`. Two calls with the same arguments
- * produce identical streams; any difference in `keys` gives an unrelated one.
+ * Thrown by a draw with nothing to draw from — a client-side replay whose
+ * recorded draws ran out (a rules mismatch), or an action applied with no
+ * source at all. applyAction turns it into a rejection.
  */
-export function createRandom(seed: string, ...keys: (string | number)[]): Random {
-  // JSON-encoding the parts keeps ['a', 'b'] and ['a,b'] (or 1 and '1') apart.
-  let [a, b, c, d] = hash128(JSON.stringify([seed, ...keys]))
-
-  // sfc32 — small, fast, passes PractRand, and needs nothing beyond 32-bit
-  // integer arithmetic, so it behaves identically in every JS runtime.
-  function nextUint32(): number {
-    const t = (((a + b) | 0) + d) | 0
-    d = (d + 1) | 0
-    a = b ^ (b >>> 9)
-    b = (c + (c << 3)) | 0
-    c = (c << 21) | (c >>> 11)
-    c = (c + t) | 0
-    return t >>> 0
+export class RandomnessUnavailableError extends Error {
+  constructor(message = 'This move involves chance, and no random numbers were supplied for it.') {
+    super(message)
+    this.name = 'RandomnessUnavailableError'
   }
+}
 
-  const next = () => nextUint32() / 4294967296
+/** Builds the `Random` a game sees on top of a stream of 32-bit integers. */
+export function randomFrom(source: Uint32Source): Random {
+  const next = () => source() / 4294967296
 
   function int(min: number, max: number): number {
     if (!Number.isInteger(min) || !Number.isInteger(max) || max < min) {
@@ -83,13 +85,70 @@ export function createRandom(seed: string, ...keys: (string | number)[]): Random
 }
 
 /**
- * The stream for a game's own seed (`GameState.randomSeed`, also on the
- * `LobbyState` `setup` receives) and `keys`. A game started before seeds
- * existed has none and gets a fixed stand-in, so it still replays the same
- * way every time.
+ * Wraps `source` so every number it hands out is also appended to `drawn`
+ * — what gets written to the log.
  */
-export function gameRandom(state: { randomSeed?: string }, ...keys: (string | number)[]): Random {
-  return createRandom(state.randomSeed ?? '', ...keys)
+export function recordingSource(source: Uint32Source): { source: Uint32Source; drawn: number[] } {
+  const drawn: number[] = []
+  return {
+    drawn,
+    source: () => {
+      const value = source()
+      if (!Number.isInteger(value) || value < 0 || value > 0xffffffff) throw new Error(`A random source returned ${value}, not a 32-bit unsigned integer.`)
+      drawn.push(value)
+      return value
+    },
+  }
+}
+
+/**
+ * Hands back exactly `recorded`, in order, then throws. `exhausted()` says
+ * whether every recorded number was used — a replay that used fewer than were
+ * recorded took a different path than the original, which is as much a
+ * mismatch as running out.
+ */
+export function replayingSource(recorded: readonly number[]): { source: Uint32Source; exhausted(): boolean } {
+  let index = 0
+  return {
+    source: () => {
+      if (index >= recorded.length) throw new RandomnessUnavailableError('Replay needed more random numbers than were recorded for this move.')
+      return recorded[index++]
+    },
+    exhausted: () => index === recorded.length,
+  }
+}
+
+/** A source that refuses every draw — for a caller that can't supply randomness. */
+export const noRandomness: Uint32Source = () => {
+  throw new RandomnessUnavailableError()
+}
+
+/**
+ * A deterministic stream for `seed` and `keys` (cyrb128-seeded sfc32). Two
+ * calls with the same arguments produce identical streams; any difference in
+ * `keys` gives an unrelated one. The server derives each move's draws from
+ * the game's secret seed this way. Never change the generator or how keys are
+ * mixed: a game that is mid-move-sequence would roll differently on redo.
+ */
+export function seededSource(seed: string, ...keys: (string | number)[]): Uint32Source {
+  // JSON-encoding the parts keeps ['a', 'b'] and ['a,b'] (or 1 and '1') apart.
+  let [a, b, c, d] = hash128(JSON.stringify([seed, ...keys]))
+  // sfc32 — small, fast, passes PractRand, and needs nothing beyond 32-bit
+  // integer arithmetic, so it behaves identically in every JS runtime.
+  return () => {
+    const t = (((a + b) | 0) + d) | 0
+    d = (d + 1) | 0
+    a = b ^ (b >>> 9)
+    b = (c + (c << 3)) | 0
+    c = (c << 21) | (c >>> 11)
+    c = (c + t) | 0
+    return t >>> 0
+  }
+}
+
+/** `randomFrom(seededSource(seed, ...keys))` — handy in tests. */
+export function createRandom(seed: string, ...keys: (string | number)[]): Random {
+  return randomFrom(seededSource(seed, ...keys))
 }
 
 /** cyrb128: four 32-bit words from a string, to seed sfc32. */

@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { ChatPanel } from '../components/ChatPanel'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { GameLogPanel } from '../components/GameLogPanel'
-import { applyAction, buildGameLog, findGameDefinition, redactGameLog, replayActions, currentActorId, applyRedoAction, applyUndoAction, resolveHistory, type Action, type ActionResult, type GameState as EngineGameState } from '@game-platform/sdk'
+import { applyAction, buildGameLog, findGameDefinition, redactGameLog, replayActions, currentActorId, applyRedoAction, applyUndoAction, isUndoLockedByReveal, resolveHistory, type Action, type ActionResult, type GameState as EngineGameState } from '@game-platform/sdk'
 import { gameUiFor } from '../games/ui'
 import { useAuth } from '../hooks/useAuth'
 import { useIsAdmin } from '../hooks/useIsAdmin'
@@ -14,6 +14,7 @@ import type { GameRow, PlayerRow } from '../lib/dbTypes'
 import { buildDeltaReplayContextFromState } from '../lib/deltaReplayContext'
 import { simpleError, toAppError, type AppError } from '../lib/errors'
 import { buildGenesisState } from '../lib/gameGenesis'
+import { cryptoRandomSource } from '../lib/randomSource'
 import {
   applyActionEnforced,
   cancelGame,
@@ -377,20 +378,43 @@ export function GamePage() {
 
   /**
    * Deterministically rebuilt from the game's row + seated players
-   * (buildGenesisState) — genesis itself isn't stored. Memoized on the
-   * player fields genesis reads, not `players`' identity, which changes on
-   * every refetch.
+   * (buildGenesisState), plus the random numbers setup drew, which every
+   * copy of the state carries (`setupRandom`) — genesis itself isn't stored.
+   * Memoized on the fields genesis reads, not `players`' or the state's
+   * identity, which change on every refetch.
    */
   const playersSignature = useMemo(() => JSON.stringify(players.map((p) => ({ id: p.id, name: p.display_name, color: p.color }))), [players])
+  const setupRandomSignature = JSON.stringify(gameState?.setupRandom ?? [])
   const genesis = useMemo(() => {
     if (!game || players.length === 0) return null
     try {
-      return buildGenesisState(game, players)
+      return buildGenesisState(game, players, JSON.parse(setupRandomSignature) as number[])
     } catch {
       return null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [game, players.length, playersSignature])
+  }, [game, players.length, playersSignature, setupRandomSignature])
+
+  /**
+   * Whether this game's lockRevealedInformationEnabled refuses a bare Undo
+   * right now, for someone without the admin-mode override
+   * (isUndoLockedByReveal), so the button doesn't offer an undo that will be
+   * refused. Not judged on a redacted view: that log stops at the first
+   * entry still secret from this viewer, so its last entry needn't be the
+   * one Undo would revert — there the undo-action Edge Function, which has
+   * the whole log, makes the call and says why. For a client-trusted game
+   * this is the only check (handleUndo repeats it on the freshest state).
+   */
+  const undoLockedByReveal = useMemo(() => {
+    if (!game || !genesis || !gameState || isHotseat) return false
+    if (usesRedactedReads(game) && !isAdmin) return false
+    try {
+      return isUndoLockedByReveal(genesis, gameState)
+    } catch {
+      return false
+    }
+  }, [game, genesis, gameState, isHotseat, isAdmin])
+  const undoBlockedByReveal = undoLockedByReveal && !(adminModeActive && canAdminOverride)
 
   // Assigned during render so the very next fetch already sees it.
   deltaContextRef.current = genesis ? { genesis } : null
@@ -498,7 +522,7 @@ export function GamePage() {
     try {
       const result = game?.settings.ruleEnforcementEnabled
         ? await runEnforced(() => applyActionEnforced(game.id, action, latestBaseRef.current, deltaContextRef.current ?? undefined))
-        : await writeWithRetry((state) => applyAction(state, action))
+        : await writeWithRetry((state) => applyAction(state, action, { random: cryptoRandomSource }))
       setActionError(result.ok ? null : simpleError(result.error))
     } finally {
       setSubmitting(false)
@@ -522,7 +546,10 @@ export function GamePage() {
    * the game back one logged entry. Deliberately not gated on `me` (which is
    * null in some hotseat/post-game states); `me` only narrates who undid.
    * Undo is a logged UNDO_ACTION replayed from genesis (@game-platform/sdk's undoRedo.ts),
-   * so every client sees the same result and it survives a reload.
+   * so every client sees the same result and it survives a reload. The one
+   * exception is lockRevealedInformationEnabled (undoLockedByReveal above):
+   * the server refuses an enforced game's undo itself, and a client-trusted
+   * game's is refused here, against the freshest state writeWithRetry has.
    */
   async function handleUndo() {
     if (!game) return
@@ -533,7 +560,14 @@ export function GamePage() {
         setActionError(result.ok ? null : simpleError(result.error))
         return
       }
-      const result = await writeWithRetry((state) => applyUndoAction(buildGenesisState(game, players), state, me?.id ?? null))
+      const override = adminModeActive && canAdminOverride
+      const result = await writeWithRetry((state) => {
+        const genesisForState = buildGenesisState(game, players, state.setupRandom)
+        if (!isHotseat && !override && isUndoLockedByReveal(genesisForState, state)) {
+          return { ok: false, error: 'That move revealed information to the players, so undoing it takes the room owner or an admin, with room admin mode on.' }
+        }
+        return applyUndoAction(genesisForState, state, me?.id ?? null)
+      })
       setActionError(result.ok ? null : simpleError(result.error))
     } catch (err) {
       // replayActions throws "Replay failed at action ..." if an earlier
@@ -560,7 +594,7 @@ export function GamePage() {
         setActionError(result.ok ? null : simpleError(result.error))
         return
       }
-      const result = await writeWithRetry((state) => applyRedoAction(buildGenesisState(game, players), state, me?.id ?? null))
+      const result = await writeWithRetry((state) => applyRedoAction(buildGenesisState(game, players, state.setupRandom), state, me?.id ?? null))
       setActionError(result.ok ? null : simpleError(result.error))
     } catch (err) {
       setActionError(toAppError(err, 'Failed to redo'))
@@ -915,9 +949,13 @@ export function GamePage() {
           {submitting && <span className="text-xs text-neutral-500">Sending…</span>}
           <button
             type="button"
-            disabled={undoing || isReviewingHistory || !gameState || !historyPointer.canUndo}
+            disabled={undoing || isReviewingHistory || !gameState || !historyPointer.canUndo || undoBlockedByReveal}
             onClick={() => void handleUndo()}
-            title="Undo the last action — any player can do this, at any time, even after the game has ended."
+            title={
+              undoBlockedByReveal
+                ? 'That move revealed information to the players, so only the room owner or an admin, with admin mode on, can undo it.'
+                : 'Undo the last action — any player can do this, at any time, even after the game has ended.'
+            }
             className="rounded-md border border-neutral-700 px-3 py-1 text-sm hover:border-neutral-500 disabled:opacity-50"
           >
             {undoing ? 'Undoing…' : 'Undo'}

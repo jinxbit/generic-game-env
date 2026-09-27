@@ -14,7 +14,7 @@ describe('applyAction', () => {
 
       pick(genesis, 'p1', 3)
 
-      expect(spy).toHaveBeenCalledWith(genesis, { type: 'PICK_NUMBER', playerId: 'p1', value: 3 })
+      expect(spy).toHaveBeenCalledWith(genesis, { type: 'PICK_NUMBER', playerId: 'p1', value: 3 }, expect.objectContaining({ int: expect.any(Function) }))
     })
 
     it('handles framework actions itself, never calling into the game', () => {

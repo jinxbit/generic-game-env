@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { applyAction, gameRandom, registerGame, replayActions, type GameDefinition } from '@game-platform/sdk'
+import { applyAction, registerGame, replayActions, seededSource, type GameDefinition } from '@game-platform/sdk'
 import { DEFAULT_GAME_OPTIONS, gameDefinition, PICK_PHASE, type GameState, type PickNumberAction } from '@game-platform/unique-pick/rules'
 import { buildGenesisState } from '../gameGenesis'
+import { CHANCE_GAME_TYPE, registerChanceGame } from '../../../packages/sdk/src/__tests__/chanceGame'
 import type { GameRow, GameSettings, PlayerRow } from '../dbTypes'
 
 function makeGame(overrides: Partial<GameRow> = {}, settingsOverrides: Partial<GameSettings> = {}): GameRow {
@@ -124,38 +125,21 @@ describe('buildGenesisState', () => {
     expect(buildGenesisState(makeGame({ game_type: 'test-genesis-versions' }), makePlayers()).rulesVersion).toBe(2)
   })
 
-  it("carries settings.randomSeed onto the state, so a game's random setup is fixed by its row", () => {
-    // Unique Pick itself uses no randomness; this copy seats players in a
-    // random order at setup and rolls a bonus on every pick.
-    const randomGame = {
-      ...gameDefinition,
-      id: 'test-genesis-random',
-      setup(lobby) {
-        const genesis = gameDefinition.setup(lobby)
-        return { ...genesis, turnOrder: gameRandom(lobby, 'seating').shuffle(genesis.turnOrder) }
-      },
-      applyAction(state, action) {
-        const result = gameDefinition.applyAction(state, action)
-        if (!result.ok) return result
-        const bonus = gameRandom(state, 'bonus', state.actionHistory.length).int(0, 1_000_000)
-        return { ok: true, state: { ...result.state, game: { ...result.state.game, bonus } } }
-      },
-    } as GameDefinition<GameState['game'], GameState['options'], PickNumberAction>
-    registerGame(randomGame)
+  it('draws setup randomness from the source on the first build, and rebuilds from the recorded numbers after', () => {
+    registerChanceGame()
     const players = Array.from({ length: 6 }, (_, i) => ({ ...makePlayers()[0], id: `p${i}`, seat_index: i }))
-    const seededRow = (randomSeed: string) => makeGame({ game_type: 'test-genesis-random' }, { randomSeed })
+    const row = makeGame({ game_type: CHANCE_GAME_TYPE })
 
-    const genesis = buildGenesisState(seededRow('seed-1'), players)
-    expect(genesis.randomSeed).toBe('seed-1')
-    expect(buildGenesisState(seededRow('seed-1'), players)).toEqual(genesis)
-    expect([...genesis.turnOrder].sort()).toEqual(players.map((p) => p.id))
-    expect(buildGenesisState(seededRow('seed-2'), players).turnOrder).not.toEqual(genesis.turnOrder)
+    const genesis = buildGenesisState(row, players, seededSource('secret', 'setup'))
+    expect(genesis.setupRandom?.length).toBeGreaterThan(0)
+    expect(buildGenesisState(row, players, genesis.setupRandom)).toEqual(genesis)
+    // Nothing recorded to replay, and no source: setup can't draw.
+    expect(() => buildGenesisState(row, players)).toThrow()
+  })
 
-    const pick: PickNumberAction = { type: 'PICK_NUMBER', playerId: 'p0', value: 3 }
-    const step = applyAction(genesis, pick)
-    if (!step.ok) throw new Error(step.error)
-    const replayed = replayActions(buildGenesisState(seededRow('seed-1'), players), step.state.actionHistory)
-    expect(replayed.game).toEqual(step.state.game)
+  it("carries settings.lockRevealedInformationEnabled onto the state", () => {
+    expect(buildGenesisState(makeGame({}, { lockRevealedInformationEnabled: true }), makePlayers()).lockRevealedInformationEnabled).toBe(true)
+    expect(buildGenesisState(makeGame(), makePlayers()).lockRevealedInformationEnabled).toBeUndefined()
   })
 
   it('throws for a game type this deployment has not registered', () => {

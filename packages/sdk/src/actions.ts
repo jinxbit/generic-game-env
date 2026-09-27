@@ -85,4 +85,11 @@ export interface LoggedAction {
   timestamp: string
   /** True if admin mode was already on when this entry was submitted. Absent (not false) otherwise, and never set on SET_ADMIN_MODE itself. */
   viaAdminMode?: boolean
+  /**
+   * Every random number the game drew while applying this entry (the action
+   * and its folded follow-ups), in order — fed back instead of rolling again
+   * whenever the entry is replayed (./random.ts). Absent when nothing was
+   * drawn. Stripped along with the action when the entry is redacted.
+   */
+  random?: number[]
 }

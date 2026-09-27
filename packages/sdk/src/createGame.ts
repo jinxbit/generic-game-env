@@ -1,4 +1,5 @@
 import { getGameDefinition } from './registry.ts'
+import { randomFrom, recordingSource, replayingSource, type Uint32Source } from './random.ts'
 import type { GameState, LobbyState, PlayMode, Player } from './types.ts'
 
 export interface PlayerSeed {
@@ -12,10 +13,14 @@ export interface PlayerSeed {
  * Builds a game's genesis state: players seated in the given order (which
  * becomes `turnOrder`), options normalized by the game, then handed to the
  * game's own setup (GameDefinition.setup), which returns it `active` and
- * ready for the first move. `setup` may draw from the game's seed
- * (`gameRandom(lobby, ...)`, ./random.ts) — never from `Math.random()`. No
- * action is logged for this — genesis is a deterministic function of its
- * inputs, rebuilt on demand.
+ * ready for the first move. No action is logged for this — genesis is a
+ * deterministic function of its inputs, rebuilt on demand.
+ *
+ * `setupRandom` is where `setup`'s random numbers come from (./random.ts): a
+ * `Uint32Source` the first time — the server's seed for an enforced game, the
+ * client's own for a client-trusted one — whose draws are recorded on the
+ * result as `setupRandom`; and that recorded array on every rebuild after,
+ * which setup must use up exactly. Omitted means nothing may be drawn.
  *
  * `rulesVersion` omitted means the newest registered version — right for a
  * brand-new game. Rebuilding an existing game's genesis must pass the
@@ -29,8 +34,10 @@ export function createNewGame(params: {
   players: PlayerSeed[]
   hiddenInformationEnabled?: boolean
   options?: unknown
-  /** games.settings.randomSeed — omitted for a game created before seeds existed (see GameState.randomSeed). */
-  randomSeed?: string
+  /** games.settings.lockRevealedInformationEnabled — see GameState.lockRevealedInformationEnabled. */
+  lockRevealedInformationEnabled?: boolean
+  /** Fresh numbers for a first build, or the state's recorded `setupRandom` for a rebuild — see above. */
+  setupRandom?: Uint32Source | readonly number[]
 }): GameState {
   const game = getGameDefinition(params.gameType, params.rulesVersion)
   const players: Player[] = params.players.map((seed) => ({
@@ -56,11 +63,16 @@ export function createNewGame(params: {
     players,
     winnerPlayerIds: [],
     options: game.normalizeOptions(params.options ?? game.defaultOptions),
-    // Only set when there is one, so a seedless game's genesis (and its
-    // exports) stay exactly as they were.
-    ...(params.randomSeed !== undefined ? { randomSeed: params.randomSeed } : {}),
+    // Only set when on, so a game without it keeps exactly the genesis (and
+    // exports) it always had.
+    ...(params.lockRevealedInformationEnabled ? { lockRevealedInformationEnabled: true } : {}),
     actionHistory: [],
     adminModeActive: false,
   }
-  return game.setup(lobby)
+  const setupRandom = params.setupRandom ?? []
+  const replaying = typeof setupRandom === 'function' ? null : replayingSource(setupRandom)
+  const recording = recordingSource(replaying ? replaying.source : (setupRandom as Uint32Source))
+  const genesis = game.setup(lobby, randomFrom(recording.source))
+  if (replaying && !replaying.exhausted()) throw new Error("Rebuilding genesis drew fewer random numbers than setup originally did — this isn't the setup the game started with.")
+  return recording.drawn.length > 0 ? { ...genesis, setupRandom: recording.drawn } : genesis
 }

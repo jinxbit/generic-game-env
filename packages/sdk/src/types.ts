@@ -111,14 +111,21 @@ export interface GameState<TData = unknown, TOptions = unknown> {
    */
   options: TOptions
   /**
-   * The game's random seed (games.settings.randomSeed), rolled once when the
-   * room was created — carried here, like `options`, so a running game and
-   * its export stay self-contained. Rules draw from it only through
-   * `gameRandom` (./random.ts), never `Math.random()`. Absent for a game
-   * created before seeds existed; `gameRandom` treats that as a fixed seed.
-   * Not secret: every player can read it.
+   * The random numbers the game's `setup` drew, in order (./random.ts) — what
+   * rebuilding genesis feeds back to `setup` instead of rolling again, so
+   * every client can rebuild it without the server's seed. Set once at
+   * genesis and carried unchanged on every later state. Absent when setup
+   * drew nothing. Public, like everything setup decides.
    */
-  randomSeed?: string
+  setupRandom?: number[]
+  /**
+   * Whether undoing a move that revealed hidden or random information needs
+   * the room owner or an admin with room admin mode on (see
+   * isUndoLockedByReveal, ./undoRedo.ts) — a creation-time choice
+   * (games.settings.lockRevealedInformationEnabled), immutable for the whole
+   * game. Absent is equivalent to false.
+   */
+  lockRevealedInformationEnabled?: boolean
   /** The game-specific state — owned entirely by the game package. */
   game: TData
   /**

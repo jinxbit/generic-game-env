@@ -96,35 +96,46 @@ rejection.
 
 ## Randomness
 
-Every game gets a random seed, rolled once when its room is created
-(`games.settings.randomSeed`) and carried on the state as
-`state.randomSeed` (on the `lobby` passed to `setup` too). `gameRandom(state,
-...keys)` returns a deterministic stream (`next()`, `int(min, max)`,
-`pick(items)`, `shuffle(items)`) for that seed and the keys you give it, so
-every replay rolls exactly the same numbers:
+`setup`, `applyAction` and `onPlayerEliminated` receive a `random` argument
+(`Random` from `@game-platform/sdk`: `next()`, `int(min, max)`,
+`pick(items)`, `shuffle(items)`). It's the only randomness a rule may use:
 
 ```ts
-import { gameRandom } from '@game-platform/sdk'
-
-setup(lobby) {
-  const deck = gameRandom(lobby, 'deck').shuffle(FULL_DECK)
-  const firstPlayerId = gameRandom(lobby, 'first-player').pick(lobby.turnOrder)
+setup(lobby, random) {
+  const firstPlayerId = random.pick(lobby.turnOrder)
   // ...
 }
 
-applyAction(state, action) {
-  const roll = gameRandom(state, 'roll', state.turn, action.playerId).int(1, 6)
+applyAction(state, action, random) {
+  const roll = random.int(1, 6)
   // ...
 }
 ```
 
-Give each random event its own keys: a stream is fixed by its keys, so
-undoing a move and making it again rolls the same result (no rerolling by
-undo). The seed is **not secret** — every player can read it and compute a
-roll in advance — so use it for randomness that's public the moment it
-happens (turn order, board layout, dice), not to hide information. A game
-created before seeds existed has no `randomSeed`; `gameRandom` then uses a
-fixed stand-in, so it still replays the same way.
+Every number a hook draws is recorded — on the move's log entry
+(`LoggedAction.random`), or for `setup` on the state (`setupRandom`) — and
+replay feeds the recorded numbers back instead of rolling again. So a replay
+never needs the seed, and the rules must draw exactly the same numbers in the
+same order every time they're given the same state and action.
+
+Where fresh numbers come from is the platform's business: for a rule-enforced
+game, a seed that never leaves the server, keyed by the move's position, so
+undoing a move and making it again draws the same numbers. Two things follow
+for a game:
+
+- **What setup decides is public.** Every client carries `setupRandom` to
+  rebuild genesis. Pick a first player or a board layout there, but don't
+  shuffle a secret deck in `setup` — deal each secret card when it's dealt,
+  with `random.pick` from what's left.
+- **A secret draw needs a secret entry.** The numbers recorded on an entry
+  reveal what was drawn, so when a draw decides something some player mustn't
+  know yet (the card dealt into a hand), `isActionSecret` must say that entry
+  is secret from them. Redaction then withholds the numbers with the action.
+
+A room can also lock a move against undo once it has revealed something —
+including random numbers a player has seen (see the platform README's "Undo
+in a shared game"). That's judged with your `isActionSecret`, so keeping it
+accurate matters here too.
 
 ## Changing the rules
 

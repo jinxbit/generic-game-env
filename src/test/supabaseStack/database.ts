@@ -23,7 +23,7 @@ import type { StoredGameState } from '../../lib/gameStateCompression.ts'
 export type Row = Record<string, unknown>
 
 /** Only the tables the game write path touches, plus chat (0001_baseline.sql section 10) — anything else is a loud 404 from ./httpServer.ts. */
-export type TableName = 'profiles' | 'games' | 'players' | 'game_state' | 'game_state_meta' | 'app_config' | 'chat_messages' | 'chat_read_status'
+export type TableName = 'profiles' | 'games' | 'players' | 'game_state' | 'game_state_meta' | 'app_config' | 'chat_messages' | 'chat_read_status' | 'game_secrets'
 
 /**
  * Who a request runs as. `service_role` bypasses RLS entirely (Supabase's
@@ -87,6 +87,7 @@ const PRIMARY_KEY: Record<TableName, string> = {
   app_config: 'id',
   chat_messages: 'id',
   chat_read_status: 'id',
+  game_secrets: 'game_id',
 }
 
 /** Tables that carry a `set_updated_at` BEFORE UPDATE trigger (0001_baseline.sql section 1). */
@@ -119,6 +120,7 @@ export class Database {
     app_config: [{ id: true, chat_enabled: false }],
     chat_messages: [],
     chat_read_status: [],
+    game_secrets: [],
   }
 
   /** `generated always as identity` on chat_messages.id (0001_baseline.sql section 10). */
@@ -254,6 +256,11 @@ export class Database {
         }
         return false
       }
+
+      // 0002_game_secrets.sql: RLS on, no policy at all, grants revoked —
+      // only the service role (the early return above) ever sees a row.
+      case 'game_secrets':
+        return false
     }
   }
 
@@ -518,13 +525,14 @@ export class Database {
   /**
    * `on delete cascade` from `games` — players, game_state, game_state_meta,
    * chat_messages and chat_read_status all reference `games (id)` with it
-   * (0001_baseline.sql sections 4, 5, 6 and 10). Deleting a room really does
+   * (0001_baseline.sql sections 4, 5, 6 and 10), as does game_secrets
+   * (0002_game_secrets.sql). Deleting a room really does
    * take its rows with it — without this, anything that cleans up after
    * itself by deleting the room (the production smoke runner,
    * ../productionSmoke/) would look like it worked while leaving orphans.
    */
   private cascadeFromGame(gameId: string): void {
-    for (const table of ['players', 'game_state', 'game_state_meta', 'chat_messages', 'chat_read_status'] as const) {
+    for (const table of ['players', 'game_state', 'game_state_meta', 'chat_messages', 'chat_read_status', 'game_secrets'] as const) {
       this.rows[table] = this.rows[table].filter((row) => row.game_id !== gameId)
     }
   }
@@ -564,6 +572,8 @@ export class Database {
         return { id: this.nextChatMessageId++, game_id: null, created_at: now }
       case 'chat_read_status':
         return { id: globalThis.crypto.randomUUID(), last_read_id: 0, updated_at: now }
+      case 'game_secrets':
+        return { created_at: now }
       default:
         return {}
     }

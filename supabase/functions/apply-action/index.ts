@@ -10,6 +10,10 @@
 // handled here — an ordinary forward step, just with its own owner-or-admin
 // authorization instead of the usual per-seat one.
 //
+// Random numbers the rules draw come from the game's secret seed
+// (loadRandomSeed) and are recorded on the new log entry, so no client ever
+// needs the seed to replay the move.
+//
 // The response's `state` is redacted the same way get-game-state's read is —
 // the acting player's own submission would otherwise be the easiest way to
 // see what the game keeps secret, since it hands back the very state the
@@ -22,6 +26,7 @@ import {
   isAuthorizedToActAs,
   jsonResponse,
   loadGameContext,
+  loadRandomSeed,
   redactedResponseState,
   respondWithState,
   requiresOwnerOverride,
@@ -101,7 +106,8 @@ Deno.serve(async (req) => {
     }
   }
 
-  const result = applyActionEnforced(ctx.gameState.state, action)
+  const randomSeed = await loadRandomSeed(supabase, gameId)
+  const result = applyActionEnforced(ctx.gameState.state, action, randomSeed)
   if (!result.ok) return jsonResponse(400, { ok: false, error: result.error })
 
   const newVersion = await writeGameStateCAS(supabase, gameId, result.state, ctx.gameState.version)

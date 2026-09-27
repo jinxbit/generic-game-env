@@ -10,7 +10,8 @@
  *
  * The way out is that none of it actually needs the table. `buildGenesisState`
  * reads exactly four player columns (`GenesisPlayerInput`), and a cached
- * `GameState`'s own `players` carry all four. So genesis is reconstructable
+ * `GameState`'s own `players` carry all four — as it carries the random
+ * numbers setup drew (`setupRandom`). So genesis is reconstructable
  * from the cache plus the `games` row, which the mount effect already has in
  * hand before it runs.
  *
@@ -48,6 +49,7 @@ export function buildDeltaReplayContextFromState(game: GameRow, state: GameState
         display_name: player.displayName,
         color: player.color,
       })),
+      state.setupRandom,
     )
     return { genesis }
   } catch {

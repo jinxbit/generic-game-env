@@ -27,6 +27,15 @@ a game with undo/redo, a concede or admin mode in its history, a hotseat game,
 a game played with hidden information. Long games are fine — a few hundred
 actions replay in seconds.
 
+**A game that drew random numbers doesn't fit this yet.** Replaying through
+`apply-action` makes the server draw each move's numbers afresh from the new
+room's own seed (`game_secrets`), and an export never carries the original
+game's seed — it's server-only on purpose — so the dice come out differently
+and the replay diverges. Setup draws are fine (they travel on the state as
+`setupRandom`); move draws (`LoggedAction.random`) aren't. Unique Pick draws
+nothing, so every fixture here is unaffected; a game with chance needs its
+own replay route before its exports can be dropped in.
+
 ## Declaring the result
 
 State a game's outcome in its sidecar, from what you read off the end-of-game

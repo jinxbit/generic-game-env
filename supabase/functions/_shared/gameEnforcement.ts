@@ -13,11 +13,12 @@
 // time, not in CI.
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import './games.ts'
-import { applyAction, redoableTail, redactStateForPlayer, revealedGameStateView, toClientGameState, unredactedPrefix, buildInFlightOverlay, needsInFlightOverlay, type Action, type LoggedAction, type RedactedGameState, type RedactedGameStateDelta, type ActionResult, type GameState } from '@game-platform/sdk'
+import { applyAction, gameplayPosition, redoableTail, seededSource, type Uint32Source, redactStateForPlayer, revealedGameStateView, toClientGameState, unredactedPrefix, buildInFlightOverlay, needsInFlightOverlay, type Action, type LoggedAction, type RedactedGameState, type RedactedGameStateDelta, type ActionResult, type GameState } from '@game-platform/sdk'
 import { hashGameStateView } from '../../../src/lib/gameStateHash.ts'
 import { buildGenesisState } from '../../../src/lib/gameGenesis.ts'
 import type { GameRow as FullGameRow, PlayerRow as FullPlayerRow } from '../../../src/lib/dbTypes.ts'
 import { compressGameStateForStorage, decompressGameStateFromStorage, type StoredGameState } from '../../../src/lib/gameStateCompression.ts'
+import { generateRandomSeed } from '../../../src/lib/randomSource.ts'
 
 export const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -189,9 +190,49 @@ function actionPlayerId(action: Action): string | null {
  * Applies `action` against `state` via applyAction (packages/sdk/src/applyAction.ts)
  * — the same entry point GamePage.tsx's submitAction uses client-side, so
  * forced follow-ups fold into the same actionHistory entry here and there.
+ * Any random numbers the rules draw come from the game's secret seed
+ * (moveRandomSource) and are recorded on the new entry.
  */
-export function applyActionEnforced(state: GameState, action: Action): ActionResult {
-  return applyAction(state, action)
+export function applyActionEnforced(state: GameState, action: Action, randomSeed: string): ActionResult {
+  return applyAction(state, action, { random: moveRandomSource(randomSeed, state, action) })
+}
+
+/**
+ * The random numbers a move submitted against `state` draws: a stream of
+ * the game's secret seed keyed by the position the move takes
+ * (gameplayPosition), so undoing a move and making it — or another — again
+ * draws the very same numbers, and undo can't be used to reroll. Admin-mode
+ * switches don't take a gameplay position, so they're keyed by their raw
+ * log index instead, apart from the moves.
+ */
+export function moveRandomSource(randomSeed: string, state: GameState, action: Action): Uint32Source {
+  return action.type === 'SET_ADMIN_MODE'
+    ? seededSource(randomSeed, 'admin', state.actionHistory.length)
+    : seededSource(randomSeed, 'move', gameplayPosition(state.actionHistory))
+}
+
+/**
+ * The game's secret random seed (`game_secrets`,
+ * supabase/migrations/0002_game_secrets.sql), rolled and stored the first
+ * time it's asked for — at Start, or on the first move of a room that was
+ * copied rather than started (duplicate-as-hotseat). No client can read the
+ * table, so what a game will draw next stays unpredictable even though every
+ * number already drawn is in its log. Two callers racing to create it both
+ * end up with whichever insert won.
+ */
+export async function loadRandomSeed(supabase: SupabaseClient, gameId: string): Promise<string> {
+  const read = async () => {
+    const { data, error } = await supabase.from('game_secrets').select('random_seed').eq('game_id', gameId).maybeSingle()
+    if (error) throw error
+    return (data as { random_seed: string } | null)?.random_seed ?? null
+  }
+  const existing = await read()
+  if (existing) return existing
+  const { error } = await supabase.from('game_secrets').insert({ game_id: gameId, random_seed: generateRandomSeed() })
+  if (error && error.code !== '23505') throw error
+  const created = await read()
+  if (!created) throw new Error("Could not create the game's random seed.")
+  return created
 }
 
 /**

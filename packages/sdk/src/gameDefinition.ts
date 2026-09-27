@@ -1,4 +1,5 @@
 import type { GameActionBase, LoggedAction } from './actions.ts'
+import type { Random } from './random.ts'
 import type { ActionResult, GameState, LobbyState } from './types.ts'
 
 /**
@@ -26,10 +27,10 @@ export interface ActionDescription {
  * Everything here must be pure, deterministic and free of React, Supabase
  * and I/O: the same definition runs in the browser and in the Supabase Edge
  * Functions, and the whole game is replayed from genesis on every undo,
- * every server-side submission and in every client. Randomness a game needs
- * comes from the game's own seed through `gameRandom` (./random.ts) — rolled
- * before genesis and stored in `games.settings.randomSeed` — never from
- * `Math.random()`.
+ * every server-side submission and in every client. Randomness comes only
+ * from the `random` argument `setup`, `applyAction` and `onPlayerEliminated`
+ * receive — never `Math.random()`. Every number drawn from it is recorded and
+ * fed back on replay (./random.ts).
  */
 export interface GameDefinition<TData = unknown, TOptions = unknown, TAction extends GameActionBase = GameActionBase> {
   /** Stable id, stored on every room (`games.game_type`) and game state. Never change it once games exist. */
@@ -62,8 +63,12 @@ export interface GameDefinition<TData = unknown, TOptions = unknown, TAction ext
    * normalized, no `game` yet). Must return it `status: 'active'` with
    * `game`, `turn`, `phase`, `activePlayerId` and `pendingPlayerIds` set for
    * the first move.
+   *
+   * Anything drawn from `random` here is recorded on the state for every
+   * client to replay (`GameState.setupRandom`), so it's public: decide turn
+   * order or a board layout here, but deal a secret when it's dealt.
    */
-  setup(lobby: LobbyState<TOptions>): GameState<TData, TOptions>
+  setup(lobby: LobbyState<TOptions>, random: Random): GameState<TData, TOptions>
 
   /**
    * Applies one game action to an `active` game. Must reject (ok: false) an
@@ -72,8 +77,14 @@ export interface GameDefinition<TData = unknown, TOptions = unknown, TAction ext
    * `activePlayerId`, `turn`, `phase`, `status` and `winnerPlayerIds` are the
    * game's to keep up to date. Don't touch `actionHistory`: the framework
    * appends the log entry.
+   *
+   * `random` is shared by this call and every forced follow-up folded into
+   * the same entry; what's drawn is recorded on that entry
+   * (`LoggedAction.random`). If a draw decides something still secret from
+   * some player, `isActionSecret` must say the entry is secret from them, or
+   * the recorded numbers reveal it.
    */
-  applyAction(state: GameState<TData, TOptions>, action: TAction): ActionResult<GameState<TData, TOptions>>
+  applyAction(state: GameState<TData, TOptions>, action: TAction, random: Random): ActionResult<GameState<TData, TOptions>>
 
   /**
    * Called after the framework has flagged `playerId` eliminated (CONCEDE) and
@@ -81,7 +92,7 @@ export interface GameDefinition<TData = unknown, TOptions = unknown, TAction ext
    * move was blocking. The framework ends the game itself when only one
    * player remains, before calling this.
    */
-  onPlayerEliminated(state: GameState<TData, TOptions>, playerId: string): GameState<TData, TOptions>
+  onPlayerEliminated(state: GameState<TData, TOptions>, playerId: string, random: Random): GameState<TData, TOptions>
 
   /**
    * A move with only one legal option that nobody really needs to make, or

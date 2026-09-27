@@ -120,6 +120,7 @@ jobs:
           games|games.settings column|"settings" "jsonb"|present|0001
           games|games_status_check constraint (canceled status)|games_status_check|present|0001
           games|games_name_length constraint|games_name_length|present|0001
+          games|games.game_type column + format constraint|games_game_type_format|present|0001
           games|games_public_idx index|games_public_idx|present|0001
           games|games_enforce_name_immutable trigger|games_enforce_name_immutable|present|0001
           games|games_enforce_status_transition trigger (incl. start-game lockdown)|games_enforce_status_transition|present|0001

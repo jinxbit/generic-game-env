@@ -8,14 +8,9 @@
  * the app's env vars are absent, so nothing could test or reuse it there.
  * `gameApi.ts` re-exports everything here.
  */
-import { extendReplay, replayToBase } from '../engine/replay'
-import { applyInFlightOverlay, type InFlightOverlay } from '../engine/inFlightOverlay'
+import { extendReplay, replayToBase, applyInFlightOverlay, type InFlightOverlay, type RedactedLoggedAction, type GameState as EngineGameState, type LoggedAction } from '@game-platform/sdk'
 import { hashGameStateView } from './gameStateHash'
 import type { DeltaReplayContext } from './deltaReplayContext'
-import type { RedactedLoggedAction } from '../engine/redaction'
-import type { GameState as EngineGameState } from '../engine/types'
-import type { LoggedAction } from '../engine/actions'
-
 /**
  * Why a rebuild gave up, reported back to the server on the retry so the
  * telemetry can separate a healthy cold start from a client whose engine

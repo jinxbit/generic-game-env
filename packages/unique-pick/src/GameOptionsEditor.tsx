@@ -1,14 +1,15 @@
-import { MAX_ROUNDS_RANGE, TARGET_SCORE_RANGE } from './rules'
-import type { GameOptions } from './types'
+import type { GameOptionsEditorProps } from '@game-platform/sdk/ui'
+import { MAX_ROUNDS_RANGE, TARGET_SCORE_RANGE } from './rules.ts'
+import type { GameOptions } from './types.ts'
 
 /**
- * The game's own creation-time options, as shown on CreateGamePage.tsx and
- * in LobbyPage.tsx's config editor. The platform passes the value in and
- * stores whatever comes back in `games.settings.gameOptions`; the game's
- * setup normalizes it (rules.ts's normalizeGameOptions), so an out-of-range
- * value typed here can't break genesis.
+ * The game's creation-time options form, shown on the platform's create-game
+ * screen and lobby config editor. The platform stores whatever comes back in
+ * `games.settings.gameOptions`; the framework normalizes it through
+ * GameDefinition.normalizeOptions (rules.ts), so an out-of-range value typed
+ * here can't break genesis.
  */
-export function GameOptionsEditor({ value, onChange, disabled = false }: { value: GameOptions; onChange: (value: GameOptions) => void; disabled?: boolean }) {
+export function GameOptionsEditor({ value, onChange, disabled = false }: GameOptionsEditorProps<GameOptions>) {
   return (
     <div className="flex gap-4">
       <label className="flex flex-col gap-1 text-sm text-neutral-400">

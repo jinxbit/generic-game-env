@@ -1,6 +1,5 @@
 import { gunzipFromBase64, gzipToBase64 } from './gzip'
-import type { GameState as EngineGameState } from '../engine/types'
-
+import type { GameState as EngineGameState } from '@game-platform/sdk'
 /**
  * Debug export format for pasting a game state into a bug report or chat, or
  * saving it as a `.json` file (see GamePage.tsx's "Copy JSON" / "Copy game

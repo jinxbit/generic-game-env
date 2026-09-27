@@ -13,7 +13,7 @@
 // state: a walk would have to know every field that holds one, and would
 // silently miss the next one a game adds.
 
-import type { GameState } from '../../engine/types.ts'
+import type { GameState } from '@game-platform/sdk'
 import type { GameSettings } from '../../lib/dbTypes.ts'
 import type { ProductionGameFixture } from '../fixtures/productionGames/loadFixtures.ts'
 

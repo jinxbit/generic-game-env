@@ -17,8 +17,7 @@
 // rather than being handed to a test that would then "pass" against a game
 // that never happened.
 
-import { replayActions } from '../../../engine/replay.ts'
-import type { GameState } from '../../../engine/types.ts'
+import { replayActions, type GameState } from '@game-platform/sdk'
 import { buildGenesisState } from '../../../lib/gameGenesis.ts'
 import type { GameRow, GameSettings, PlayerRow } from '../../../lib/dbTypes.ts'
 import { decodeGameStateExport } from '../../../lib/gameStateExport.ts'

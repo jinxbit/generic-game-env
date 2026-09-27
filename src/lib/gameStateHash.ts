@@ -36,8 +36,7 @@
  * primitive for its own integrity check — `fnv1a` is shared from here rather
  * than written twice.)
  */
-import type { GameState } from '../engine/types.ts'
-
+import type { GameState } from '@game-platform/sdk'
 /** FNV-1a, 32-bit, hex. Shared with gameStateCache.ts's entry integrity check. */
 export function fnv1a(input: string): string {
   let hash = 0x811c9dc5

@@ -1,5 +1,5 @@
 import type { Action, LoggedAction } from './actions.ts'
-import { game } from './game.ts'
+import { definitionFor } from './registry.ts'
 import { resolveHistory } from './historyFold.ts'
 import type { GameEvent, GameState } from './types.ts'
 
@@ -28,19 +28,20 @@ export type RedactedGameState = Omit<GameState, 'actionHistory'> & {
 /**
  * Read-side view of GameState for a specific viewer (`viewerId`, one of
  * GameState.players[].id, or `null` for a non-player). What counts as secret
- * is entirely the game's call (GameDefinition.redactGame/isActionSecret,
- * src/game/rules.ts); this applies it to both the state and the log, since
+ * is entirely the game's call (GameDefinition.redactGame/isActionSecret);
+ * this applies it to both the state and the log, since
  * scrubbing only the state and shipping the raw log alongside it would leak
  * the same value straight back out of the action payloads.
  *
  * Always derives from `state`'s own current phase — an entry that was secret
  * when logged reads as revealed once the game moves on.
  *
- * Pure, like the rest of src/engine/. The caller (the `get-game-state` Edge
+ * Pure, like the rest of the framework. The caller (the `get-game-state` Edge
  * Function and the write-path functions' responses) is responsible for
  * making this the only view an opponent's client ever receives.
  */
 export function redactStateForPlayer(state: GameState, viewerId: string | null): RedactedGameState {
+  const game = definitionFor(state)
   const actionHistory: RedactedLoggedAction[] = state.actionHistory.map((entry) =>
     game.isActionSecret(entry, state, viewerId) ? { ...entry, action: { type: 'HIDDEN_ACTION', playerId: actionPlayerId(entry.action) } } : entry,
   )
@@ -109,7 +110,7 @@ export function applyRedactedGameStateDelta(previousActionHistory: LoggedAction[
 export function redactGameLog(events: GameEvent[], state: GameState, viewerId: string | null): GameEvent[] {
   return events.map((event) => {
     const entry = state.actionHistory[event.entryIndex]
-    if (!entry || event.redactedMessage === undefined || !game.isActionSecret(entry, state, viewerId)) return event
+    if (!entry || event.redactedMessage === undefined || !definitionFor(state).isActionSecret(entry, state, viewerId)) return event
     return { ...event, message: event.redactedMessage }
   })
 }

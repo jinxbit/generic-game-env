@@ -12,9 +12,7 @@
 // `nextLegalAction` (and `pickFor`) here too. Everything else in
 // src/test/supabaseStack/ is game-agnostic.
 
-import { applyAction } from '../../engine/applyAction.ts'
-import type { Action } from '../../engine/actions.ts'
-import type { GameState } from '../../engine/types.ts'
+import { applyAction, type Action, type GameState } from '@game-platform/sdk'
 import type { GameRow, GameSettings, PlayerRow } from '../../lib/dbTypes.ts'
 import { MAX_PICK, PICK_PHASE } from '../../game/rules.ts'
 

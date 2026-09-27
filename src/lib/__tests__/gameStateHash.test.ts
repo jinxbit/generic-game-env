@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { canonicalJson, hashGameStateView } from '../gameStateHash'
-import { newGame } from '../../engine/__tests__/helpers'
-import type { GameState } from '../../engine/types'
-
+import { newGame } from '@game-platform/unique-pick/testing'
+import type { GameState } from '@game-platform/sdk'
 // This file cares about serialisation, not about room configuration, so a
 // plain genesis of the example game is enough.
 const genesis: GameState = newGame({ players: 3 })

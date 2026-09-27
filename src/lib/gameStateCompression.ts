@@ -1,6 +1,5 @@
 import { gunzipFromBase64, gzipToBase64 } from './gzip.ts'
-import type { GameState } from '../engine/types.ts'
-
+import type { GameState } from '@game-platform/sdk'
 /**
  * Compressed encoding for `game_state.state`, applied only on the write path
  * that's exclusive to `ruleEnforcementEnabled` games — see

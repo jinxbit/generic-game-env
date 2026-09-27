@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { replayActions } from '../../engine/replay'
-import { act, newGame, pick } from '../../engine/__tests__/helpers'
+import { replayActions } from '@game-platform/sdk'
+import { act, newGame, pick } from '@game-platform/unique-pick/testing'
 import { remapGameStatePlayerIds } from '../duplicateGameState'
 
 describe('remapGameStatePlayerIds', () => {

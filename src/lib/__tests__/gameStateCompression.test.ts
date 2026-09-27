@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { act, newGame, pickAll } from '../../engine/__tests__/helpers'
-import type { GameState } from '../../engine/types'
+import { act, newGame, pickAll } from '@game-platform/unique-pick/testing'
+import type { GameState } from '@game-platform/sdk'
 import { compressGameStateForStorage, decompressGameStateFromStorage } from '../gameStateCompression'
 
 /** A few rounds into a 6-player game, so there's a realistic amount of repetitive JSON to compress. */

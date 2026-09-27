@@ -5,7 +5,7 @@
 // chatNotificationsEnabled`, default on); deliberately a
 // near-duplicate rather than a shared module, same as the other
 // push/Discord pairs in this repo: the delivery code differs and the rest is
-// small. The title comes from src/game/display.ts.
+// small. The title is the room's game's (../_shared/games.ts).
 //
 // Trigger: the *same* Supabase Database Webhook on `chat_messages` INSERT
 // that triggers notify-discord-chat can also target this function (Database
@@ -18,7 +18,7 @@
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import webpush from 'npm:web-push@3'
-import { GAME_TITLE } from '../../../src/game/display.ts'
+import { gameLabels } from '../_shared/games.ts'
 
 const BODY_PREVIEW_MAX = 200
 
@@ -27,6 +27,8 @@ interface GameRow {
   room_code: string
   name: string
   play_mode: string
+  /** Which registered game the room plays — names it in the notification. */
+  game_type: string
 }
 
 interface PlayerRow {
@@ -73,7 +75,7 @@ function previewBody(body: string): string {
 async function handleChatMessage(supabase: SupabaseClient, message: ChatMessageRow): Promise<Response> {
   if (!message.game_id) return new Response('site-wide chat, no notification', { status: 200 })
 
-  const { data: game } = await supabase.from('games').select('id, room_code, name, play_mode').eq('id', message.game_id).maybeSingle()
+  const { data: game } = await supabase.from('games').select('id, room_code, name, play_mode, game_type').eq('id', message.game_id).maybeSingle()
   if (!game || (game as GameRow).play_mode !== 'async') return new Response('not an async game', { status: 200 })
 
   const { data: players } = await supabase.from('players').select('id, user_id, display_name').eq('game_id', message.game_id)
@@ -107,7 +109,7 @@ async function handleChatMessage(supabase: SupabaseClient, message: ChatMessageR
   await Promise.allSettled(
     ((subscriptions ?? []) as (PushSubscriptionRow & { user_id: string })[]).map(async (sub) => {
       try {
-        await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, JSON.stringify({ title: GAME_TITLE, body, url }))
+        await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, JSON.stringify({ title: gameLabels(game_.game_type).title, body, url }))
       } catch (err) {
         // A 404/410 means the browser dropped the subscription — clean it up, same as notify-web-push.
         const status = (err as { statusCode?: number }).statusCode

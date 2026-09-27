@@ -29,7 +29,7 @@
 // RLS, same as every other notify-* function.
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
-import { GAME_TITLE } from '../../../src/game/display.ts'
+import { gameLabels } from '../_shared/games.ts'
 
 const WEBHOOK_URL_PATTERN = /^https:\/\/(?:discord\.com|discordapp\.com)\/api\/webhooks\/\d+\/[\w-]+$/
 
@@ -43,6 +43,8 @@ interface GameRow {
   room_code: string
   name: string
   play_mode: string
+  /** Which registered game the room plays — names it in the notification. */
+  game_type: string
 }
 
 interface PlayerRow {
@@ -101,7 +103,7 @@ async function sendDiscordNotification(webhookUrl: string, content: string): Pro
 async function handleChatMessage(supabase: SupabaseClient, message: ChatMessageRow): Promise<Response> {
   if (!message.game_id) return new Response('site-wide chat, no notification', { status: 200 })
 
-  const { data: game } = await supabase.from('games').select('id, room_code, name, play_mode').eq('id', message.game_id).maybeSingle()
+  const { data: game } = await supabase.from('games').select('id, room_code, name, play_mode, game_type').eq('id', message.game_id).maybeSingle()
   // Live players see the message over Realtime; hotseat has nobody remote to
   // ping — same async-only rule as every other notify-* function.
   if (!game || (game as GameRow).play_mode !== 'async') return new Response('not an async game', { status: 200 })
@@ -125,7 +127,7 @@ async function handleChatMessage(supabase: SupabaseClient, message: ChatMessageR
 
   const senderName = sender?.display_name ?? 'Someone'
   const game_ = game as GameRow
-  const content = `**${GAME_TITLE}** — **${senderName}** in ${roomText(game_.name, game_.room_code, gameUrlFor(game_.room_code))}: ${previewBody(message.body)}`
+  const content = `**${gameLabels(game_.game_type).title}** — **${senderName}** in ${roomText(game_.name, game_.room_code, gameUrlFor(game_.room_code))}: ${previewBody(message.body)}`
 
   await Promise.allSettled(
     recipients.map((player) => {

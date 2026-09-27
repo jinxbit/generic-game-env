@@ -3,8 +3,7 @@
 // is stored/queried, not the rules-engine's in-memory GameState shape. The
 // game_state.state column holds a serialized engine GameState.
 
-import type { PlayMode, GameState as EngineGameState } from '../engine/types.ts'
-import type { GameOptions } from '../game/types.ts'
+import type { PlayMode, GameState as EngineGameState } from '@game-platform/sdk'
 
 /**
  * Per-game, creation-time configuration — a single JSONB column
@@ -43,8 +42,14 @@ export interface GameSettings {
    * hiddenInformationEligibility.ts). Absent = false.
    */
   hiddenInformationEnabled: boolean
-  /** The game's own creation-time options (src/game/types.ts). Absent = the game's defaults. */
-  gameOptions?: GameOptions
+  /** The game's own creation-time options, opaque here — GameDefinition.normalizeOptions makes sense of them. Absent = the game's defaults. */
+  gameOptions?: unknown
+  /**
+   * The game's `rulesVersion` when the room was created, so genesis is always
+   * rebuilt under the rules the game was started with. Absent = the newest
+   * registered version.
+   */
+  rulesVersion?: number
 }
 
 /**
@@ -62,6 +67,8 @@ export interface GameRow {
   room_code: string
   /** Owner-chosen at creation (CreateGamePage.tsx); immutable afterward — enforced server-side by a trigger. */
   name: string
+  /** Which game the room plays — a registered GameDefinition.id (src/games/registry.ts). Immutable, enforced by the same trigger as `name`. */
+  game_type: string
   play_mode: PlayMode
   status: 'lobby' | 'active' | 'completed' | 'canceled'
   min_players: number

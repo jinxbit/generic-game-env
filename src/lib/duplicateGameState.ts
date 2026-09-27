@@ -7,8 +7,7 @@
 // without a live Supabase project — gameApi.ts's duplicateGameAsHotseat and
 // importGameExportAsHotseat are the callers.
 
-import type { GameState } from '../engine/types'
-
+import type { GameState } from '@game-platform/sdk'
 /**
  * Rewrites every player-id reference inside a GameState onto a new roster —
  * players[].id, activePlayerId, pendingPlayerIds, turnOrder, winnerPlayerIds,

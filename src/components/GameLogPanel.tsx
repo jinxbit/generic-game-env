@@ -1,6 +1,5 @@
 import { Fragment } from 'react'
-import { PLAYER_PLACEHOLDER } from '../engine/gameLog'
-import type { GameEvent } from '../engine/types'
+import { PLAYER_PLACEHOLDER, type GameEvent } from '@game-platform/sdk'
 import type { PlayerRow } from '../lib/dbTypes'
 
 /**

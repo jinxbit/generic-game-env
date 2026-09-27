@@ -17,13 +17,8 @@
 // acting player's own submission.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { resolveHistory } from '../../engine/historyFold.ts'
-import { toClientGameState, type RedactedGameState, type RedactedLoggedAction } from '../../engine/redaction.ts'
-import { applyInFlightOverlay, type InFlightOverlay } from '../../engine/inFlightOverlay.ts'
-import { extendReplay, replayActions } from '../../engine/replay.ts'
+import { resolveHistory, toClientGameState, applyInFlightOverlay, extendReplay, replayActions, type RedactedGameState, type RedactedLoggedAction, type InFlightOverlay, type Action, type LoggedAction, type GameState } from '@game-platform/sdk'
 import { hashGameStateView } from '../../lib/gameStateHash.ts'
-import type { Action, LoggedAction } from '../../engine/actions.ts'
-import type { GameState } from '../../engine/types.ts'
 import { buildGenesisState } from '../../lib/gameGenesis.ts'
 import type { GameSettings } from '../../lib/dbTypes.ts'
 import { createProductionStack, type ProductionStack } from '../supabaseStack/index.ts'

@@ -1,6 +1,6 @@
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { newGame, pickAll } from '../../engine/__tests__/helpers'
+import { newGame, pickAll } from '@game-platform/unique-pick/testing'
 import { MAX_ENTRIES, loadCachedGameState, saveCachedGameState } from '../gameStateCache'
 
 /** Reaches into the raw fake IndexedDB store to corrupt a single field of an already-saved entry — the only way to exercise loadCachedGameState's invalidation checks, since saveCachedGameState itself always writes a consistent entry. */

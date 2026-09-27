@@ -1,6 +1,5 @@
-import { game } from './game.ts'
+import { getGameDefinition } from './registry.ts'
 import type { GameState, LobbyState, PlayMode, Player } from './types.ts'
-import type { GameOptions } from '../game/types.ts'
 
 export interface PlayerSeed {
   id: string
@@ -11,18 +10,25 @@ export interface PlayerSeed {
 
 /**
  * Builds a game's genesis state: players seated in the given order (which
- * becomes `turnOrder`), then handed to the game's own setup
- * (GameDefinition.setup), which returns it `active` and ready for the first
- * move. No action is logged for this — genesis is a deterministic function
- * of its inputs, rebuilt on demand (src/lib/gameGenesis.ts).
+ * becomes `turnOrder`), options normalized by the game, then handed to the
+ * game's own setup (GameDefinition.setup), which returns it `active` and
+ * ready for the first move. No action is logged for this — genesis is a
+ * deterministic function of its inputs, rebuilt on demand.
+ *
+ * `rulesVersion` omitted means the newest registered version — right for a
+ * brand-new game. Rebuilding an existing game's genesis must pass the
+ * version it started with.
  */
 export function createNewGame(params: {
   gameId: string
+  gameType: string
+  rulesVersion?: number
   playMode: PlayMode
   players: PlayerSeed[]
   hiddenInformationEnabled?: boolean
-  options?: GameOptions
+  options?: unknown
 }): GameState {
+  const game = getGameDefinition(params.gameType, params.rulesVersion)
   const players: Player[] = params.players.map((seed) => ({
     id: seed.id,
     authUserId: seed.authUserId,
@@ -33,6 +39,8 @@ export function createNewGame(params: {
   }))
   const lobby: LobbyState = {
     gameId: params.gameId,
+    gameType: game.id,
+    rulesVersion: game.rulesVersion,
     playMode: params.playMode,
     status: 'lobby',
     hiddenInformationEnabled: params.hiddenInformationEnabled ?? false,
@@ -43,8 +51,9 @@ export function createNewGame(params: {
     turnOrder: players.map((p) => p.id),
     players,
     winnerPlayerIds: [],
+    options: game.normalizeOptions(params.options ?? game.defaultOptions),
     actionHistory: [],
     adminModeActive: false,
   }
-  return game.setup(lobby, params.options ?? game.defaultOptions)
+  return game.setup(lobby)
 }

@@ -10,7 +10,7 @@
 // it at a game it just played, and by ../productionSmoke/ and ../previewSeed/,
 // which point it at a live project.
 
-import type { GameState } from '../../engine/types.ts'
+import type { GameState } from '@game-platform/sdk'
 import type { ProductionGameFixture } from '../fixtures/productionGames/loadFixtures.ts'
 import { normalizeStateForComparison } from '../fixtures/productionGames/loadFixtures.ts'
 import type { EnforcedCallResult, ProductionStack } from './index.ts'

@@ -1,9 +1,8 @@
 // Data types for the example game, "Unique Pick".
 //
-// Everything in src/game/ is the pluggable game slot: replace it wholesale
-// to build a different game on this platform. The framework (src/engine/)
-// only ever touches these types through the GameDefinition contract in
-// ../engine/gameDefinition.ts — see src/game/README.md.
+// This package is laid out exactly like a standalone game repo: the platform
+// only ever touches these types through the GameDefinition contract from
+// @game-platform/sdk — see ../README.md.
 //
 // Unique Pick in one paragraph: every round, each player secretly picks a
 // number from 1 to MAX_PICK at the same time. Once everyone has picked, the
@@ -12,8 +11,8 @@
 // highest score after the last round (ties share the win).
 //
 // Keep this module pure data: no React, no Supabase, no I/O. It's imported by
-// the Edge Functions (supabase/functions/), so every relative import in the
-// graph must carry an explicit `.ts` extension.
+// the Edge Functions, so every relative import in the graph must carry an
+// explicit `.ts` extension.
 
 /**
  * Creation-time options for one game — stored in `games.settings.gameOptions`
@@ -60,5 +59,5 @@ export interface PickNumberAction {
   value: number
 }
 
-/** Every action this game defines. The framework adds its own (undo, redo, concede, admin mode) — see ../engine/actions.ts. */
+/** Every action this game defines. The framework adds its own (undo, redo, concede, admin mode). */
 export type GameAction = PickNumberAction

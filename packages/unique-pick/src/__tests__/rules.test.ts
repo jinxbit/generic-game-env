@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { applyAction } from '../../engine/applyAction'
-import type { LoggedAction } from '../../engine/actions'
-import { redactStateForPlayer } from '../../engine/redaction'
-import type { GameState } from '../../engine/types'
-import { act, newGame, pick, pickAll } from '../../engine/__tests__/helpers'
+import { applyAction, redactStateForPlayer, type LoggedAction, type GameState } from '@game-platform/sdk'
+import { act, newGame, pick, pickAll } from '@game-platform/unique-pick/testing'
 import { DEFAULT_GAME_OPTIONS, gameDefinition, MAX_PICK, MAX_ROUNDS_RANGE, normalizeGameOptions, PICK_PHASE, TARGET_SCORE_RANGE } from '../rules'
 
 const pickAction = (playerId: string, value: number) => ({ type: 'PICK_NUMBER' as const, playerId, value })

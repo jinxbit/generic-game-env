@@ -2,17 +2,14 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { PlayModeSelector } from '../components/PlayModeSelector'
-import { game as gameDefinition } from '../engine/game'
-import { GameOptionsEditor } from '../game/GameOptionsEditor'
-import type { GameOptions } from '../game/types'
+import { listGames, type PlayMode } from '@game-platform/sdk'
+import { gameUiFor } from '../games/ui'
 import { useAuth } from '../hooks/useAuth'
 import { useDisplayName } from '../hooks/useDisplayName'
 import { createGame, MAX_PLAYERS } from '../lib/gameApi'
 import { hiddenInformationAvailable as computeHiddenInformationAvailable } from '../lib/hiddenInformationEligibility'
 import { randomRoomName } from '../lib/randomRoomName'
 import { toAppError, type AppError } from '../lib/errors'
-import type { PlayMode } from '../engine/types'
-
 // Rule enforcement and hidden information are both on for every game
 // created through this page — there is no creator-facing opt-out. See
 // CLAUDE.md's "two write paths" section: the client-trusted path and
@@ -20,8 +17,6 @@ import type { PlayMode } from '../engine/types'
 // imports), so createGame()'s own defaults are unchanged.
 const RULE_ENFORCEMENT_ENABLED = true
 
-/** Seats the game allows, capped by how many distinct player colours there are. */
-const MAX_SEATS = Math.min(gameDefinition.maxPlayers, MAX_PLAYERS)
 
 export function CreateGamePage() {
   const { session, loading } = useAuth()
@@ -31,9 +26,27 @@ export function CreateGamePage() {
   const [name, setName] = useState(() => randomRoomName())
   const [playMode, setPlayMode] = useState<PlayMode>('async')
   const [skipHotseatPassGate, setSkipHotseatPassGate] = useState(true)
-  const [gameOptions, setGameOptions] = useState<GameOptions>(gameDefinition.defaultOptions)
+  // The deployment's registered games (src/games/registry.ts). With one, the
+  // picker below isn't shown at all — a single-game site.
+  const games = listGames()
+  const [gameType, setGameType] = useState(games[0].id)
+  const gameDefinition = games.find((g) => g.id === gameType) ?? games[0]
+  const gameUi = gameUiFor(gameDefinition.id)
+  /** Seats the game allows, capped by how many distinct player colours there are. */
+  const maxSeats = Math.min(gameDefinition.maxPlayers, MAX_PLAYERS)
+  const [gameOptions, setGameOptions] = useState<unknown>(gameDefinition.defaultOptions)
   const [minPlayersInput, setMinPlayersInput] = useState(String(gameDefinition.minPlayers))
-  const [maxPlayersInput, setMaxPlayersInput] = useState(String(MAX_SEATS))
+  const [maxPlayersInput, setMaxPlayersInput] = useState(String(maxSeats))
+
+  /** Switching games resets everything that belongs to the previous one. */
+  function chooseGame(id: string) {
+    const next = games.find((g) => g.id === id)
+    if (!next) return
+    setGameType(next.id)
+    setGameOptions(next.defaultOptions)
+    setMinPlayersInput(String(next.minPlayers))
+    setMaxPlayersInput(String(Math.min(next.maxPlayers, MAX_PLAYERS)))
+  }
   const [visibility, setVisibility] = useState<'public' | 'private'>('public')
   const [error, setError] = useState<AppError | null>(null)
   const [busy, setBusy] = useState(false)
@@ -41,12 +54,12 @@ export function CreateGamePage() {
   const minPlayers = Number(minPlayersInput)
   const maxPlayers = Number(maxPlayersInput)
   const minPlayersValid = /^\d+$/.test(minPlayersInput.trim()) && minPlayers >= gameDefinition.minPlayers
-  const maxPlayersValid = /^\d+$/.test(maxPlayersInput.trim()) && maxPlayers >= 1 && maxPlayers <= MAX_SEATS
+  const maxPlayersValid = /^\d+$/.test(maxPlayersInput.trim()) && maxPlayers >= 1 && maxPlayers <= maxSeats
   const playerCountValid = minPlayersValid && maxPlayersValid && maxPlayers >= minPlayers
   const playerCountError = !minPlayersValid
     ? `Min players must be a whole number of at least ${gameDefinition.minPlayers}.`
     : !maxPlayersValid
-      ? `Max players must be a whole number between 1 and ${MAX_SEATS}.`
+      ? `Max players must be a whole number between 1 and ${maxSeats}.`
       : maxPlayers < minPlayers
         ? `Max players can't be lower than min players.`
         : null
@@ -83,6 +96,7 @@ export function CreateGamePage() {
         userId: user.id,
         displayName,
         avatarUrl,
+        gameType: gameDefinition.id,
         gameOptions,
         skipHotseatPassGate,
         ruleEnforcementEnabled: RULE_ENFORCEMENT_ENABLED,
@@ -134,8 +148,29 @@ export function CreateGamePage() {
             Don&apos;t show a &quot;pass the device&quot; message every turn
           </label>
         )}
-        <h3 className="text-sm font-medium text-neutral-400">Game options</h3>
-        <GameOptionsEditor value={gameOptions} onChange={setGameOptions} />
+        {games.length > 1 && (
+          <label className="flex flex-col gap-1 text-sm text-neutral-400">
+            Game
+            <select
+              value={gameType}
+              onChange={(e) => chooseGame(e.target.value)}
+              className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-neutral-100"
+            >
+              {games.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.title}
+                </option>
+              ))}
+            </select>
+            {gameUi && <span className="text-xs text-neutral-500">{gameUi.tagline}</span>}
+          </label>
+        )}
+        {gameUi && (
+          <>
+            <h3 className="text-sm font-medium text-neutral-400">{gameDefinition.title} options</h3>
+            <gameUi.OptionsEditor value={gameOptions} onChange={setGameOptions} />
+          </>
+        )}
         <h3 className="text-sm font-medium text-neutral-400">Players</h3>
         <div className="flex gap-4">
           <label className="flex flex-col gap-1 text-sm text-neutral-400">

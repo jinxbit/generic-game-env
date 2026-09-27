@@ -1,4 +1,14 @@
-import type { GameAction } from '../game/types.ts'
+/**
+ * The shape every game-defined action shares. A game's own action union
+ * (e.g. `{ type: 'PICK_NUMBER'; playerId: string; value: number }`) is
+ * assignable to this. `playerId` is required: the server authorizes the
+ * submitter against it. The framework's own type names (CONCEDE,
+ * UNDO_ACTION, REDO_ACTION, SET_ADMIN_MODE, HIDDEN_ACTION) are reserved.
+ */
+export interface GameActionBase {
+  type: string
+  playerId: string
+}
 
 /**
  * A player gives up, at any point once the game is active — not tied to any
@@ -52,7 +62,9 @@ export interface SetAdminModeAction {
 /** The actions the framework itself understands, independent of the game being played. */
 export type FrameworkAction = ConcedeAction | UndoAction | RedoAction | SetAdminModeAction
 
-export type Action = GameAction | FrameworkAction
+export type Action = GameActionBase | FrameworkAction
+
+export const RESERVED_ACTION_TYPES: readonly string[] = ['CONCEDE', 'UNDO_ACTION', 'REDO_ACTION', 'SET_ADMIN_MODE', 'HIDDEN_ACTION']
 
 export function isFrameworkAction(action: Action): action is FrameworkAction {
   return action.type === 'CONCEDE' || action.type === 'UNDO_ACTION' || action.type === 'REDO_ACTION' || action.type === 'SET_ADMIN_MODE'

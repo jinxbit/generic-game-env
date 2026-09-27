@@ -1,41 +1,17 @@
-import type { GameState } from '../engine/types'
-import type { PlayerRow } from '../lib/dbTypes'
-import { MAX_PICK } from './rules'
-import type { GameAction } from './types'
+import type { GameViewProps, SeatInfo } from '@game-platform/sdk/ui'
+import { MAX_PICK } from './rules.ts'
+import type { GameAction, GameData, GameOptions } from './types.ts'
 
-/**
- * What the platform (GamePage.tsx) hands the game's own view. The contract a
- * replacement game's view must accept — everything else about how it looks
- * is up to the game.
- */
-export interface GameViewProps {
-  /** The state to render: live, or a past point while the viewer is reviewing history. */
-  state: GameState
-  /** Seated players' rows, for display names and colours. */
-  players: PlayerRow[]
-  /**
-   * Which seat this browser acts for, or null to render read-only (a
-   * spectator, someone reviewing history, or waiting on the hotseat hand-off).
-   * In hotseat and admin mode this follows whoever must act next, not the
-   * signed-in account.
-   */
-  myPlayerId: string | null
-  /** True while a submitted action is in flight — disable inputs. */
-  submitting: boolean
-  /** Submit one game action. The platform routes it to the right write path and shows any rejection. */
-  onAction: (action: GameAction) => void
-}
-
-function nameOf(players: PlayerRow[], id: string): string {
+function nameOf(players: SeatInfo[], id: string): string {
   return players.find((p) => p.id === id)?.display_name ?? 'Unknown'
 }
 
-function colorOf(players: PlayerRow[], id: string): string {
+function colorOf(players: SeatInfo[], id: string): string {
   return players.find((p) => p.id === id)?.color ?? '#737373'
 }
 
 /** The example game's board: a number picker, a scoreboard and the last reveal. */
-export function GameView({ state, players, myPlayerId, submitting, onAction }: GameViewProps) {
+export function GameView({ state, players, myPlayerId, submitting, onAction }: GameViewProps<GameData, GameOptions, GameAction>) {
   const { game, options } = state
   const lastRound = game.rounds[game.rounds.length - 1] ?? null
   const myPick = myPlayerId ? game.picks[myPlayerId] : null

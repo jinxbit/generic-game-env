@@ -15,8 +15,7 @@
 // simulated players are).
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { Action } from '../../engine/actions.ts'
-import type { GameState } from '../../engine/types.ts'
+import type { Action, GameState } from '@game-platform/sdk'
 import { buildGenesisState } from '../../lib/gameGenesis.ts'
 import type { GameSettings } from '../../lib/dbTypes.ts'
 import { encodeGameStateExport, decodeGameStateExport } from '../../lib/gameStateExport.ts'

@@ -4,8 +4,8 @@
 // the same way. myGamesView.ts and publicRoomsView.ts wrap these with their
 // own entry types.
 
-import type { GameStatus } from '../engine/types'
-import { describeGameOptions, describePhase, TURN_LABEL } from '../game/display'
+import type { GameStatus } from '@game-platform/sdk'
+import { findGameDefinition } from '@game-platform/sdk'
 import type { GameRow } from './dbTypes'
 
 /**
@@ -86,14 +86,20 @@ export function latestUpdatedAt(game: GameRow, gameStateUpdatedAt: string | null
 
 /**
  * What a game card should show in place of a blanket "In progress" — the
- * game's own label for its current phase (src/game/display.ts), read from
- * the cheap `game_state_meta` projection.
+ * game's own label for its current phase (GameDefinition.describePhase),
+ * read from the cheap `game_state_meta` projection. A game this deployment
+ * doesn't have registered degrades to "In progress" rather than failing.
  */
 export function describeGamePhase(game: GameRow, summary: GameStateSummary | null): string {
   if (game.status === 'canceled') return 'Canceled'
   if (!summary) return 'Waiting in lobby'
   if (summary.status === 'completed') return 'Finished'
-  return describePhase(summary.phase)
+  return findGameDefinition(game.game_type)?.describePhase(summary.phase) ?? 'In progress'
+}
+
+/** The game's display name for a room, or its raw id when this deployment doesn't have it registered. */
+export function gameTitleFor(game: Pick<GameRow, 'game_type'>): string {
+  return findGameDefinition(game.game_type)?.title ?? game.game_type
 }
 
 /**
@@ -104,6 +110,8 @@ export function describeGamePhase(game: GameRow, summary: GameStateSummary | nul
  * read it from.
  */
 export interface GameCardSummary {
+  /** Which game the room plays — always shown, since a site can host several. */
+  gameTitle: string
   playerRange: string | null
   optionsSummary: string | null
   /** E.g. "Round 3". */
@@ -116,9 +124,11 @@ export interface GameCardSummary {
  * GameCardSummary's doc comment).
  */
 export function buildGameCardSummary(game: GameRow, summary: GameStateSummary | null): GameCardSummary {
+  const definition = findGameDefinition(game.game_type, game.settings.rulesVersion)
   return {
+    gameTitle: gameTitleFor(game),
     playerRange: summary ? null : `${game.min_players}–${game.max_players} players`,
-    optionsSummary: summary ? null : describeGameOptions(game.settings.gameOptions),
-    turnLabel: summary ? `${TURN_LABEL} ${summary.turn}` : null,
+    optionsSummary: summary || !definition ? null : definition.describeOptions(definition.normalizeOptions(game.settings.gameOptions)),
+    turnLabel: summary ? `${definition?.turnLabel ?? 'Turn'} ${summary.turn}` : null,
   }
 }

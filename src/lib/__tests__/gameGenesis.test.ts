@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyAction } from '../../engine/applyAction'
-import { replayActions } from '../../engine/replay'
+import { applyAction, replayActions } from '@game-platform/sdk'
 import { DEFAULT_GAME_OPTIONS, PICK_PHASE } from '../../game/rules'
 import { buildGenesisState } from '../gameGenesis'
 import type { GameRow, GameSettings, PlayerRow } from '../dbTypes'

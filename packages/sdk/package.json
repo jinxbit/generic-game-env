@@ -1,0 +1,23 @@
+{
+  "name": "@game-platform/sdk",
+  "version": "0.1.0",
+  "description": "The game-agnostic rules framework and game contract for the game platform.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts",
+    "./ui": "./src/ui.ts"
+  },
+  "peerDependencies": {
+    "react": "^19"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@game-platform/unique-pick": "*"
+  }
+}

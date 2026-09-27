@@ -15,7 +15,7 @@
 // against the in-process stack, which is what keeps this file itself honest
 // in CI rather than only when it fails at 3am against production.
 
-import type { GameState } from '../../engine/types.ts'
+import type { GameState } from '@game-platform/sdk'
 import type { CompressedGameState } from '../../lib/gameStateCompression.ts'
 import { divergentStateFields, type ProductionGameFixture } from '../fixtures/productionGames/loadFixtures.ts'
 import { normalizeForComparison, replayFixtureThroughStack } from '../supabaseStack/replayFixture.ts'

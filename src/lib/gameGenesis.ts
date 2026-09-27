@@ -11,9 +11,12 @@
 // player) must resolve it once, before genesis, and persist the result into
 // `games.settings` — then read it from there here, so genesis stays a pure
 // function of the row.
+//
+// Which game's rules build it comes from the row too: `game_type`, at the
+// `settings.rulesVersion` pinned when the room was created. The game must be
+// registered (src/games/registry.ts) in whatever process calls this.
 
-import { createNewGame } from '../engine/createGame.ts'
-import type { GameState } from '../engine/types.ts'
+import { createNewGame, type GameState } from '@game-platform/sdk'
 import type { GameRow } from './dbTypes.ts'
 
 /**
@@ -35,6 +38,8 @@ export type GenesisPlayerInput = {
 export function buildGenesisState(game: GameRow, players: readonly GenesisPlayerInput[]): GameState {
   return createNewGame({
     gameId: game.id,
+    gameType: game.game_type,
+    rulesVersion: game.settings.rulesVersion,
     playMode: game.play_mode,
     players: players.map((p) => ({
       id: p.id,

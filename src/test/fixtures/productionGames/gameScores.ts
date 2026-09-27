@@ -9,8 +9,7 @@
 // returning `{}` if the new game has no notion of a score, in which case
 // sidecars just declare `winners`.
 
-import type { GameState } from '../../../engine/types.ts'
-
+import type { GameState } from '@game-platform/sdk'
 /** Final score per player id, as the end-of-game screen shows it. */
 export function finalScoresOf(state: GameState): Record<string, number> {
   return Object.fromEntries(state.players.map((player) => [player.id, state.game.scores[player.id] ?? 0]))

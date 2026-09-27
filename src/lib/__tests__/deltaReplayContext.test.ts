@@ -8,8 +8,8 @@
 // than silently producing a genesis that replays to the wrong state and turns
 // every cold open into a hash mismatch.
 import { describe, expect, it } from 'vitest'
-import { act, pickAll } from '../../engine/__tests__/helpers'
-import { replayActions } from '../../engine/replay'
+import { act, pickAll } from '@game-platform/unique-pick/testing'
+import { replayActions } from '@game-platform/sdk'
 import { buildDeltaReplayContextFromState } from '../deltaReplayContext'
 import { buildGenesisState } from '../gameGenesis'
 import type { GameRow, PlayerRow } from '../dbTypes'

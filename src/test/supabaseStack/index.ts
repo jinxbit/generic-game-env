@@ -22,12 +22,7 @@
 // available.
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import type { Action } from '../../engine/actions.ts'
-import { applyAction } from '../../engine/applyAction.ts'
-import { applyRedoAction, applyUndoAction } from '../../engine/undoRedo.ts'
-import { toClientGameState, type RedactedGameState, type RedactedGameStateDelta, type RedactedLoggedAction } from '../../engine/redaction.ts'
-import type { InFlightOverlay } from '../../engine/inFlightOverlay.ts'
-import type { GameState } from '../../engine/types.ts'
+import { applyAction, applyRedoAction, applyUndoAction, toClientGameState, type Action, type RedactedGameState, type RedactedGameStateDelta, type RedactedLoggedAction, type InFlightOverlay, type GameState } from '@game-platform/sdk'
 import type { GameRow, PlayerRow } from '../../lib/dbTypes.ts'
 import { decompressGameStateFromStorage, type StoredGameState } from '../../lib/gameStateCompression.ts'
 import { Database, type GameStateRow, type ProfileRow } from './database.ts'

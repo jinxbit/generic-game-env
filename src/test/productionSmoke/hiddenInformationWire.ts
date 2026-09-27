@@ -40,9 +40,7 @@
 // `revealedPick` below for the new game's secret.
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { applyAction } from '../../engine/applyAction.ts'
-import type { Action } from '../../engine/actions.ts'
-import type { GameState } from '../../engine/types.ts'
+import { applyAction, type Action, type GameState } from '@game-platform/sdk'
 import { buildGenesisState } from '../../lib/gameGenesis.ts'
 import { buildFixture, type ProductionGameFixture } from '../fixtures/productionGames/loadFixtures.ts'
 import { nextLegalAction, testGameRow, testGameSettings, testPlayers } from '../supabaseStack/sampleGame.ts'

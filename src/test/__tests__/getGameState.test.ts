@@ -16,13 +16,8 @@
 // resolves, both are revealed.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { buildGameLogFrom } from '../../engine/gameLog.ts'
-import { applyRedactedGameStateDelta, toClientGameState, type RedactedLoggedAction } from '../../engine/redaction.ts'
-import { applyInFlightOverlay, type InFlightOverlay } from '../../engine/inFlightOverlay.ts'
-import { extendReplay, replayActions } from '../../engine/replay.ts'
+import { buildGameLogFrom, applyRedactedGameStateDelta, toClientGameState, applyInFlightOverlay, extendReplay, replayActions, type RedactedLoggedAction, type InFlightOverlay, type LoggedAction, type GameState } from '@game-platform/sdk'
 import { hashGameStateView } from '../../lib/gameStateHash.ts'
-import type { LoggedAction } from '../../engine/actions.ts'
-import type { GameState } from '../../engine/types.ts'
 import { buildGenesisState } from '../../lib/gameGenesis.ts'
 import type { GameRow, GameSettings } from '../../lib/dbTypes.ts'
 import { createProductionStack, type ProductionStack } from '../supabaseStack/index.ts'

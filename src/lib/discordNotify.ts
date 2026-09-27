@@ -12,8 +12,7 @@
 
 // Also imported by supabase/functions/notify-discord-turn, so the message
 // format has one definition — this module is in the Edge Function graph:
-// keep the `.ts` extension on every relative import.
-import { GAME_TITLE, TURN_LABEL } from '../game/display.ts'
+// keep it free of app-only imports.
 
 const WEBHOOK_URL_PATTERN = /^https:\/\/(?:discord\.com|discordapp\.com)\/api\/webhooks\/\d+\/[\w-]+$/
 
@@ -35,9 +34,12 @@ export function discordUserIdFromIdentities(identities: { provider: string; id: 
 
 // The real pings are built by supabase/functions/notify-discord-turn with
 // this same function; the "Send test" button uses it too. Game-agnostic: the
-// title and turn label come from src/game/display.ts, the phase label (if
-// any) from the game's own describePhase.
+// title, turn label and phase label come from the game's own definition.
 export function turnNotificationMessage(params: {
+  /** The game's name (GameDefinition.title), or the site's for a message not about one game. */
+  title: string
+  /** What the turn number counts (GameDefinition.turnLabel), e.g. "Round". */
+  turnLabel: string
   displayName: string
   /** Discord snowflake ID to `@mention` (so the recipient is actually pinged), or null to fall back to the bold display name. */
   discordUserId: string | null
@@ -50,14 +52,14 @@ export function turnNotificationMessage(params: {
   /** Deep link to the game, or null if the SITE_URL Edge Function secret isn't set — falls back to the room code. */
   gameUrl: string | null
 }): string {
-  const details = [params.round === null ? null : `${TURN_LABEL} ${params.round}`, params.phase].filter((part): part is string => !!part)
+  const details = [params.round === null ? null : `${params.turnLabel} ${params.round}`, params.phase].filter((part): part is string => !!part)
   const detailText = details.length > 0 ? ` (${details.join(' · ')})` : ''
   // With a game link, the room name itself becomes the link instead of pasting
   // the raw URL below — without one, fall back to the room code on its own line.
   const roomName = params.gameUrl ? `[${params.roomName}](${params.gameUrl})` : params.roomName
   const fallback = params.gameUrl ? '' : `\nRoom \`${params.roomCode}\``
   const mention = params.discordUserId ? `<@${params.discordUserId}>` : `**${params.displayName}**`
-  return `**${GAME_TITLE}** — ${mention}, it's your turn in **${roomName}**${detailText}.${fallback}`
+  return `**${params.title}** — ${mention}, it's your turn in **${roomName}**${detailText}.${fallback}`
 }
 
 /**

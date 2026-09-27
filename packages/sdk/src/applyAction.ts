@@ -1,6 +1,6 @@
 import type { Action, LoggedAction } from './actions.ts'
 import { isFrameworkAction } from './actions.ts'
-import { game } from './game.ts'
+import { definitionFor } from './registry.ts'
 import type { ActionResult, GameState } from './types.ts'
 
 export type { ActionResult } from './types.ts'
@@ -13,8 +13,9 @@ export type { ActionResult } from './types.ts'
  * server enforce identical rules.
  *
  * Framework actions (concede, admin mode) are handled here; every other
- * action is handed to the game's own rules (GameDefinition.applyAction,
- * src/game/rules.ts).
+ * action is handed to the rules of the game the state belongs to
+ * (GameDefinition.applyAction, found by `state.gameType`/`rulesVersion` in
+ * ./registry.ts).
  *
  * Every accepted action is appended to the returned state's `actionHistory`
  * (event sourcing). Any forced single-option follow-up the action leaves
@@ -52,6 +53,7 @@ export function applyActionWithSteps(state: GameState, action: Action): { ok: tr
   for (let i = 0; ; i++) {
     const before = steps[steps.length - 1].after
     if (before.status !== 'active') break
+    const game = definitionFor(before)
     const forced = game.nextForcedAction(before)
     if (!forced) break
     if (i >= MAX_FORCED_STEPS) return { ok: false, error: 'Forced follow-up actions did not converge.' }
@@ -92,7 +94,7 @@ function dispatchAction(state: GameState, action: Action): ActionResult {
   if (state.status !== 'active') {
     return { ok: false, error: `Game is not active (status: ${state.status})` }
   }
-  return game.applyAction(state, action)
+  return definitionFor(state).applyAction(state, action)
 }
 
 /**
@@ -120,7 +122,7 @@ function applyConcede(state: GameState, playerId: string): ActionResult {
       state: { ...next, status: 'completed', phase: null, activePlayerId: null, pendingPlayerIds: [], winnerPlayerIds: remaining.map((p) => p.id) },
     }
   }
-  return { ok: true, state: game.onPlayerEliminated(next, playerId) }
+  return { ok: true, state: definitionFor(next).onPlayerEliminated(next, playerId) }
 }
 
 /** See SetAdminModeAction (./actions.ts). Allowed in any status; rejects a redundant flip. */

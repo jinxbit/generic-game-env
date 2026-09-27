@@ -3,7 +3,7 @@
 // owner/admin-override check, redaction of responses, and the game_state
 // compare-and-swap write, all in one place so the functions (each its own
 // independent deploy unit, per Supabase's `_shared/` convention) don't
-// duplicate them. Imports `src/engine/`/`src/game/`/`src/lib/` directly and
+// duplicate them. Imports `@game-platform/sdk`, the registered games and `src/lib/` directly and
 // unmodified: there is no rule-logic duplication between client and server.
 //
 // The Edge Runtime does NOT honor `sloppy-imports`: every relative import
@@ -12,13 +12,9 @@
 // need `with { type: 'json' }`. A missing extension only fails at deploy
 // time, not in CI.
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
-import { applyAction } from '../../../src/engine/applyAction.ts'
-import type { Action, LoggedAction } from '../../../src/engine/actions.ts'
-import { redoableTail } from '../../../src/engine/historyFold.ts'
-import { redactStateForPlayer, revealedGameStateView, toClientGameState, unredactedPrefix, type RedactedGameState, type RedactedGameStateDelta } from '../../../src/engine/redaction.ts'
-import { buildInFlightOverlay, needsInFlightOverlay } from '../../../src/engine/inFlightOverlay.ts'
+import './games.ts'
+import { applyAction, redoableTail, redactStateForPlayer, revealedGameStateView, toClientGameState, unredactedPrefix, buildInFlightOverlay, needsInFlightOverlay, type Action, type LoggedAction, type RedactedGameState, type RedactedGameStateDelta, type ActionResult, type GameState } from '@game-platform/sdk'
 import { hashGameStateView } from '../../../src/lib/gameStateHash.ts'
-import type { ActionResult, GameState } from '../../../src/engine/types.ts'
 import { buildGenesisState } from '../../../src/lib/gameGenesis.ts'
 import type { GameRow as FullGameRow, PlayerRow as FullPlayerRow } from '../../../src/lib/dbTypes.ts'
 import { compressGameStateForStorage, decompressGameStateFromStorage, type StoredGameState } from '../../../src/lib/gameStateCompression.ts'

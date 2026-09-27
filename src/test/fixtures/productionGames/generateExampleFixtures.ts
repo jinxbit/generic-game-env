@@ -21,10 +21,7 @@
 // Game-specific by nature: replacing src/game/ means replacing these scripts
 // (or deleting them and dropping in real exports instead — see ./README.md).
 
-import type { Action } from '../../../engine/actions.ts'
-import { applyAction } from '../../../engine/applyAction.ts'
-import type { GameState } from '../../../engine/types.ts'
-import { applyRedoAction, applyUndoAction } from '../../../engine/undoRedo.ts'
+import { applyAction, applyRedoAction, applyUndoAction, type Action, type GameState } from '@game-platform/sdk'
 import { buildGenesisState } from '../../../lib/gameGenesis.ts'
 import type { GameRow, GameSettings } from '../../../lib/dbTypes.ts'
 import { encodeGameStateExport } from '../../../lib/gameStateExport.ts'

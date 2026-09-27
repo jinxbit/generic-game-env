@@ -19,7 +19,7 @@
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import webpush from 'npm:web-push@3'
-import { GAME_TITLE, TURN_LABEL } from '../../../src/game/display.ts'
+import { gameLabels } from '../_shared/games.ts'
 import { type GameStateRow, justFinished, newlyPendingActorIds, phaseLabel, turnNumber } from '../_shared/turnNotify.ts'
 
 interface DatabaseWebhookPayload {
@@ -84,7 +84,7 @@ function pushServiceHost(endpoint: string): string {
 // Returns a lookup error to surface as a 500, so a broken subscriptions read
 // shows up as a failed invocation rather than as silence; the sends themselves
 // stay best-effort, with each one's outcome recorded on `log`.
-async function pushToUsers(supabase: SupabaseClient, userIds: string[], body: string, url: string, log: InvocationLog): Promise<string | null> {
+async function pushToUsers(supabase: SupabaseClient, userIds: string[], title: string, body: string, url: string, log: InvocationLog): Promise<string | null> {
   if (userIds.length === 0) return null
   const { data: subscriptions, error } = await supabase.from('push_subscriptions').select('user_id, endpoint, p256dh, auth').in('user_id', userIds)
   if (error) return `subscriptions lookup failed: ${error.message}`
@@ -97,7 +97,7 @@ async function pushToUsers(supabase: SupabaseClient, userIds: string[], body: st
       try {
         const res = await webpush.sendNotification(
           { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          JSON.stringify({ title: GAME_TITLE, body, url }),
+          JSON.stringify({ title, body, url }),
         )
         return { userId: sub.user_id, service, result: res.statusCode }
       } catch (err) {
@@ -118,7 +118,7 @@ async function pushToUsers(supabase: SupabaseClient, userIds: string[], body: st
 }
 
 async function handleGameFinished(supabase: SupabaseClient, gameId: string, log: InvocationLog): Promise<Response> {
-  const { data: game } = await supabase.from('games').select('room_code, name, play_mode').eq('id', gameId).maybeSingle()
+  const { data: game } = await supabase.from('games').select('room_code, name, play_mode, game_type').eq('id', gameId).maybeSingle()
   // Live players watched it end over Realtime; hotseat is one shared device.
   if (!game || game.play_mode !== 'async') return new Response('not an async game', { status: 200 })
 
@@ -128,6 +128,7 @@ async function handleGameFinished(supabase: SupabaseClient, gameId: string, log:
   const pushError = await pushToUsers(
     supabase,
     (players as { user_id: string }[]).map((p) => p.user_id),
+    gameLabels(game.game_type).title,
     `${game.name} has finished!`,
     gameUrlFor(game.room_code),
     log,
@@ -186,7 +187,7 @@ async function handle(req: Request, log: InvocationLog): Promise<Response> {
 
   const { data: game, error: gameError } = await supabase
     .from('games')
-    .select('room_code, name, play_mode')
+    .select('room_code, name, play_mode, game_type')
     .eq('id', gameId)
     .maybeSingle()
   if (gameError) return new Response(`game lookup failed: ${gameError.message}`, { status: 500 })
@@ -195,10 +196,11 @@ async function handle(req: Request, log: InvocationLog): Promise<Response> {
   if (!game || game.play_mode !== 'async') return new Response('not an async game', { status: 200 })
 
   const gameUrl = gameUrlFor(game.room_code)
-  const phase = phaseLabel(payload.record.state)
+  const phase = phaseLabel(payload.record.state, game.game_type)
+  const labels = gameLabels(game.game_type)
   const round = turnNumber(payload.record.state)
   // Same detail format as src/lib/discordNotify.ts's turnNotificationMessage.
-  const details = [round === null ? null : `${TURN_LABEL} ${round}`, phase].filter((part): part is string => !!part)
+  const details = [round === null ? null : `${labels.turnLabel} ${round}`, phase].filter((part): part is string => !!part)
   const detailText = details.length > 0 ? ` (${details.join(' · ')})` : ''
   log.phase = phase
   log.round = round
@@ -211,6 +213,7 @@ async function handle(req: Request, log: InvocationLog): Promise<Response> {
   const pushError = await pushToUsers(
     supabase,
     players.map((p) => p.user_id),
+    labels.title,
     body,
     gameUrl,
     log,

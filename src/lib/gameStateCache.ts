@@ -1,6 +1,5 @@
 import { compressGameStateForStorage, decompressGameStateFromStorage, type CompressedGameState } from './gameStateCompression'
-import type { GameState } from '../engine/types'
-
+import type { GameState } from '@game-platform/sdk'
 /**
  * IndexedDB-backed cache of the client-materialised `GameState`: without
  * it the only client-side persistence in the app is a sign-in redirect path

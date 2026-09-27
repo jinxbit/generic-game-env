@@ -13,7 +13,7 @@
 //
 // Request body: `{ gameId: string }` — no action payload, by design. The
 // response's `state` is redacted the same way apply-action's is.
-import { applyUndoAction } from '../../../src/engine/undoRedo.ts'
+import { applyUndoAction } from '@game-platform/sdk'
 import {
   buildGenesisState,
   corsHeaders,

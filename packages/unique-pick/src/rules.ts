@@ -1,15 +1,18 @@
 // Rules for the example game, "Unique Pick" (see ./types.ts for the rules in
-// one paragraph). This is the file to replace when building a new game: it
-// implements the GameDefinition contract (../engine/gameDefinition.ts) that
-// the framework calls into for everything game-specific.
+// one paragraph) — this package's `rules` entry point. It implements the
+// GameDefinition contract from @game-platform/sdk that the framework calls
+// into for everything game-specific.
 //
-// Pure and deterministic, like everything the engine runs — imported by the
-// Edge Functions too, so keep the `.ts` extensions on relative imports.
+// Pure and deterministic, like everything the framework runs — imported by
+// the Edge Functions too, so keep the `.ts` extensions on relative imports.
 
-import type { LoggedAction } from '../engine/actions.ts'
-import type { ActionDescription, GameDefinition } from '../engine/gameDefinition.ts'
-import type { ActionResult, GameState } from '../engine/types.ts'
+import type { ActionDescription, ActionResult, GameDefinition, GameState as PlatformGameState, LobbyState, LoggedAction } from '@game-platform/sdk'
 import type { GameAction, GameData, GameOptions, RoundResult } from './types.ts'
+
+export type { GameAction, GameData, GameOptions, PickNumberAction, RoundResult } from './types.ts'
+
+/** This game's GameState. */
+export type GameState = PlatformGameState<GameData, GameOptions>
 
 /** Picks range from 1 to this, inclusive. */
 export const MAX_PICK = 5
@@ -28,10 +31,12 @@ function clamp(value: number, range: { min: number; max: number }): number {
 }
 
 /** Fills in and clamps possibly-missing/out-of-range options from a stored settings row. */
-export function normalizeGameOptions(options: Partial<GameOptions> | null | undefined): GameOptions {
+export function normalizeGameOptions(raw: unknown): GameOptions {
+  const options = (typeof raw === 'object' && raw !== null ? raw : {}) as Partial<Record<keyof GameOptions, unknown>>
+  const numberOr = (value: unknown, fallback: number) => (typeof value === 'number' ? value : fallback)
   return {
-    targetScore: clamp(options?.targetScore ?? DEFAULT_GAME_OPTIONS.targetScore, TARGET_SCORE_RANGE),
-    maxRounds: clamp(options?.maxRounds ?? DEFAULT_GAME_OPTIONS.maxRounds, MAX_ROUNDS_RANGE),
+    targetScore: clamp(numberOr(options.targetScore, DEFAULT_GAME_OPTIONS.targetScore), TARGET_SCORE_RANGE),
+    maxRounds: clamp(numberOr(options.maxRounds, DEFAULT_GAME_OPTIONS.maxRounds), MAX_ROUNDS_RANGE),
   }
 }
 
@@ -92,7 +97,7 @@ function resolveRound(state: GameState): GameState {
   return beginRound(scored, state.turn + 1)
 }
 
-function applyPickNumber(state: GameState, playerId: string, value: number): ActionResult {
+function applyPickNumber(state: GameState, playerId: string, value: number): ActionResult<GameState> {
   const player = state.players.find((p) => p.id === playerId)
   if (!player) return { ok: false, error: `Unknown player: ${playerId}` }
   if (player.eliminated) return { ok: false, error: 'You are no longer in this game.' }
@@ -111,21 +116,30 @@ function applyPickNumber(state: GameState, playerId: string, value: number): Act
   return { ok: true, state: next.pendingPlayerIds.length === 0 ? resolveRound(next) : next }
 }
 
-export const gameDefinition: GameDefinition = {
-  defaultOptions: DEFAULT_GAME_OPTIONS,
+export const gameDefinition: GameDefinition<GameData, GameOptions, GameAction> = {
+  id: 'unique-pick',
+  rulesVersion: 1,
+  title: 'Unique Pick',
+  turnLabel: 'Round',
   minPlayers: 2,
   maxPlayers: 6,
 
-  setup(lobby, options) {
+  defaultOptions: DEFAULT_GAME_OPTIONS,
+  normalizeOptions: normalizeGameOptions,
+  describeOptions(options) {
+    return `First to ${options.targetScore} · max ${options.maxRounds} rounds`
+  },
+
+  setup(lobby: LobbyState<GameOptions>) {
     const game: GameData = {
       picks: {},
       scores: Object.fromEntries(lobby.players.map((p) => [p.id, 0])),
       rounds: [],
     }
-    return beginRound({ ...lobby, status: 'active', options: normalizeGameOptions(options), game }, 1)
+    return beginRound({ ...lobby, status: 'active', game }, 1)
   },
 
-  applyAction(state, action: GameAction) {
+  applyAction(state, action) {
     switch (action.type) {
       case 'PICK_NUMBER':
         return applyPickNumber(state, action.playerId, action.value)

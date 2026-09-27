@@ -93,12 +93,9 @@ export function GameOverviewCard({
 function GameCardSummaryLines({ summary, isFinished }: { summary: GameCardSummary; isFinished: boolean }) {
   const hasPregameInfo = summary.playerRange !== null || summary.optionsSummary !== null
 
-  if (!hasPregameInfo && summary.turnLabel === null) {
-    return null
-  }
-
   return (
     <div className="flex flex-col gap-0.5 text-xs text-neutral-500">
+      <span className="font-medium text-neutral-400">{summary.gameTitle}</span>
       {hasPregameInfo && (
         <span>
           {summary.playerRange}

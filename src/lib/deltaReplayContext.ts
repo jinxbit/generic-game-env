@@ -21,8 +21,7 @@
  */
 import { buildGenesisState } from './gameGenesis'
 import type { GameRow } from './dbTypes'
-import type { GameState } from '../engine/types'
-
+import type { GameState } from '@game-platform/sdk'
 /**
  * Everything `getGameStateRedacted` needs to rebuild a state from actions
  * rather than be handed one. Lives here rather than in gameApi.ts so it can be

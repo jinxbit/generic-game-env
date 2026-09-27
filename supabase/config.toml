@@ -146,3 +146,41 @@ orioledb_version = ""
 
 [experimental.pgdelta]
 enabled = true
+
+# Every Edge Function resolves the platform's packages (@game-platform/sdk and
+# each registered game — src/games/registry.ts) through one shared import map.
+# Add a [functions.<name>] block here for every new function;
+# src/test/__tests__/edgeFunctionImports.test.ts fails if one is missing.
+
+[functions.apply-action]
+import_map = "./functions/import_map.json"
+
+[functions.get-game-state]
+import_map = "./functions/import_map.json"
+
+[functions.notify-discord-chat]
+import_map = "./functions/import_map.json"
+
+[functions.notify-discord-lifecycle]
+import_map = "./functions/import_map.json"
+
+[functions.notify-discord-turn]
+import_map = "./functions/import_map.json"
+
+[functions.notify-web-push]
+import_map = "./functions/import_map.json"
+
+[functions.notify-web-push-chat]
+import_map = "./functions/import_map.json"
+
+[functions.notify-web-push-lifecycle]
+import_map = "./functions/import_map.json"
+
+[functions.redo-action]
+import_map = "./functions/import_map.json"
+
+[functions.start-game]
+import_map = "./functions/import_map.json"
+
+[functions.undo-action]
+import_map = "./functions/import_map.json"

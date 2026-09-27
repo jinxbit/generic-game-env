@@ -5,12 +5,13 @@
 //
 // `GameState` is an envelope: the fields every game shares (players, whose
 // turn it is, status, the action log) live here, and everything specific to
-// the game being played lives under `game`, typed by the pluggable game slot
-// (src/game/types.ts). The framework never reads inside `game`; it calls the
-// game's own rules through the GameDefinition contract (./gameDefinition.ts).
+// the game being played lives under `game` and `options`, typed by the game
+// package's own `TData`/`TOptions`. The framework never reads inside either;
+// it calls the game's rules through the GameDefinition contract
+// (./gameDefinition.ts), found by `gameType`/`rulesVersion` in the registry
+// (./registry.ts).
 
 import type { LoggedAction } from './actions.ts'
-import type { GameData, GameOptions } from '../game/types.ts'
 
 export type PlayMode = 'live' | 'async' | 'hotseat'
 
@@ -61,8 +62,17 @@ export interface GameEvent {
   adminMode?: boolean
 }
 
-export interface GameState {
+export interface GameState<TData = unknown, TOptions = unknown> {
   gameId: string
+  /** Which registered game this is — GameDefinition.id. Fixed at genesis. */
+  gameType: string
+  /**
+   * Which version of that game's rules the game was started under —
+   * GameDefinition.rulesVersion. Fixed at genesis; replay always uses exactly
+   * this version, so a rules change that isn't replay-compatible ships as a
+   * new version registered alongside the old one.
+   */
+  rulesVersion: number
   playMode: PlayMode
   status: GameStatus
   /**
@@ -96,12 +106,12 @@ export interface GameState {
   winnerPlayerIds: string[]
   /**
    * The game's creation-time options (games.settings.gameOptions), as
-   * normalized by the game's own setup — carried here so a running game and
+   * normalized by GameDefinition.normalizeOptions — carried here so a running game and
    * its export stay self-contained. Read these, not the `games` row.
    */
-  options: GameOptions
-  /** The game-specific state — owned entirely by src/game/. */
-  game: GameData
+  options: TOptions
+  /** The game-specific state — owned entirely by the game package. */
+  game: TData
   /**
    * Event sourcing: every action applyAction() has accepted, in order.
    * Empty at genesis (buildGenesisState, src/lib/gameGenesis.ts), which is
@@ -122,7 +132,7 @@ export interface GameState {
 }
 
 /** The framework envelope before the game's own setup has run — what GameDefinition.setup receives. */
-export type LobbyState = Omit<GameState, 'game' | 'options'>
+export type LobbyState<TOptions = unknown> = Omit<GameState<unknown, TOptions>, 'game'>
 
 /** The result of applying a single action. */
-export type ActionResult = { ok: true; state: GameState } | { ok: false; error: string }
+export type ActionResult<TState = GameState> = { ok: true; state: TState } | { ok: false; error: string }

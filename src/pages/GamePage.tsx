@@ -3,16 +3,8 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { ChatPanel } from '../components/ChatPanel'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { GameLogPanel } from '../components/GameLogPanel'
-import type { Action } from '../engine/actions'
-import { applyAction } from '../engine/applyAction'
-import { buildGameLog } from '../engine/gameLog'
-import { redactGameLog } from '../engine/redaction'
-import { replayActions } from '../engine/replay'
-import { currentActorId } from '../engine/turnOrder'
-import type { ActionResult, GameState as EngineGameState } from '../engine/types'
-import { applyRedoAction, applyUndoAction, resolveHistory } from '../engine/undoRedo'
-import { describeGameOptions, describePhase, TURN_LABEL } from '../game/display'
-import { GameView } from '../game/GameView'
+import { applyAction, buildGameLog, findGameDefinition, redactGameLog, replayActions, currentActorId, applyRedoAction, applyUndoAction, resolveHistory, type Action, type ActionResult, type GameState as EngineGameState } from '@game-platform/sdk'
+import { gameUiFor } from '../games/ui'
 import { useAuth } from '../hooks/useAuth'
 import { useIsAdmin } from '../hooks/useIsAdmin'
 import { useRefetchOnVisible } from '../hooks/useRefetchOnVisible'
@@ -80,7 +72,7 @@ function fetchGameState(game: GameRow, previous?: EngineGameState | null, replay
 /**
  * The in-game screen: the platform shell (header, menu, undo/redo, history
  * review, hotseat hand-off, admin mode, chat, log, room lifecycle) around the
- * game's own view (src/game/GameView.tsx). Everything game-specific is in the
+ * game's own view (its package's `view` entry, via src/games/ui.ts). Everything game-specific is in the
  * game slot; this file only knows the generic GameState envelope.
  */
 export function GamePage() {
@@ -664,6 +656,11 @@ export function GamePage() {
   if (!game) return <div className="p-8 text-neutral-400">Looking for room {roomCode}…</div>
 
   const menuItemClass = 'px-3 py-2 text-left hover:bg-neutral-800 disabled:opacity-50'
+  // The room's game, at the rules version it was created with. Null when this
+  // deployment doesn't host it — the room still loads, its view doesn't.
+  const gameDefinition = findGameDefinition(game.game_type, game.settings.rulesVersion)
+  const gameUi = gameUiFor(game.game_type)
+  const turnLabel = gameDefinition?.turnLabel ?? 'Turn'
   const reviewedEntry = reviewIndex !== null && reviewIndex > 0 ? (gameState?.actionHistory[reviewIndex - 1] ?? null) : null
 
   return (
@@ -910,7 +907,7 @@ export function GamePage() {
 
         {displayState && (
           <span className="text-sm text-neutral-400">
-            {displayState.status === 'completed' ? 'Game over' : `${TURN_LABEL} ${displayState.turn} · ${describePhase(displayState.phase)}`}
+            {displayState.status === 'completed' ? 'Game over' : `${turnLabel} ${displayState.turn} · ${gameDefinition?.describePhase(displayState.phase) ?? 'In progress'}`}
           </span>
         )}
 
@@ -972,7 +969,7 @@ export function GamePage() {
               Next →
             </button>
           </div>
-          <span>{reviewedEntry ? `${TURN_LABEL} ${reviewedEntry.turn} — action ${reviewIndex} of ${reviewMaxIndex}` : 'Start of game (before any actions)'}</span>
+          <span>{reviewedEntry ? `${turnLabel} ${reviewedEntry.turn} — action ${reviewIndex} of ${reviewMaxIndex}` : 'Start of game (before any actions)'}</span>
           <button type="button" onClick={() => setReviewIndex(null)} className="ml-auto rounded-md border border-amber-700/60 px-3 py-1 font-medium hover:border-amber-400">
             Back to live
           </button>
@@ -1006,8 +1003,12 @@ export function GamePage() {
             <dd>
               {game.min_players}–{game.max_players}
             </dd>
+            <dt className="text-neutral-500">Game</dt>
+            <dd>
+              {gameDefinition?.title ?? game.game_type} (rules v{game.settings.rulesVersion ?? '?'})
+            </dd>
             <dt className="text-neutral-500">Game options</dt>
-            <dd>{describeGameOptions(game.settings.gameOptions)}</dd>
+            <dd>{gameDefinition ? gameDefinition.describeOptions(gameDefinition.normalizeOptions(game.settings.gameOptions)) : '—'}</dd>
             <dt className="text-neutral-500">Skip hotseat pass gate</dt>
             <dd>{game.settings.skipHotseatPassGate ? 'Yes' : 'No'}</dd>
             <dt className="text-neutral-500">Config version</dt>
@@ -1059,15 +1060,20 @@ export function GamePage() {
           </button>
         </div>
       ) : (
-        displayState && (
-          <GameView
+        displayState &&
+        (gameUi ? (
+          <gameUi.View
             state={displayState}
             players={players}
             myPlayerId={isReviewingHistory || game.status === 'canceled' ? null : (me?.id ?? null)}
             submitting={submitting}
             onAction={(action) => void submitAction(action)}
           />
-        )
+        ) : (
+          <p className="rounded-md border border-neutral-800 p-4 text-sm text-neutral-400">
+            This room plays <span className="font-medium">{game.game_type}</span>, which this site doesn&apos;t host.
+          </p>
+        ))
       )}
 
       <GameLogPanel events={visibleGameLog} players={players} />

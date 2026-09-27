@@ -1,6 +1,7 @@
 import type { User } from '@supabase/supabase-js'
 import { useEffect, useState } from 'react'
 import { getDiscordWebhookUrl, saveDiscordWebhookUrl } from '../lib/gameApi'
+import { SITE } from '../site'
 import { discordUserIdFromIdentities, isDiscordWebhookUrl, sendDiscordNotification, turnNotificationMessage } from '../lib/discordNotify'
 
 /**
@@ -58,6 +59,8 @@ export function DiscordWebhookSettings({ user }: { user: User }) {
       await sendDiscordNotification(
         saved,
         turnNotificationMessage({
+          title: SITE.title,
+          turnLabel: 'Turn',
           displayName: 'Test Player',
           discordUserId: discordUserIdFromIdentities(user.identities),
           roomName: 'Test Room',

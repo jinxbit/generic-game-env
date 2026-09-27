@@ -26,9 +26,7 @@
 //   foreign key and strands the room.
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import type { Action } from '../../engine/actions.ts'
-import { toClientGameState, type RedactedGameState } from '../../engine/redaction.ts'
-import type { GameState } from '../../engine/types.ts'
+import { toClientGameState, type Action, type RedactedGameState, type GameState } from '@game-platform/sdk'
 import type { GameRow, PlayerRow } from '../../lib/dbTypes.ts'
 import { decompressGameStateFromStorage, type StoredGameState } from '../../lib/gameStateCompression.ts'
 import type { ProductionGameFixture } from '../fixtures/productionGames/loadFixtures.ts'

@@ -13,7 +13,7 @@
 // `/version.json` and the document always coming straight from the network.
 // Letting Workbox own navigation requests here would fight that mechanism.
 import { precacheAndRoute, cleanupOutdatedCaches, type PrecacheEntry } from 'workbox-precaching'
-import { GAME_TITLE } from './game/display.ts'
+import { SITE } from './site.ts'
 
 declare let self: ServiceWorkerGlobalScope & { __WB_MANIFEST: (string | PrecacheEntry)[] }
 
@@ -32,7 +32,7 @@ interface TurnPushPayload {
 }
 
 self.addEventListener('push', (event: PushEvent) => {
-  let payload: TurnPushPayload = { title: GAME_TITLE, body: "It's your turn.", url: '/' }
+  let payload: TurnPushPayload = { title: SITE.title, body: "It's your turn.", url: '/' }
   try {
     if (event.data) payload = { ...payload, ...event.data.json() }
   } catch {

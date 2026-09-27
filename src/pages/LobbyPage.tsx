@@ -5,10 +5,9 @@ import { useDisplayName } from '../hooks/useDisplayName'
 import { useIsAdmin } from '../hooks/useIsAdmin'
 import { ChatPanel } from '../components/ChatPanel'
 import { ErrorBanner } from '../components/ErrorBanner'
-import { game as gameDefinition } from '../engine/game'
-import { describeGameOptions } from '../game/display'
-import { GameOptionsEditor } from '../game/GameOptionsEditor'
-import { normalizeGameOptions } from '../game/rules'
+import { findGameDefinition } from '@game-platform/sdk'
+import { gameUiFor } from '../games/ui'
+import { gameTitleFor } from '../lib/gameCardView'
 import { formatUnreadBadge, isChatEnabled } from '../lib/chatApi'
 import { setPendingRedirect } from '../lib/pendingRedirect'
 import {
@@ -29,9 +28,6 @@ import {
 import { allPlayersReady, canStartGame, isPlayerReady } from '../lib/roomReadiness'
 import { toAppError, type AppError } from '../lib/errors'
 import type { GameRow, GameSettings, PlayerRow } from '../lib/dbTypes'
-
-/** Seats the game allows, capped by how many distinct player colours there are. */
-const MAX_SEATS = Math.min(gameDefinition.maxPlayers, MAX_PLAYERS)
 
 export function LobbyPage() {
   const { roomCode } = useParams<{ roomCode: string }>()
@@ -163,11 +159,20 @@ export function LobbyPage() {
   }
 
   const user = session.user
+  // The room's game, at the rules version pinned when it was created. Null
+  // when this deployment doesn't host that game (e.g. it was removed from
+  // src/games/registry.ts): the room can still be viewed and deleted, just
+  // not configured or started.
+  const gameDefinition = findGameDefinition(game.game_type, game.settings.rulesVersion)
+  const gameUi = gameUiFor(game.game_type)
+  /** Seats the game allows, capped by how many distinct player colours there are. */
+  const maxSeats = Math.min(gameDefinition?.maxPlayers ?? MAX_PLAYERS, MAX_PLAYERS)
+  const minSeats = gameDefinition?.minPlayers ?? 1
   const me = players.find((p) => p.user_id === user.id) ?? null
   const isSeated = me !== null
   const isCreator = game.created_by === user.id
   const isHotseat = game.play_mode === 'hotseat'
-  const canStart = isCreator && canStartGame(game, players)
+  const canStart = isCreator && gameDefinition !== null && canStartGame(game, players)
   const canAddPlayer = isHotseat && isCreator && game.status === 'lobby' && players.length < game.max_players
   // Owner-only lifecycle actions (RLS is the real guard; these just decide
   // what to render). Admins bypass both the ownership and status
@@ -175,7 +180,7 @@ export function LobbyPage() {
   const canDelete = (isCreator && (game.status === 'lobby' || game.status === 'canceled')) || isAdmin
   // Configuration editing: Owner-only, and only pre-start — the
   // config-versioning trigger rejects it once the room isn't lobby.
-  const canEditConfig = isCreator && game.status === 'lobby'
+  const canEditConfig = isCreator && game.status === 'lobby' && gameDefinition !== null
   // Non-host seated players can unjoin while the room hasn't started; the
   // host leaves by deleting the room instead (see canDelete below), since
   // removing their own row would orphan it.
@@ -350,8 +355,8 @@ export function LobbyPage() {
 
   const draftMinPlayers = Number(draftMinPlayersInput)
   const draftMaxPlayers = Number(draftMaxPlayersInput)
-  const draftMinPlayersValid = /^\d+$/.test(draftMinPlayersInput.trim()) && draftMinPlayers >= gameDefinition.minPlayers
-  const draftMaxPlayersValid = /^\d+$/.test(draftMaxPlayersInput.trim()) && draftMaxPlayers >= 1 && draftMaxPlayers <= MAX_SEATS
+  const draftMinPlayersValid = /^\d+$/.test(draftMinPlayersInput.trim()) && draftMinPlayers >= minSeats
+  const draftMaxPlayersValid = /^\d+$/.test(draftMaxPlayersInput.trim()) && draftMaxPlayers >= 1 && draftMaxPlayers <= maxSeats
   const draftConfigValid =
     draftSettings !== null &&
     draftMinPlayersValid &&
@@ -359,9 +364,9 @@ export function LobbyPage() {
     draftMaxPlayers >= draftMinPlayers &&
     draftMaxPlayers >= players.length
   const draftPlayerCountError = !draftMinPlayersValid
-    ? `Min players must be a whole number of at least ${gameDefinition.minPlayers}.`
+    ? `Min players must be a whole number of at least ${minSeats}.`
     : !draftMaxPlayersValid
-      ? `Max players must be a whole number between 1 and ${MAX_SEATS}.`
+      ? `Max players must be a whole number between 1 and ${maxSeats}.`
       : draftMaxPlayers < draftMinPlayers
         ? `Max players can't be lower than min players.`
         : draftMaxPlayers < players.length
@@ -414,7 +419,8 @@ export function LobbyPage() {
         </div>
         <div className="flex flex-col gap-1">
           <p className="text-neutral-400">
-            {game.play_mode} · {players.length}/{game.max_players} players · {describeGameOptions(game.settings.gameOptions)}
+            {gameTitleFor(game)} · {game.play_mode} · {players.length}/{game.max_players} players
+            {gameDefinition && <> · {gameDefinition.describeOptions(gameDefinition.normalizeOptions(game.settings.gameOptions))}</>}
           </p>
           <p className="text-sm text-neutral-500">
             {game.visibility === 'public' ? 'Public — listed on the Public rooms screen' : 'Private — only reachable via this room’s link/code'}
@@ -489,13 +495,15 @@ export function LobbyPage() {
           </div>
           {draftPlayerCountError && <p className="text-sm text-red-400">{draftPlayerCountError}</p>}
 
-          <div>
-            <h3 className="mb-2 text-sm font-medium text-neutral-400">Game options</h3>
-            <GameOptionsEditor
-              value={normalizeGameOptions(draftSettings.gameOptions)}
-              onChange={(gameOptions) => setDraftSettings({ ...draftSettings, gameOptions })}
-            />
-          </div>
+          {gameDefinition && gameUi && (
+            <div>
+              <h3 className="mb-2 text-sm font-medium text-neutral-400">{gameDefinition.title} options</h3>
+              <gameUi.OptionsEditor
+                value={gameDefinition.normalizeOptions(draftSettings.gameOptions)}
+                onChange={(gameOptions) => setDraftSettings({ ...draftSettings, gameOptions })}
+              />
+            </div>
+          )}
 
           <div className="flex gap-2">
             <button

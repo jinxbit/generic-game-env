@@ -7,7 +7,8 @@
 // Game-agnostic: "whose turn" is the game-maintained `pendingPlayerIds`
 // (src/engine/types.ts — every player who may act right now, sequential or
 // simultaneous), diffed across the write. Nothing here knows which game is
-// being played beyond its display strings (src/game/display.ts).
+// being played beyond its phase label (GameDefinition.describePhase, looked
+// up by the room's `game_type`).
 //
 // Works from the webhook payload's *stored* row, not a full GameState: a
 // rule-enforced game stores its state gzipped under `__gz` with only
@@ -17,7 +18,8 @@
 // engine's own pendingActorIds() (src/engine/turnOrder.ts) on both
 // encodings — keep the two in sync; the test fails if they aren't.
 
-import { describePhase } from '../../../src/game/display.ts'
+import { findGameDefinition } from '@game-platform/sdk'
+import './games.ts'
 
 /** The fields of GameState these functions read — all in a compressed row's plaintext. */
 export interface GameState {
@@ -58,11 +60,12 @@ export function justFinished(oldState: GameState, newState: GameState): boolean 
 
 /**
  * The game's own label for the current phase (e.g. "Picking"), for the ping
- * text — or null when the game has no phase to name or isn't active.
+ * text — or null when the game has no phase to name, isn't active, or isn't
+ * registered in this deployment.
  */
-export function phaseLabel(state: GameState): string | null {
+export function phaseLabel(state: GameState, gameType: string): string | null {
   if (state.status !== 'active' || !state.phase) return null
-  return describePhase(state.phase)
+  return findGameDefinition(gameType)?.describePhase(state.phase) ?? null
 }
 
 /** The turn/round number to show in the ping, or null outside an active game. */

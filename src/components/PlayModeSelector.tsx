@@ -1,5 +1,4 @@
-import type { PlayMode } from '../engine/types'
-
+import type { PlayMode } from '@game-platform/sdk'
 const OPTIONS: { value: PlayMode; label: string; description: string }[] = [
   { value: 'async', label: 'Play by turn', description: 'No need to be online together — play whenever it\'s your turn.' },
   { value: 'hotseat', label: 'Hotseat', description: 'Everyone in one room, sharing a single device.' },

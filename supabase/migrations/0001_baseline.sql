@@ -161,6 +161,8 @@ create policy "users can update their own profile"
 --
 -- One row per room. `room_code` is the short code/link players join by;
 -- `name` is chosen by the owner (created_by) at creation and immutable.
+-- `game_type` says which game the room plays (a registered GameDefinition.id,
+-- src/games/registry.ts) — opaque to SQL, and immutable like `name`.
 -- `visibility = 'public'` lists the room on the Public Rooms screen; a
 -- private room is reachable only via its code/link. Every games row is
 -- readable by any signed-in user (that is how join-by-code works).
@@ -183,6 +185,7 @@ create table if not exists public.games (
   id uuid primary key default gen_random_uuid(),
   room_code text not null unique,
   name text not null,
+  game_type text not null,
   play_mode text not null check (play_mode in ('live', 'async', 'hotseat')),
   status text not null default 'lobby',
   visibility text not null default 'private' check (visibility in ('public', 'private')),
@@ -194,13 +197,16 @@ create table if not exists public.games (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint games_status_check check (status in ('lobby', 'active', 'completed', 'canceled')),
-  constraint games_name_length check (char_length(btrim(name)) between 1 and 60)
+  constraint games_name_length check (char_length(btrim(name)) between 1 and 60),
+  constraint games_game_type_format check (game_type ~ '^[a-z0-9][a-z0-9-]{0,63}$')
 );
 
 comment on table public.games is
   'One row per room. room_code is the short code players use to join; name is owner-chosen and immutable.';
 comment on column public.games.name is
-  'Owner-chosen at creation, immutable afterward (games_enforce_name_immutable trigger).';
+  'Owner-chosen at creation, immutable afterward (games_enforce_name_immutable trigger, which also guards game_type).';
+comment on column public.games.game_type is
+  'Which game the room plays: a GameDefinition.id registered in the app (src/games/registry.ts). Immutable (games_enforce_name_immutable trigger).';
 comment on column public.games.visibility is
   'public rooms are listed on the Public Rooms screen; private rooms are reachable only via their room code/link. Owner-only to change.';
 comment on column public.games.settings is
@@ -219,12 +225,15 @@ create trigger games_set_updated_at
   before update on public.games
   for each row execute function public.set_updated_at();
 
--- Room name is immutable once created.
+-- Room name and game type are immutable once created.
 create or replace function public.enforce_game_name_immutable()
 returns trigger
 language plpgsql
 as $$
 begin
+  if old.game_type is distinct from new.game_type then
+    raise exception 'A room''s game cannot be changed after creation';
+  end if;
   raise exception 'Room name cannot be changed after creation';
 end;
 $$;
@@ -233,7 +242,7 @@ drop trigger if exists games_enforce_name_immutable on public.games;
 create trigger games_enforce_name_immutable
   before update on public.games
   for each row
-  when (old.name is distinct from new.name)
+  when (old.name is distinct from new.name or old.game_type is distinct from new.game_type)
   execute function public.enforce_game_name_immutable();
 
 -- Legal status transitions, enforced whichever client/policy is writing.

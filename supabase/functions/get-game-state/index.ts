@@ -28,7 +28,7 @@
 // `sinceActionIndex` and gets back only what's new (respondWithState in
 // ../_shared/gameEnforcement.ts). Anything inconsistent just costs one full
 // response rather than a wrong splice.
-import { redactStateForPlayer, revealedGameStateView } from '../../../src/engine/redaction.ts'
+import { redactStateForPlayer, revealedGameStateView } from '@game-platform/sdk'
 import { canReadGameState, corsHeaders, getCallerUserId, jsonResponse, loadGameContext, respondWithState, serviceRoleClient } from '../_shared/gameEnforcement.ts'
 
 interface GetGameStateRequest {

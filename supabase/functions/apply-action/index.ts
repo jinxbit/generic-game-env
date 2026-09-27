@@ -14,7 +14,7 @@
 // the acting player's own submission would otherwise be the easiest way to
 // see what the game keeps secret, since it hands back the very state the
 // action just produced. See redactedResponseState.
-import type { Action } from '../../../src/engine/actions.ts'
+import type { Action } from '@game-platform/sdk'
 import {
   applyActionEnforced,
   corsHeaders,
@@ -78,7 +78,12 @@ Deno.serve(async (req) => {
       return jsonResponse(403, { ok: false, error: 'Only the room owner or an admin may toggle admin mode.' })
     }
   } else {
-    if (!isAuthorizedToActAs(ctx, callerUserId, action.playerId)) {
+    // Client-supplied: every other action must name the seat it acts for.
+    const playerId: unknown = action.playerId
+    if (typeof playerId !== 'string') {
+      return jsonResponse(400, { ok: false, error: 'The action must name the player it is for (playerId).' })
+    }
+    if (!isAuthorizedToActAs(ctx, callerUserId, playerId)) {
       return jsonResponse(403, { ok: false, error: "You may not submit an action on another player's behalf." })
     }
     // Discarding another player's undone action via a branching submission
@@ -88,7 +93,7 @@ Deno.serve(async (req) => {
     // play, not a takeover.
     const ownerOverrideAvailable = ctx.isOwnerOrAdmin && Boolean(ctx.gameState.state.adminModeActive)
     const isHotseat = ctx.game.play_mode === 'hotseat'
-    if (!isHotseat && requiresOwnerOverride(ctx.gameState.state.actionHistory, action.playerId) && !ownerOverrideAvailable) {
+    if (!isHotseat && requiresOwnerOverride(ctx.gameState.state.actionHistory, playerId) && !ownerOverrideAvailable) {
       return jsonResponse(403, {
         ok: false,
         error: "Submitting this action would discard another player's undone move — only the room owner or an admin, with room admin mode on, may do that.",

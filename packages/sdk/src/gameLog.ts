@@ -1,6 +1,6 @@
-import type { Action, LoggedAction } from './actions.ts'
+import { isFrameworkAction, type Action, type LoggedAction } from './actions.ts'
 import { applyActionWithSteps } from './applyAction.ts'
-import { game } from './game.ts'
+import { definitionFor } from './registry.ts'
 import { replayActions } from './replay.ts'
 import type { GameEvent, GameState } from './types.ts'
 
@@ -18,6 +18,10 @@ interface DraftEvent {
 }
 
 function describeStep(action: Action, before: GameState, after: GameState): DraftEvent[] {
+  if (!isFrameworkAction(action)) {
+    const description = definitionFor(before).describeAction(action, before, after)
+    return [{ playerId: action.playerId, message: description.message, redactedMessage: description.redactedMessage }]
+  }
   switch (action.type) {
     case 'CONCEDE':
       return [{ playerId: action.playerId, message: `${PLAYER_PLACEHOLDER} conceded.` }]
@@ -28,10 +32,6 @@ function describeStep(action: Action, before: GameState, after: GameState): Draf
     case 'SET_ADMIN_MODE': {
       const onOff = action.enabled ? 'on' : 'off'
       return [{ playerId: action.playerId, message: action.playerId ? `${PLAYER_PLACEHOLDER} turned admin mode ${onOff}.` : `Admin mode turned ${onOff}.` }]
-    }
-    default: {
-      const description = game.describeAction(action, before, after)
-      return [{ playerId: action.playerId, message: description.message, redactedMessage: description.redactedMessage }]
     }
   }
 }

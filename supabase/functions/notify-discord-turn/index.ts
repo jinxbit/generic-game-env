@@ -33,7 +33,7 @@
 // a plain name in a webhook message doesn't actually notify anyone.
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
-import { GAME_TITLE } from '../../../src/game/display.ts'
+import { gameLabels } from '../_shared/games.ts'
 import { discordUserIdFromIdentities, turnNotificationMessage } from '../../../src/lib/discordNotify.ts'
 import { type GameStateRow, justFinished, newlyPendingActorIds, phaseLabel, turnNumber } from '../_shared/turnNotify.ts'
 
@@ -120,7 +120,7 @@ function roomText(name: string, roomCode: string, url: string | null): string {
 }
 
 async function handleGameFinished(supabase: SupabaseClient, gameId: string, log: InvocationLog): Promise<Response> {
-  const { data: game } = await supabase.from('games').select('room_code, name, play_mode').eq('id', gameId).maybeSingle()
+  const { data: game } = await supabase.from('games').select('room_code, name, play_mode, game_type').eq('id', gameId).maybeSingle()
   // Live players watched it end over Realtime; hotseat is one shared device.
   // Same async-only rule as the turn ping below.
   if (!game || game.play_mode !== 'async') return new Response('not an async game', { status: 200 })
@@ -136,7 +136,7 @@ async function handleGameFinished(supabase: SupabaseClient, gameId: string, log:
       players.map((p: { user_id: string }) => p.user_id),
     )
 
-  const message = `**${GAME_TITLE}** — ${roomText(game.name, game.room_code, gameUrlFor(game.room_code))} has finished!`
+  const message = `**${gameLabels(game.game_type).title}** — ${roomText(game.name, game.room_code, gameUrlFor(game.room_code))} has finished!`
   const webhookByUserId = new Map(((profiles ?? []) as { user_id: string; discord_webhook_url: string | null }[]).map((p) => [p.user_id, p.discord_webhook_url]))
   log.sends = await Promise.all(
     (players as { user_id: string }[]).map(async (player) => ({
@@ -197,7 +197,7 @@ async function handle(req: Request, log: InvocationLog): Promise<Response> {
 
   const { data: game, error: gameError } = await supabase
     .from('games')
-    .select('room_code, name, play_mode')
+    .select('room_code, name, play_mode, game_type')
     .eq('id', gameId)
     .maybeSingle()
   if (gameError) return new Response(`game lookup failed: ${gameError.message}`, { status: 500 })
@@ -206,7 +206,8 @@ async function handle(req: Request, log: InvocationLog): Promise<Response> {
   if (!game || game.play_mode !== 'async') return new Response('not an async game', { status: 200 })
 
   const gameUrl = gameUrlFor(game.room_code)
-  const phase = phaseLabel(payload.record.state)
+  const phase = phaseLabel(payload.record.state, game.game_type)
+  const labels = gameLabels(game.game_type)
   const round = turnNumber(payload.record.state)
   log.phase = phase
   log.round = round
@@ -245,6 +246,8 @@ async function handle(req: Request, log: InvocationLog): Promise<Response> {
       const outcome = await sendDiscordNotification(
         webhookUrl,
         turnNotificationMessage({
+          title: labels.title,
+          turnLabel: labels.turnLabel,
           displayName: player.display_name,
           discordUserId,
           roomName: game.name,

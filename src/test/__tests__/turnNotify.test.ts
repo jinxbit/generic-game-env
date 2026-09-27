@@ -15,12 +15,7 @@
 // players the engine's pendingActorIds() newly owes a turn.
 
 import { describe, expect, it } from 'vitest'
-import type { Action } from '../../engine/actions.ts'
-import { applyAction } from '../../engine/applyAction.ts'
-import { createNewGame } from '../../engine/createGame.ts'
-import type { ActionResult, GameState } from '../../engine/types.ts'
-import { applyRedoAction, applyUndoAction } from '../../engine/undoRedo.ts'
-import { pendingActorIds as enginePendingActorIds } from '../../engine/turnOrder.ts'
+import { applyAction, createNewGame, applyRedoAction, applyUndoAction, pendingActorIds as enginePendingActorIds, type Action, type ActionResult, type GameState } from '@game-platform/sdk'
 import { describePhase } from '../../game/display.ts'
 import { compressGameStateForStorage } from '../../lib/gameStateCompression.ts'
 import { type GameStateRow, justFinished, newlyPendingActorIds, phaseLabel, turnNumber } from '../../../supabase/functions/_shared/turnNotify.ts'

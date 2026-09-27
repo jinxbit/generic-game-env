@@ -18,11 +18,7 @@ import type {
 import type { MyGameEntry } from './myGamesView'
 import type { PublicRoomEntry } from './publicRoomsView'
 import { resolveChatNotificationsEnabled } from './chatNotificationPreference'
-import type { GameState as EngineGameState, GameStatus, PlayMode } from '../engine/types'
-import type { GameOptions } from '../game/types'
-import type { Action } from '../engine/actions'
-import { applyRedactedGameStateDelta, toClientGameState, type RedactedGameState, type RedactedGameStateDelta, type RedactedLoggedAction } from '../engine/redaction'
-import type { InFlightOverlay } from '../engine/inFlightOverlay'
+import { applyRedactedGameStateDelta, getGameDefinition, toClientGameState, type GameState as EngineGameState, type GameStatus, type PlayMode, type Action, type RedactedGameState, type RedactedGameStateDelta, type RedactedLoggedAction, type InFlightOverlay } from '@game-platform/sdk'
 import type { DeltaReplayContext } from './deltaReplayContext'
 import { applyReplayDelta, deriveBaseFromView, type ReplayDeltaFailure, type ReplayDeltaResponse } from './replayDelta'
 
@@ -168,8 +164,10 @@ export async function createGame(params: {
   avatarUrl: string | null
   minPlayers?: number
   maxPlayers?: number
+  /** Which registered game the room plays (GameDefinition.id) — its newest rules version is pinned into the settings. */
+  gameType: string
   /** Game-specific creation-time options (GameSettings.gameOptions); the game's defaults when omitted. */
-  gameOptions?: GameOptions
+  gameOptions?: unknown
   /** Hotseat only: skip the "pass the device" confirmation gate between local players' turns (see GamePage.tsx). Ignored for live/async. Defaults to false (gate shown) when omitted; CreateGamePage.tsx's checkbox defaults to checked (true). */
   skipHotseatPassGate?: boolean
   /** Opt in to server-side rule enforcement for this game (see GameSettings.ruleEnforcementEnabled). Defaults to false when omitted, so a caller that doesn't care gets the client-trusted path; CreateGamePage.tsx always passes true — every game created through the UI is enforced. */
@@ -185,11 +183,13 @@ export async function createGame(params: {
     throw new Error('Room name must be between 1 and 60 characters')
   }
 
+  const definition = getGameDefinition(params.gameType)
   const settings: GameSettings = {
     skipHotseatPassGate: params.skipHotseatPassGate ?? false,
     ruleEnforcementEnabled: params.ruleEnforcementEnabled ?? false,
     hiddenInformationEnabled: params.hiddenInformationEnabled ?? false,
-    ...(params.gameOptions ? { gameOptions: params.gameOptions } : {}),
+    rulesVersion: definition.rulesVersion,
+    ...(params.gameOptions !== undefined ? { gameOptions: params.gameOptions } : {}),
   }
 
   const { data: game, error: gameError } = await supabase
@@ -197,10 +197,11 @@ export async function createGame(params: {
     .insert({
       room_code: roomCode,
       name,
+      game_type: definition.id,
       play_mode: params.playMode,
       created_by: params.userId,
-      min_players: params.minPlayers ?? 2,
-      max_players: params.maxPlayers ?? 8,
+      min_players: params.minPlayers ?? definition.minPlayers,
+      max_players: params.maxPlayers ?? Math.min(definition.maxPlayers, MAX_PLAYERS),
       settings,
       visibility: params.visibility ?? 'private',
     })
@@ -314,7 +315,7 @@ async function fetchGameStateSummaries(
  * (gameCardView.ts) reads. Keep `settings` small: it goes out for every room
  * on every listing screen.
  */
-const GAME_LIST_COLUMNS = 'id, room_code, name, play_mode, status, min_players, max_players, created_by, created_at, updated_at, config_version, visibility, settings'
+const GAME_LIST_COLUMNS = 'id, room_code, name, game_type, play_mode, status, min_players, max_players, created_by, created_at, updated_at, config_version, visibility, settings'
 
 /**
  * Every `players` column a listing screen's player chips need (see
@@ -614,6 +615,7 @@ export async function duplicateGameAsHotseat(params: {
     .insert({
       room_code: generateRoomCode(),
       name,
+      game_type: params.sourceGame.game_type,
       play_mode: 'hotseat',
       status: 'active',
       created_by: params.hostUserId,
@@ -659,8 +661,9 @@ export async function duplicateGameAsHotseat(params: {
  * export only ever contains a bare GameState (see GameStateExportEnvelope).
  * The new room's settings are seeded with defaults — enforcement and hidden
  * information both off, which hotseat requires anyway and which this plain
- * client insert needs to be allowed by RLS at all — except `gameOptions`,
- * recovered from the export's own `GameState.options`, which
+ * client insert needs to be allowed by RLS at all — except the game type,
+ * rules version and options, recovered from the export's own `GameState`,
+ * which
  * buildGenesisState (gameGenesis.ts) needs to rebuild the exact genesis the
  * export's actionHistory was recorded against.
  */
@@ -676,6 +679,7 @@ export async function importGameExportAsHotseat(params: { exportText: string; ho
     skipHotseatPassGate: false,
     ruleEnforcementEnabled: false,
     hiddenInformationEnabled: false,
+    rulesVersion: sourceState.rulesVersion,
     gameOptions: sourceState.options,
   }
 
@@ -684,6 +688,7 @@ export async function importGameExportAsHotseat(params: { exportText: string; ho
     .insert({
       room_code: generateRoomCode(),
       name: `Imported game (${new Date().toISOString().slice(0, 10)})`,
+      game_type: sourceState.gameType,
       play_mode: 'hotseat',
       status: 'active',
       created_by: params.hostUserId,

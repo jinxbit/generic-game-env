@@ -12,7 +12,7 @@ import { useAuth } from '../hooks/useAuth'
 import { useDisplayName } from '../hooks/useDisplayName'
 import { useIsAdmin } from '../hooks/useIsAdmin'
 import { useRefetchOnVisible } from '../hooks/useRefetchOnVisible'
-import { GAME_TAGLINE, GAME_TITLE } from '../game/display'
+import { SITE } from '../site'
 import { isGuestAuthAllowed } from '../lib/auth'
 import { getGameByRoomCode, listAllRooms } from '../lib/gameApi'
 import { buildGameCardSummary, describeGamePhase, formatFinishedAt, formatUpdatedAt, latestUpdatedAt } from '../lib/gameCardView'
@@ -116,8 +116,8 @@ export function HomePage() {
   if (!session) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-8 text-center">
-        <h1 className="text-3xl font-semibold">{GAME_TITLE}</h1>
-        <p className="max-w-sm text-neutral-300">{GAME_TAGLINE}</p>
+        <h1 className="text-3xl font-semibold">{SITE.title}</h1>
+        <p className="max-w-sm text-neutral-300">{SITE.tagline}</p>
         <p className="max-w-sm text-neutral-400">
           Sign in with Discord, Google, or an email and password to create or join a game with your friends.
         </p>
@@ -229,7 +229,7 @@ export function HomePage() {
               </div>
             )}
           </div>
-          <h1 className="text-2xl font-semibold">{GAME_TITLE}</h1>
+          <h1 className="text-2xl font-semibold">{SITE.title}</h1>
         </div>
         <Link to="/profile" className="flex flex-col items-center gap-1 text-sm text-neutral-400 hover:text-neutral-200">
           {avatarUrl && <img src={avatarUrl} alt="" className="h-8 w-8 rounded-full" />}
@@ -249,7 +249,7 @@ export function HomePage() {
           started, then games in progress, then finished games. */}
       <div className="flex flex-col gap-8 xl:gap-6">
         <div className="flex flex-col gap-4 xl:grid xl:grid-cols-[1fr_2fr] xl:items-start xl:gap-6">
-          <p className="text-neutral-400">{GAME_TAGLINE}</p>
+          <p className="text-neutral-400">{SITE.tagline}</p>
           <ChatPanel gameId={null} />
         </div>
 

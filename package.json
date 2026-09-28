@@ -17,6 +17,7 @@
   "dependencies": {
     "@game-platform/incorporated": "*",
     "@game-platform/sdk": "*",
+    "@game-platform/shark": "*",
     "@game-platform/unique-pick": "*",
     "@supabase/supabase-js": "^2.112.2",
     "@vercel/analytics": "^2.0.1",

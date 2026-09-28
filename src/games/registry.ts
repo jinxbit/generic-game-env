@@ -15,8 +15,9 @@
 
 import { registerGame } from '@game-platform/sdk'
 import { gameDefinition as incorporated } from '@game-platform/incorporated/rules'
+import { gameDefinition as shark } from '@game-platform/shark/rules'
 import { gameDefinition as uniquePick } from '@game-platform/unique-pick/rules'
 
-export const REGISTERED_GAMES = [uniquePick, incorporated]
+export const REGISTERED_GAMES = [uniquePick, incorporated, shark]
 
 for (const definition of REGISTERED_GAMES) registerGame(definition)

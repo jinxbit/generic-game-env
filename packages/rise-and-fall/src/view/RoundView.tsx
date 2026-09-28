@@ -1,0 +1,1923 @@
+import { Fragment, useEffect, useState } from 'react'
+import {
+  boostedStateForSupport,
+  computeActionOutcomePreview,
+  computeActionShortfall,
+  convertTargetCost,
+  findSupportCandidates,
+  isActionAvailableForUnit,
+  isActionSupportable,
+  legalConvertTargets,
+  legalCreateTargets,
+  legalTransformTargets,
+  neededSupportCandidates,
+} from '../engine/actionTargeting.ts'
+import type { Action } from '../engine/actions.ts'
+import { applyAction } from '../engine/applyAction.ts'
+import { cardIdFor, findCardZone, sortCardIdsForDisplay, UNIT_KINDS } from '../engine/cards.ts'
+import { legalMoveDestinations } from '../engine/movement.ts'
+import { calculatePurchaseCost } from '../engine/purchaseCost.ts'
+import { calculateChangedTerritoryHexes, calculateTerritoryControlByHex } from '../engine/scoring.ts'
+import type { CardChoiceRecap, TurnReview, UnitReviewEvent } from '../engine/turnReview.ts'
+import { calculateVPBreakdown } from '../engine/victoryPoints.ts'
+import type { VPBreakdown } from '../engine/victoryPoints.ts'
+import type { AchievementContent } from '../engine/achievementContent.ts'
+import { EMPTY_BOARD_GENERATION_CONTENT } from '../engine/boardGenerationContent.ts'
+import type { TaleContent } from '../engine/taleContent.ts'
+import { listAchievements } from '../content/resolveContent.ts'
+import type { Card, Coordinate, GameState, Player, Resources, RoundPhase, Unit } from '../engine/types.ts'
+import type { UnitAction, UnitContent } from '../engine/unitContent.ts'
+import type { SeatInfo } from '@game-platform/sdk/ui'
+import type { UnitPlateColors } from './unitColors.ts'
+import { DEFAULT_UNIT_RESERVE_DISPLAY_MODE, formatUnitReserveCount, type UnitReserveDisplayMode } from './unitReserveDisplay.ts'
+import type { GhostCell, HistoryArrow, HistoryHaloType, UnitMarker } from './HexBoard.tsx'
+import { HexBoard } from './HexBoard.tsx'
+import { ResourceIcon } from './ResourceIcon.tsx'
+import { RESOURCE_COLOR_CLASS } from './resourceIcons.ts'
+import { UnitIcon } from './UnitIcon.tsx'
+import { shouldRetractOwnChoice, shouldRetractOwnDecline } from './undoDecision.ts'
+
+const RESOURCE_ORDER: (keyof Resources)[] = ['gold', 'wood', 'stone']
+
+const ACHIEVEMENTS = listAchievements()
+
+/**
+ * Testing enablement for admins (issue #430): a per-unit menu option, shown
+ * only when `cheatModeEnabled`, that lets any acting unit target literally
+ * any hex on the board instead of `legalMoveDestinations`'s reachable set —
+ * deliberately submitted as a completely ordinary `RESOLVE_UNIT_ACTION` (see
+ * onResolveUnit below), reusing the real `'move'` action id, so it exercises
+ * the exact same server-side legality check a real player's move would
+ * (applyMove, ../engine/unitActions.ts) instead of a client-only shortcut.
+ * A unit whose kind has no `move` action at all still gets the option (there
+ * is nothing "legal" to restrict it to before submission) — the server
+ * rejects that case too, just via "not one of this kind's actions" rather
+ * than "not a legal destination." Either way the point is the same: prove
+ * illegal client-submitted moves never actually land.
+ */
+const CHEAT_MOVE_ACTION_ID = '__cheat_move_anywhere__'
+const CHEAT_MOVE_ACTION: UnitAction = {
+  id: 'move',
+  name: 'Move anywhere (cheat)',
+  description: "Admin testing aid: attempt to move this unit to any hex on the board. The server's rule engine rejects the move unless it's actually legal.",
+  effect: { actionType: 'move' },
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+function playerName(players: SeatInfo[], playerId: string | null): string {
+  if (!playerId) return 'nobody'
+  return players.find((p) => p.id === playerId)?.display_name ?? playerId
+}
+
+/** A player's display name (plus trailing colon, for the label: value rows it's used in) coloured with their player colour (issue #316) — same `row?.color ?? fallback` lookup PlayersStrip's colour dot and every score chart already use. */
+function PlayerColorName({ players, playerId }: { players: SeatInfo[]; playerId: string }) {
+  const row = players.find((p) => p.id === playerId)
+  return <span style={{ color: row?.color ?? '#a3a3a3' }}>{(row?.display_name ?? playerId) + ':'}</span>
+}
+
+/** Whether `unit` still has an activation left this turn — usually just "hasn't acted yet," but a Tale companion may act more than once (e.g. The Capital Tale's Capital: unitContent.activationsPerTurnByKind.capital === 2) — see applyResolveUnitAction's matching cap check (engine/applyAction.ts). */
+function hasRemainingActivation(state: GameState, unitContent: UnitContent, unit: Unit): boolean {
+  const cap = unitContent.activationsPerTurnByKind[unit.kind] ?? 1
+  return state.resolvedUnitIdsThisTurn.filter((id) => id === unit.id).length < cap
+}
+
+function actionNeedsTargeting(effect: UnitAction['effect']): boolean {
+  if (effect.actionType === 'create' || effect.actionType === 'convert' || effect.actionType === 'move') return true
+  if (effect.actionType === 'transform') return effect.targetHex.location === 'adj'
+  return false
+}
+
+/** Every legal target hex for `action`, against whatever `state` is passed — shared by RoundView's normal legal-target preview and, for a supported action, its "would this target still be legal once support units produced" confirm check (same query, just against a boosted hypothetical state — see boostedStateForSupport). Empty for a no-target action (see actionNeedsTargeting). */
+function computeLegalTargets(state: GameState, playerId: string, unit: Unit, action: UnitAction, unitContent: UnitContent): Coordinate[] {
+  const effect = action.effect
+  if (effect.actionType === 'create') return legalCreateTargets(state, playerId, unit, effect, unitContent)
+  if (effect.actionType === 'transform' && effect.targetHex.location === 'adj') return legalTransformTargets(state, playerId, unit, effect, unitContent)
+  if (effect.actionType === 'convert') return legalConvertTargets(state, playerId, unit, effect, unitContent)
+  if (effect.actionType === 'move') return legalMoveDestinations(state, unit, unit.movement, unitContent.terrainLevels)
+  return []
+}
+
+/**
+ * Every one of the player's own units that may act this turn once `card`
+ * is played: units of the card's own kind, plus any Tale "companion piece"
+ * kind (e.g. Port for Ship — see UnitContent.companionKindsByCardKind)
+ * that isn't currently ineligible for having been built this very turn
+ * (GameState.unitsCreatedThisTurn — every companion piece the rulebook
+ * defines "cannot be activated on the turn it is constructed"). More than
+ * one of these can share a single hex (a Ship docked at its own Port), so
+ * callers that key UI off "the unit at this hex" need to handle more than
+ * one match — see menuUnits below.
+ */
+function eligibleActingUnits(state: GameState, unitContent: UnitContent, playerId: string, card: Card): Unit[] {
+  const companionKinds = unitContent.companionKindsByCardKind[card.kind] ?? []
+  return state.units.filter((u) => {
+    if (u.ownerId !== playerId) return false
+    if (u.kind === card.kind) return true
+    if (!companionKinds.includes(u.kind)) return false
+    return !state.unitsCreatedThisTurn.includes(u.id)
+  })
+}
+
+/**
+ * `idle`: nothing selected. `menu`: a hex was clicked — every acting unit
+ * there (usually one, but a Ship and its own Port can share a hex) shows
+ * its action options as a single radial menu, grouped by unit (see
+ * HexBoard's ActionMenu doc comment). `targeting`: an action needing a
+ * target hex was picked from that menu, for a specific unit — the next
+ * legal-hex click on the board resolves it immediately (see onResolveUnit
+ * in RoundView below — there's no local staging/submit step; each pick is
+ * its own RESOLVE_UNIT_ACTION dispatch, applied right away), UNLESS the
+ * action was only reachable by support (see `supporting` below), in which
+ * case picking a target moves to that mode instead of resolving. `cheat`
+ * marks the admin-only "move anywhere" pick (issue #430, CHEAT_MOVE_ACTION
+ * above) — every hex on the board counts as a legal target instead of
+ * `legalMoveDestinations`'s reachable set.
+ * `supporting`: the player picked an action they can't currently afford,
+ * chose (or skipped, for a no-target action) a target, and is now clicking
+ * idle same-kind units highlighted on the map to cover the shortfall (issue
+ * #147's "supporting actions" QoL request) — only units whose own
+ * production would still help close the remaining gap are highlighted (see
+ * neededSupportCandidates), and each click resolves immediately once the
+ * cumulative selection covers the cost, same as every other action; no
+ * separate confirm step. Clicking anywhere that isn't a currently-needed
+ * candidate cancels the whole thing, same as every other in-progress action
+ * pick.
+ */
+type ActionUiMode =
+  | { kind: 'idle' }
+  | { kind: 'menu'; coord: Coordinate }
+  | { kind: 'targeting'; unitId: string; actionId: string; cheat?: boolean }
+  | { kind: 'supporting'; unitId: string; actionId: string; target?: Coordinate; selectedSupportUnitIds: string[] }
+
+/** The round number. The standalone app showed it in its own header; on the platform the shell's header already says which round it is, so RoundView's `showBankRow` line leaves it out. Kept for callers that want it. */
+export function PhaseBanner({ state }: { state: GameState }) {
+  return <p className="text-sm text-neutral-400">Round {state.turn}</p>
+}
+
+/** How much of each resource is left in the shared bank for players to draw from — see GameState.resourceBank. Rendered at the top of RoundView under `showBankRow`. */
+export function BankResources({ state }: { state: GameState }) {
+  return (
+    <p className="flex items-center gap-2 text-sm text-neutral-400" title="Resources remaining in the shared bank">
+      Bank:
+      {RESOURCE_ORDER.map((key) => (
+        <span key={key} className={`flex items-center gap-1 font-medium ${RESOURCE_COLOR_CLASS[key]}`} title={capitalize(key)}>
+          <ResourceIcon resource={key} className="h-4 w-4 shrink-0" />
+          {state.resourceBank[key]}
+        </span>
+      ))}
+    </p>
+  )
+}
+
+interface UnitHistorySummary {
+  halos: HistoryHaloType[]
+  resourceDelta: Partial<Resources>
+  moves: HistoryArrow[]
+}
+
+/**
+ * Groups a TurnReview's flat event list by unit, for HexBoard's overlay
+ * props: a 'moved' event becomes an arrow (not a halo); every other event
+ * type contributes a halo (deduped — a unit that produced twice still gets
+ * one red ring, not two) and, if it carries one, folds its resourceDelta
+ * into a single running total per unit (so two produce events in the same
+ * window show one combined badge per resource, e.g. a wood icon with "+4",
+ * rather than two separate tags). A 'created'/'converted' event that also
+ * carries a `from` (the acting unit's own hex, e.g. a City — see
+ * UnitReviewEvent's doc comment) additionally draws an arrow from actor to
+ * result, on top of its usual halo (issue #701).
+ */
+function summarizeUnitHistory(events: UnitReviewEvent[]): Map<string, UnitHistorySummary> {
+  const byUnit = new Map<string, UnitHistorySummary>()
+  for (const event of events) {
+    let entry = byUnit.get(event.unitId)
+    if (!entry) {
+      entry = { halos: [], resourceDelta: {}, moves: [] }
+      byUnit.set(event.unitId, entry)
+    }
+    if (event.type === 'moved') {
+      if (event.from && event.to) entry.moves.push({ from: event.from, to: event.to })
+      continue
+    }
+    if ((event.type === 'created' || event.type === 'converted') && event.from && event.to) {
+      entry.moves.push({ from: event.from, to: event.to })
+    }
+    if ((event.type === 'created' || event.type === 'converted' || event.type === 'produced' || event.type === 'income') && !entry.halos.includes(event.type)) {
+      entry.halos.push(event.type)
+    }
+    if (event.resourceDelta) {
+      for (const key of ['gold', 'wood', 'stone'] as const) {
+        const amount = event.resourceDelta[key]
+        if (amount) entry.resourceDelta[key] = (entry.resourceDelta[key] ?? 0) + amount
+      }
+    }
+  }
+  return byUnit
+}
+
+const RESOURCE_LABELS: [keyof Resources, string][] = [
+  ['gold', 'Gold'],
+  ['wood', 'Wood'],
+  ['stone', 'Stone'],
+]
+
+/**
+ * The icon+colour rendering of a resource outcome (see resourceIcons.ts's
+ * RESOURCE_ICONS/RESOURCE_COLOR_CLASS) — one badge per affected resource,
+ * e.g. a gold coin icon in gold next to "+1", a plank icon in brown next to
+ * "+2". Mirrors HexBoard's per-unit ActionMenuOption.outcome rendering so a
+ * bulk-action button's aggregated outcome reads the same way as the radial
+ * menu's per-unit preview it's replacing (see the trigger comment on issue
+ * #61: "describe the outcome using iconography and colors").
+ */
+function ResourceOutcomeBadges({ outcome, className = '' }: { outcome: Partial<Resources>; className?: string }) {
+  const entries = RESOURCE_ORDER.filter((key) => outcome[key])
+  if (entries.length === 0) return null
+  return (
+    <span className={`inline-flex items-center gap-1.5 ${className}`}>
+      {entries.map((key) => {
+        const amount = outcome[key]!
+        const label = RESOURCE_LABELS.find(([k]) => k === key)![1]
+        return (
+          <span key={key} className={`inline-flex items-center gap-0.5 font-bold ${RESOURCE_COLOR_CLASS[key]}`}>
+            <ResourceIcon resource={key} title={label} className="h-3.5 w-3.5 shrink-0" />
+            {amount > 0 ? '+' : ''}
+            {amount}
+          </span>
+        )
+      })}
+    </span>
+  )
+}
+
+/** A resource total's change since the reviewed window began, e.g. " (+5)" — blank if it didn't change (or there's nothing to compare against). */
+function deltaSuffix(amount: number | undefined): string {
+  if (!amount) return ''
+  return ` (${amount > 0 ? '+' : ''}${amount})`
+}
+
+/**
+ * The change in `myPlayerId`'s total VP if they submitted `action` right
+ * now — for DeclinePanel/PurchasePanel to preview each candidate card's
+ * effect on score before the player commits to a choice (issue #603).
+ * Found by actually running `action` through applyAction (CLAUDE.md
+ * invariant 1 — a preview must not hand-roll what a decline/buy-back does)
+ * against `state` and diffing calculateVPBreakdown before and after; the
+ * resulting state is only used for that diff, never dispatched.
+ * MOVE_TO_DECLINE/PURCHASE_CARD (and anything they can chain into while
+ * confined to the decline/purchase phases) never read
+ * boardGenerationContent, so EMPTY_BOARD_GENERATION_CONTENT stands in for
+ * it here rather than threading one more content bundle down through
+ * RoundView just for this. `null` if the hypothetical action turns out
+ * illegal — shouldn't happen for a candidate card the panel itself offers,
+ * but a preview must never throw.
+ */
+function expectedScoreDelta(
+  state: GameState,
+  action: Action,
+  myPlayerId: string,
+  unitContent: UnitContent,
+  achievementContent: AchievementContent,
+  taleContent: TaleContent,
+): number | null {
+  const result = applyAction(state, action, unitContent, achievementContent, EMPTY_BOARD_GENERATION_CONTENT, taleContent)
+  if (!result.ok) return null
+  const before = calculateVPBreakdown(state, achievementContent, taleContent)[myPlayerId]?.total ?? 0
+  const after = calculateVPBreakdown(result.state, achievementContent, taleContent)[myPlayerId]?.total ?? 0
+  return after - before
+}
+
+/** `expectedScoreDelta`'s result rendered the same way deltaSuffix formats a resource change, e.g. " (+3 VP)" / " (-2 VP)" — blank for a zero or unavailable (null) delta, same "nothing to show" convention deltaSuffix already uses. */
+function scoreDeltaSuffix(delta: number | null): string {
+  if (!delta) return ''
+  return ` (${delta > 0 ? '+' : ''}${delta} VP)`
+}
+
+/** The unit kind each of a set of card ids corresponds to, in display order, one entry per card (so a zone with two Cities lists 'city' twice). */
+function kindsInZone(cardIds: string[], cards: Record<string, Card>): string[] {
+  return sortCardIdsForDisplay(cardIds, cards)
+    .map((id) => cards[id]?.kind)
+    .filter((kind): kind is string => Boolean(kind))
+}
+
+/** One small icon per unit kind in `kinds` — the compact, at-a-glance stand-in for what used to be a comma-separated list of kind names. */
+function KindIconRow({ kinds, emptyLabel = 'none' }: { kinds: string[]; emptyLabel?: string }) {
+  if (kinds.length === 0) return <span className="text-neutral-500">{emptyLabel}</span>
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1 align-middle">
+      {kinds.map((kind, i) => (
+        <UnitIcon key={i} kind={kind} title={capitalize(kind)} className="h-4 w-4 shrink-0 text-neutral-300" />
+      ))}
+    </span>
+  )
+}
+
+/**
+ * Face-down card-back marker (issue #479) for a card a player has already
+ * moved into a zone this viewer isn't entitled to see yet — a decline-phase
+ * addition made during the current, still-open decline phase (see
+ * declineAdditionsThisPhase/redactStateForPlayer, ../engine/redaction.ts) or
+ * a selectCards pick before the round resolves (PlayersStrip's "Chosen"
+ * status below). Same sizing/currentColor convention as UnitIcon so it drops
+ * into the same icon rows without extra styling, distinct from both an empty
+ * zone (nothing rendered) and a revealed kind icon.
+ */
+function HiddenCardIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} role="img" aria-label="Hidden — chosen, not yet revealed">
+      <rect x="3" y="2" width="18" height="20" rx="3" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="3 2" />
+      <text x="12" y="16.5" textAnchor="middle" fontSize="11" fontWeight="bold" fill="currentColor">
+        ?
+      </text>
+    </svg>
+  )
+}
+
+/**
+ * Like kindsInZone, but for a zone that may include a still-secret
+ * in-progress decline addition — see toClientGameState's own doc comment
+ * (../engine/redaction.ts): a masked entry survives the client-side
+ * redaction collapse as a `null` placeholder in place, same array
+ * length/order, rather than being dropped. kindsInZone's `cards[id]?.kind`
+ * lookup already tolerates that (a `null` id just misses), but silently
+ * drops it — undercounting the pile by omission. This reports `null`
+ * instead, so a caller can render a HiddenCardIcon in its place (issue
+ * #479) rather than making an in-progress addition indistinguishable from
+ * nothing having happened at all.
+ */
+function kindsAndHiddenInZone(cardIds: string[], cards: Record<string, Card>): (string | null)[] {
+  return sortCardIdsForDisplay(cardIds, cards).map((id) => cards[id]?.kind ?? null)
+}
+
+/** Like KindIconRow, but for a zone that may include a still-secret entry (`null` — see kindsAndHiddenInZone) — rendered as a face-down HiddenCardIcon instead of the card's real kind icon. */
+function KindIconRowWithHidden({ kinds, emptyLabel = 'none' }: { kinds: (string | null)[]; emptyLabel?: string }) {
+  if (kinds.length === 0) return <span className="text-neutral-500">{emptyLabel}</span>
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1 align-middle">
+      {kinds.map((kind, i) =>
+        kind ? (
+          <UnitIcon key={i} kind={kind} title={capitalize(kind)} className="h-4 w-4 shrink-0 text-neutral-300" />
+        ) : (
+          <HiddenCardIcon key={i} className="h-4 w-4 shrink-0 text-neutral-500" />
+        ),
+      )}
+    </span>
+  )
+}
+
+/** A unit kind's icon paired with a count (or count-like text, e.g. "2/3" for the placed/remaining display mode), e.g. remaining supply or on-board totals — the icon stands in for the kind name entirely. */
+function UnitCountBadge({ kind, count }: { kind: string; count: number | string }) {
+  return (
+    <span className="inline-flex items-center gap-1" title={capitalize(kind)}>
+      <UnitIcon kind={kind} className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
+      <span>{count}</span>
+    </span>
+  )
+}
+
+const VP_BREAKDOWN_LABELS: [keyof Omit<VPBreakdown, 'total'>, string][] = [
+  ['achievements', 'Achievements'],
+  ['boardCount', 'Board count'],
+  ['terrainControl', 'Terrain control'],
+  ['gold', 'Gold'],
+]
+
+/**
+ * The detail view behind clicking a player's chip in PlayersStrip: their
+ * full VP breakdown (not just the total shown on the chip), every card zone
+ * (hand/currently-played/discard/decline/supply) broken down by unit kind,
+ * on-board unit counts per kind, and full resources.
+ */
+function PlayerDetailPanel({ state, player, breakdown }: { state: GameState; player: Player; breakdown: VPBreakdown | undefined }) {
+  const unitCountsByKind = new Map<string, number>()
+  for (const unit of state.units) {
+    if (unit.ownerId !== player.id) continue
+    unitCountsByKind.set(unit.kind, (unitCountsByKind.get(unit.kind) ?? 0) + 1)
+  }
+  const unitCounts = [...unitCountsByKind.entries()].map(([kind, count]) => ({ kind, count }))
+  const currentlyPlayed = player.currentlyPlayedCardId ? kindsInZone([player.currentlyPlayedCardId], state.cards) : []
+
+  return (
+    <div className="col-span-2 flex flex-col gap-3 rounded-md border border-neutral-800 bg-neutral-900/50 p-3 text-xs text-neutral-400 lg:col-span-1">
+      <div>
+        <p className="mb-1 font-medium text-neutral-200">VP breakdown — {breakdown?.total ?? 0} total</p>
+        <p>{VP_BREAKDOWN_LABELS.map(([key, label]) => `${label} ${breakdown?.[key] ?? 0}`).join(', ')}</p>
+      </div>
+      <div className="flex flex-col gap-1">
+        <p className="font-medium text-neutral-200">Cards</p>
+        <p className="flex items-center gap-1.5">
+          Hand: <KindIconRow kinds={kindsInZone(player.handCardIds, state.cards)} />
+        </p>
+        <p className="flex items-center gap-1.5">
+          Currently played: <KindIconRow kinds={currentlyPlayed} />
+        </p>
+        <p className="flex items-center gap-1.5">
+          Discard: <KindIconRow kinds={kindsInZone(player.discardCardIds, state.cards)} />
+        </p>
+        <p className="flex items-center gap-1.5">
+          Decline: <KindIconRowWithHidden kinds={kindsAndHiddenInZone(player.declineCardIds, state.cards)} />
+        </p>
+        <p className="flex items-center gap-1.5">
+          Supply: <KindIconRow kinds={kindsInZone(player.supplyCardIds, state.cards)} />
+        </p>
+      </div>
+      <div>
+        <p className="mb-1 font-medium text-neutral-200">Units on board</p>
+        {unitCounts.length > 0 ? (
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            {unitCounts.map(({ kind, count }) => (
+              <UnitCountBadge key={kind} kind={kind} count={count} />
+            ))}
+          </p>
+        ) : (
+          <p className="text-neutral-500">none</p>
+        )}
+      </div>
+      <div>
+        <p className="mb-1 font-medium text-neutral-200">Resources</p>
+        <p className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {RESOURCE_ORDER.map((key) => (
+            <span key={key} className={`flex items-center gap-1 font-medium ${RESOURCE_COLOR_CLASS[key]}`} title={capitalize(key)}>
+              <ResourceIcon resource={key} className="h-3.5 w-3.5 shrink-0" />
+              {player.resources[key]}
+            </span>
+          ))}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function PlayersStrip({
+  state,
+  players,
+  myPlayerId,
+  unitContent,
+  achievementContent,
+  taleContent,
+  resourceDeltaByPlayerId,
+  previousHistoryState,
+  unitReserveDisplayMode = DEFAULT_UNIT_RESERVE_DISPLAY_MODE,
+}: {
+  state: GameState
+  players: SeatInfo[]
+  myPlayerId: string | null
+  unitContent: UnitContent
+  achievementContent: AchievementContent
+  taleContent: TaleContent
+  /** From TurnReview, only while the history review is toggled on — see RoundView's showHistory. */
+  resourceDeltaByPlayerId?: Record<string, Resources> | null
+  /** The state just before the reviewed turn/action, only while history review is toggled on — see RoundView's showHistory. Used to show each player's score change the same way resourceDeltaByPlayerId shows resource changes. */
+  previousHistoryState?: GameState | null
+  /** Whether the badge below shows remaining supply, units placed, or both (issue #346) — the viewer's own display setting (./preferences.ts); undefined falls back to the original "remaining" behaviour. */
+  unitReserveDisplayMode?: UnitReserveDisplayMode
+}) {
+  const [expandedPlayerId, setExpandedPlayerId] = useState<string | null>(null)
+  const breakdownByPlayerId = calculateVPBreakdown(state, achievementContent, taleContent)
+  const previousBreakdownByPlayerId = previousHistoryState ? calculateVPBreakdown(previousHistoryState, achievementContent, taleContent) : null
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="grid grid-cols-2 gap-2 text-xs text-neutral-400 lg:grid-cols-1">
+        {state.players.map((player) => {
+          const row = players.find((p) => p.id === player.id)
+          const chosenCardId = state.chosenCardIdByPlayerId[player.id]
+          // The chosen card's kind (and its "Playing" indicator) is only
+          // revealed once the actions phase begins for that player's turn.
+          // During selectCards it's still a secret simultaneous pick, so
+          // don't show it as "Playing" or drop it from the hand display.
+          // chosenCardIdByPlayerId itself isn't cleared when a turn resolves
+          // (finishActionsTurn just moves the card hand -> currentlyPlayed ->
+          // discard), so once that card has landed in discard the player's
+          // action is done for the round and "Playing" must stop showing —
+          // check the card's zone rather than just chosenCardId's presence.
+          const chosenCardZone = chosenCardId ? findCardZone(player, chosenCardId) : undefined
+          const chosenKind =
+            state.roundPhase === 'actions' && chosenCardId && chosenCardZone !== 'discard' ? state.cards[chosenCardId]?.kind : undefined
+          // Chosen-but-not-yet-resolved card stays in handCardIds until the
+          // player's turn finishes (finishActionsTurn moves it hand ->
+          // currentlyPlayed -> discard). Once the actions phase reveals it
+          // as "Playing", hide it from the hand display to avoid showing it
+          // as both "Playing" and still in hand.
+          const handKinds = kindsInZone(
+            state.roundPhase === 'actions' ? player.handCardIds.filter((id) => id !== chosenCardId) : player.handCardIds,
+            state.cards,
+          )
+          const discardKinds = kindsInZone(player.discardCardIds, state.cards)
+          const declineKinds = kindsAndHiddenInZone(player.declineCardIds, state.cards)
+          // Whether this player has already made their pick this round but
+          // it hasn't resolved into "Playing" yet (see chosenKind's own
+          // comment above) — derived from pendingPlayerIds rather than
+          // chosenCardId's presence/nullness, since pendingPlayerIds is
+          // never redacted (redactStateForPlayer, ../engine/redaction.ts)
+          // while chosenCardId is nulled for another player's still-secret
+          // pick under hiddenInformationEnabled. applyChooseCard removes a
+          // player from pendingPlayerIds the instant they pick (and
+          // RETRACT_CHOICE puts them back), and an eliminated player is
+          // never left pending without having chosen — so this reads
+          // correctly for both a hidden-information game (where it fills
+          // the gap redaction otherwise leaves — issue #479) and an
+          // ordinary one (where it's gated off below, unchanged).
+          const hasChosenCardThisRound = state.roundPhase === 'selectCards' && !player.eliminated && !state.pendingPlayerIds.includes(player.id)
+          const isChoosingCard = state.roundPhase === 'selectCards' && !player.eliminated && state.pendingPlayerIds.includes(player.id)
+          const reserveByKind = UNIT_KINDS.flatMap((kind) => {
+            const cap = unitContent.unitSupplyCaps[kind]
+            if (cap === undefined) return []
+            const onBoard = state.units.filter((u) => u.ownerId === player.id && u.kind === kind).length
+            const remaining = Math.max(0, cap - onBoard)
+            return [{ kind, count: formatUnitReserveCount(unitReserveDisplayMode, onBoard, remaining) }]
+          })
+          const delta = resourceDeltaByPlayerId?.[player.id]
+          const scoreDelta = previousBreakdownByPlayerId
+            ? (breakdownByPlayerId[player.id]?.total ?? 0) - (previousBreakdownByPlayerId[player.id]?.total ?? 0)
+            : undefined
+          const isExpanded = expandedPlayerId === player.id
+          return (
+            <Fragment key={player.id}>
+              <button
+                type="button"
+                onClick={() => setExpandedPlayerId((prev) => (prev === player.id ? null : player.id))}
+                aria-expanded={isExpanded}
+                title="Click for full VP breakdown, cards, unit counts, and resources."
+                className={`flex w-full flex-col gap-1 rounded-md border bg-transparent px-2 py-1.5 text-left hover:border-neutral-600 ${
+                  isExpanded ? 'border-indigo-400' : player.id === myPlayerId ? 'border-indigo-600' : 'border-neutral-800'
+                } ${player.eliminated ? 'opacity-40' : ''}`}
+              >
+                <span className="flex items-center gap-1.5">
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: row?.color ?? '#a3a3a3' }} />
+                  <span className="text-neutral-200">{row?.display_name ?? player.id}</span>
+                  {state.turnOrder[0] === player.id && (
+                    <span title="Start player — rotates to the next player each round" className="text-amber-400">
+                      ★
+                    </span>
+                  )}
+                  {player.eliminated && <span>(eliminated)</span>}
+                  <span className="ml-auto font-medium text-neutral-200">
+                    Score {breakdownByPlayerId[player.id]?.total ?? 0}
+                    {previousBreakdownByPlayerId && <span className="text-emerald-400">{deltaSuffix(scoreDelta)}</span>}
+                  </span>
+                </span>
+                <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                  {RESOURCE_ORDER.map((key) => (
+                    <span key={key} className={`flex items-center gap-1 font-medium ${RESOURCE_COLOR_CLASS[key]}`} title={capitalize(key)}>
+                      <ResourceIcon resource={key} className="h-3.5 w-3.5 shrink-0" />
+                      {player.resources[key]}
+                      {delta && <span className="text-emerald-400">{deltaSuffix(delta[key])}</span>}
+                    </span>
+                  ))}
+                </span>
+                {state.roundPhase === 'actions' && chosenKind && (
+                  <span className="flex items-center gap-1.5 text-indigo-400" title={`Playing ${capitalize(chosenKind)} this turn`}>
+                    <span>Playing</span>
+                    <UnitIcon kind={chosenKind} className="h-4 w-4 shrink-0" />
+                  </span>
+                )}
+                {/* hiddenInformationEnabled-gated so an ordinary game's
+                    selectCards phase renders exactly as it did before this
+                    issue (#479) — those games already reveal chosenCardId
+                    the instant it's set (see chosenKind's own comment: the
+                    withholding above is a deliberate no-early-reveal choice,
+                    not something redaction enforces for them), so there is
+                    nothing this pair of states would add beyond noise. */}
+                {isChoosingCard && state.hiddenInformationEnabled && (
+                  <span className="flex items-center gap-1.5 text-neutral-500" title="Still choosing which card to play this round">
+                    Choosing…
+                  </span>
+                )}
+                {hasChosenCardThisRound && state.hiddenInformationEnabled && (
+                  <span className="flex items-center gap-1.5 text-indigo-400" title="Has chosen a card this round — hidden until every player has picked">
+                    <span>Chosen</span>
+                    <HiddenCardIcon className="h-4 w-4 shrink-0" />
+                  </span>
+                )}
+                <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span className="flex items-center gap-1.5">
+                    <span>Hand</span>
+                    <KindIconRow kinds={handKinds} emptyLabel="empty" />
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span>Discard</span>
+                    <KindIconRow kinds={discardKinds} emptyLabel="empty" />
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span>Decline</span>
+                    <KindIconRowWithHidden kinds={declineKinds} emptyLabel="empty" />
+                  </span>
+                </span>
+                {reserveByKind.length > 0 && (
+                  <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    {reserveByKind.map(({ kind, count }) => (
+                      <UnitCountBadge key={kind} kind={kind} count={count} />
+                    ))}
+                  </span>
+                )}
+              </button>
+              {isExpanded && <PlayerDetailPanel state={state} player={player} breakdown={breakdownByPlayerId[player.id]} />}
+            </Fragment>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The gold price to buy a card back from decline rises as achievements are
+ * claimed (see calculatePurchaseCost) — `current` is that price right now,
+ * `upcoming` the remaining steps of achievementContent.purchaseCostTable
+ * still ahead, in order, capped at `gameLength` steps: the game ends once
+ * that many achievements are claimed in total, so a price past that point
+ * is never actually reached. `isCurrentFinal` flags whether `current`
+ * itself is the price for the gameLength-th achievement — the last
+ * purchase phase before the game ends; otherwise (when `upcoming` is
+ * non-empty) that same price is always `upcoming`'s last entry, by
+ * construction of the cap above.
+ */
+function purchasePriceLadder(
+  achievementsClaimed: number,
+  costTable: number[],
+  gameLength: number,
+): { current: number; upcoming: number[]; isCurrentFinal: boolean } {
+  const currentIndex = achievementsClaimed <= 0 ? -1 : Math.min(achievementsClaimed, costTable.length) - 1
+  const cappedLength = Number.isFinite(gameLength) ? Math.min(gameLength, costTable.length) : costTable.length
+  return {
+    current: calculatePurchaseCost(achievementsClaimed, costTable),
+    upcoming: costTable.slice(currentIndex + 1, cappedLength),
+    isCurrentFinal: achievementsClaimed > 0 && currentIndex + 1 >= cappedLength,
+  }
+}
+
+/**
+ * Every achievement in the game (not just claimed ones), plus the current
+ * gold price to buy a card back from decline — grouped together since both
+ * move in lockstep with the same number (achievements claimed so far, see
+ * calculatePurchaseCost), not because they're otherwise related.
+ */
+function AchievementsPanel({
+  state,
+  players,
+  achievementContent,
+  taleContent,
+}: {
+  state: GameState
+  players: SeatInfo[]
+  achievementContent: AchievementContent
+  taleContent: TaleContent
+}) {
+  const achievementsClaimed = Object.keys(state.claimedByAchievementId).length
+  const { current: buybackPrice, upcoming, isCurrentFinal } = purchasePriceLadder(
+    achievementsClaimed,
+    achievementContent.purchaseCostTable,
+    achievementContent.gameLength,
+  )
+  const gameLength = achievementContent.gameLength
+
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-neutral-800 p-3 text-xs">
+      {Number.isFinite(gameLength) && (
+        <p className="text-neutral-500">
+          {achievementsClaimed} of {gameLength} achievements claimed
+        </p>
+      )}
+      <p className="text-neutral-400">
+        Buy back from decline:{' '}
+        <span className={`font-medium ${isCurrentFinal ? 'text-red-400' : 'text-amber-400'}`}>
+          {buybackPrice} gold{isCurrentFinal && ' (last round)'}
+        </span>
+        {upcoming.length > 0 && (
+          <span className="text-neutral-500">
+            {' '}
+            — next:{' '}
+            {upcoming.map((price, i) => (
+              <span key={i} className={i === upcoming.length - 1 ? 'font-medium text-red-400' : undefined}>
+                {i > 0 && ' → '}
+                {price}
+              </span>
+            ))}{' '}
+            gold (last round: {upcoming[upcoming.length - 1]})
+          </span>
+        )}
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {ACHIEVEMENTS.map((achievement) => {
+          const claimedBy = state.claimedByAchievementId[achievement.id] ?? null
+          return (
+            <span
+              key={achievement.id}
+              title={achievement.description}
+              className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 ${
+                claimedBy ? 'border-amber-700/50 bg-amber-500/10 text-amber-400' : 'border-neutral-800 text-neutral-500'
+              }`}
+            >
+              <UnitIcon kind={achievement.unitId} className="h-3.5 w-3.5 shrink-0" />
+              <span>
+                {achievement.name} ({achievement.victoryPoints} VP) — {claimedBy ? playerName(players, claimedBy) : 'unclaimed'}
+              </span>
+            </span>
+          )
+        })}
+        {/* A Tale-contributed real Trophy (e.g. The Capital) — claimed
+            permanently through the exact same pipeline as a base achievement
+            above (see TaleExtraAchievement's doc comment), just sourced from
+            taleContent instead of the static achievements.json list. */}
+        {taleContent.extraAchievements.map((achievement) => {
+          const claimedBy = state.claimedByAchievementId[achievement.id] ?? null
+          return (
+            <span
+              key={achievement.id}
+              className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 ${
+                claimedBy ? 'border-amber-700/50 bg-amber-500/10 text-amber-400' : 'border-neutral-800 text-neutral-500'
+              }`}
+            >
+              <UnitIcon kind={achievement.unitKind} className="h-3.5 w-3.5 shrink-0" />
+              <span>
+                {capitalize(achievement.unitKind)} ({achievement.victoryPoints} VP) — {claimedBy ? playerName(players, claimedBy) : 'unclaimed'}
+              </span>
+            </span>
+          )
+        })}
+      </div>
+      {taleContent.controllableStructures.length > 0 && (
+        <>
+          {/* Not real achievements — Tale-contributed bonuses that don't correspond to any content/achievements.json entry, and (unlike a real achievement) whoever holds one can change over the course of the game — see TaleControllableStructure's doc comment. Kept in its own section so it's never confused with a permanent claim. */}
+          <p className="mt-1 text-neutral-500">Tale bonuses (claimable)</p>
+          <div className="flex flex-wrap gap-2">
+            {taleContent.controllableStructures.map((structure) => {
+              const controller = state.units.find((u) => u.kind === structure.kind)
+              return (
+                <span
+                  key={structure.kind}
+                  className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 ${
+                    controller ? 'border-amber-700/50 bg-amber-500/10 text-amber-400' : 'border-neutral-800 text-neutral-500'
+                  }`}
+                >
+                  <UnitIcon kind={structure.kind} className="h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    {structure.name} ({structure.victoryPoints} VP) — {controller ? playerName(players, controller.ownerId) : 'unclaimed'}
+                  </span>
+                </span>
+              )
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Backs issue #528's "Reveal all cards" confirmation: while `shouldStage` is
+ * true, `choose` holds its argument locally (`stagedCardId`) instead of
+ * calling `submit`, so a player who's about to be the one whose pick
+ * resolves the select-cards/decline phase gets a chance to review — and
+ * change — their pick behind `confirm` before anything is actually sent.
+ *
+ * `shouldStage` is recomputed by the caller every render straight from the
+ * live, server-synced `pendingPlayerIds` — it is not a snapshot taken when
+ * staging began. If another player retracts their own pick while this one
+ * sits staged, this player is no longer the one who'd trigger a reveal, so
+ * `shouldStage` flips to false — but a card the player staged themselves is
+ * a real, not-yet-submitted decision of theirs, so it must never fire just
+ * because *someone else's* action changed `pendingPlayerIds` (issue #546:
+ * player A retracting their pick used to auto-submit player B's still-staged
+ * one). The staged pick is left in place either way; `stagedCardId` only
+ * ever leaves state via `confirm` — an explicit click — or `choose` staging
+ * a different card. The caller uses `shouldStage` itself to relabel the
+ * confirm button ("Reveal all cards" vs. plain "Submit") once it no longer
+ * describes an actual reveal.
+ */
+function useStagedCardChoice(shouldStage: boolean, submit: (cardId: string) => void) {
+  const [stagedCardId, setStagedCardId] = useState<string | null>(null)
+
+  function choose(cardId: string) {
+    if (shouldStage) {
+      setStagedCardId(cardId)
+    } else {
+      submit(cardId)
+    }
+  }
+
+  function confirm() {
+    if (!stagedCardId) return
+    submit(stagedCardId)
+    setStagedCardId(null)
+  }
+
+  return { stagedCardId, choose, confirm }
+}
+
+/**
+ * A hand with only one card isn't a real choice — RULE_ENFORCEMENT_PLAN.md
+ * §4.2/§4.3's design (per jinxbit, 2026-09-05): the state machine itself
+ * takes a forced single-option action (applyAction's own forced-follow-up
+ * convergence, ./engine/applyAction.ts) as part of ordinary action
+ * submission, not a UI effect deciding to click on the player's
+ * behalf. So by the time this panel would render for a pending player with
+ * one card, the server/engine has normally already resolved it and that
+ * player is no longer pending — this just renders the single card as an
+ * ordinary clickable choice as a defensive fallback (e.g. a game whose state
+ * predates this change), rather than special-casing it.
+ */
+function SelectCardsPanel(props: {
+  state: GameState
+  players: SeatInfo[]
+  myPlayerId: string | null
+  onChooseCard: (cardId: string) => void
+  confirmBeforeRevealingCards: boolean
+}) {
+  const { state, players, myPlayerId, onChooseCard, confirmBeforeRevealingCards } = props
+  const me = myPlayerId ? state.players.find((p) => p.id === myPlayerId) : undefined
+  const isPending = !!myPlayerId && state.pendingPlayerIds.includes(myPlayerId)
+  // My pick would be the one that empties pendingPlayerIds and resolves the phase.
+  const wouldReveal = confirmBeforeRevealingCards && state.pendingPlayerIds.length === 1 && state.pendingPlayerIds[0] === myPlayerId
+  const { stagedCardId, choose, confirm } = useStagedCardChoice(wouldReveal, onChooseCard)
+  const handCardIds = me ? sortCardIdsForDisplay(me.handCardIds, state.cards) : []
+
+  if (!myPlayerId) return null
+
+  if (!isPending) {
+    return <p className="text-sm text-neutral-300">Waiting for: {state.pendingPlayerIds.map((id) => playerName(players, id)).join(', ') || '…'}</p>
+  }
+
+  if (!me) return null
+
+  return (
+    <div className="flex flex-col gap-2 text-sm">
+      <p className="font-medium text-indigo-400">Your turn — choose a card to play.</p>
+      <div className="flex flex-wrap gap-2">
+        {handCardIds.map((cardId) => {
+          const card = state.cards[cardId]
+          const staged = stagedCardId === cardId
+          return (
+            <button
+              key={cardId}
+              onClick={() => choose(cardId)}
+              className={`rounded-md border px-3 py-1 hover:border-neutral-500 ${staged ? 'border-indigo-500 bg-indigo-950/40' : 'border-neutral-700'}`}
+            >
+              {card ? capitalize(card.kind) : cardId}
+            </button>
+          )
+        })}
+        {handCardIds.length === 0 && <p className="text-neutral-500">No cards in hand.</p>}
+      </div>
+      {stagedCardId && (
+        <button onClick={confirm} className="self-start rounded-md bg-indigo-600 px-3 py-1 font-medium text-white hover:bg-indigo-500">
+          {wouldReveal ? 'Reveal all cards' : 'Submit'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+interface BulkActionGroup {
+  kind: string
+  actionId: string
+  label: string
+  unitIds: string[]
+  /** Sum of computeActionOutcomePreview across every unit in the group — e.g. two idle Forest Nomads' Produce Resource combine into `{ wood: 2 }`. */
+  outcome: Partial<Resources>
+}
+
+/**
+ * Every no-target action (see actionNeedsTargeting) at least one of
+ * `remaining`'s units can currently take, grouped by unit kind + action id
+ * — e.g. every idle Nomad/Mountaineer's Produce Resource, or every idle
+ * Ship/Merchant/City/Temple's trade/income action (issue #61). Drives the
+ * "act on everyone at once" buttons in ActionsPanel below, so a player
+ * doesn't have to click through each unit individually on the board for an
+ * action that never needed a target hex in the first place. Each group's
+ * `outcome` is the aggregated resource preview across its units (see
+ * computeActionOutcomePreview), shown on the button alongside the count.
+ *
+ * Self-targeted transforms (e.g. Nomad/Mountaineer's Transform to City or
+ * Temple) are excluded even though they need no target: they permanently
+ * destroy the acting unit and turn it into a different, immobile kind, so
+ * batching every remaining unit into one irreversible click would be far
+ * too easy to trigger by accident (issue #201) — unlike Produce Resource or
+ * a trade action, which the player would happily repeat unit-by-unit anyway.
+ */
+function computeBulkActionGroups(state: GameState, unitContent: UnitContent, playerId: string, remaining: Unit[]): BulkActionGroup[] {
+  const groups = new Map<string, BulkActionGroup>()
+  for (const unit of remaining) {
+    for (const action of unitContent.actionsByKind[unit.kind] ?? []) {
+      if (actionNeedsTargeting(action.effect)) continue
+      if (action.effect.actionType === 'transform' && action.effect.destroySelf) continue
+      if (!isActionAvailableForUnit(state, playerId, unit, action, unitContent)) continue
+      const key = `${unit.kind}:${action.id}`
+      let group = groups.get(key)
+      if (!group) {
+        group = { kind: unit.kind, actionId: action.id, label: action.name, unitIds: [], outcome: {} }
+        groups.set(key, group)
+      }
+      group.unitIds.push(unit.id)
+      const unitOutcome = computeActionOutcomePreview(state, playerId, unit, action)
+      if (unitOutcome) {
+        for (const resourceKey of RESOURCE_ORDER) {
+          const amount = unitOutcome[resourceKey]
+          if (amount) group.outcome[resourceKey] = (group.outcome[resourceKey] ?? 0) + amount
+        }
+      }
+    }
+  }
+  return [...groups.values()]
+}
+
+function ActionsPanel(props: {
+  state: GameState
+  players: SeatInfo[]
+  myPlayerId: string | null
+  unitContent: UnitContent
+  onPassActions: () => void
+  onResolveBulkAction: (unitIds: string[], actionId: string) => void
+}) {
+  const { state, players, myPlayerId, unitContent, onPassActions, onResolveBulkAction } = props
+  const activePlayerId = state.pendingPlayerIds[0] ?? null
+  const isMyTurn = activePlayerId !== null && activePlayerId === myPlayerId
+
+  if (!isMyTurn) {
+    return <p className="text-sm text-neutral-300">Waiting for {playerName(players, activePlayerId)} to resolve their action.</p>
+  }
+
+  const cardId = myPlayerId ? state.chosenCardIdByPlayerId[myPlayerId] : null
+  const card = cardId ? state.cards[cardId] : null
+  // Per applyChooseCard/beginActionsPhase (../engine/applyAction.ts,
+  // ../engine/round.ts), a persisted GameState can never have `isMyTurn`
+  // true here with no chosen card for that player — every pendingPlayerId
+  // resolves its pick before the phase can flip to 'actions'. So reaching
+  // this branch is always a transient client-side render, never a real
+  // problem (issue #507): a moment where `state` has already advanced to
+  // 'actions' but something this render also depends on hasn't caught up
+  // yet. It resolves itself on the very next render, so it should read as
+  // "still loading," not as an error — a persistent red "not chosen" message
+  // (the original wording here) told the player something was actually
+  // wrong when, by construction, it never is.
+  if (!card || !myPlayerId) return <p className="text-sm text-neutral-300">Catching up…</p>
+
+  const actingUnits = eligibleActingUnits(state, unitContent, myPlayerId, card)
+  const remaining = actingUnits.filter((u) => hasRemainingActivation(state, unitContent, u))
+  const bulkGroups = computeBulkActionGroups(state, unitContent, myPlayerId, remaining)
+
+  return (
+    <div className="flex flex-col gap-3 text-sm">
+      <p className="font-medium text-indigo-400">
+        Your turn — playing {capitalize(card.kind)}. Click a highlighted unit on the board to choose its action — it
+        resolves immediately. {remaining.length} of {actingUnits.length} unit{actingUnits.length === 1 ? '' : 's'} still need
+        {remaining.length === 1 ? 's' : ''} one (a unit left alone does nothing this round).
+      </p>
+
+      {actingUnits.length === 0 && <p className="text-neutral-500">No units of this kind to act.</p>}
+
+      {bulkGroups.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {bulkGroups.map((group) => (
+            <button
+              key={`${group.kind}:${group.actionId}`}
+              onClick={() => onResolveBulkAction(group.unitIds, group.actionId)}
+              title={`Apply "${group.label}" to every remaining ${capitalize(group.kind)} that can currently take it, without picking each one individually on the board.`}
+              className="inline-flex items-center gap-1.5 rounded-md border border-neutral-700 px-3 py-1 hover:border-neutral-500"
+            >
+              <span>
+                {group.label} — all ({group.unitIds.length})
+              </span>
+              <ResourceOutcomeBadges outcome={group.outcome} />
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <button onClick={onPassActions} className="rounded-md bg-indigo-600 px-3 py-1 font-medium text-white hover:bg-indigo-500">
+          {remaining.length > 0 ? `Pass (leave ${remaining.length} idle)` : 'Pass / end turn'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Shown while the player is picking which idle same-kind units cover the
+ * shortfall for an action they can't currently afford (issue #147) — see
+ * ActionUiMode's `supporting` variant. No buttons here: the pickable units
+ * are highlighted directly on the map (HexBoard's UnitMarker.supportCandidate),
+ * and clicking one resolves immediately once the selection covers the cost —
+ * this is just the status line explaining what's happening and how to back
+ * out. `neededCandidateCount` is the currently-highlighted set (see
+ * neededSupportCandidates), which shrinks as the player covers each
+ * resource, so "no one left to help" only ever reflects what's still short.
+ */
+function SupportHint({ actingUnitKind, actionLabel, neededCandidateCount }: { actingUnitKind: string; actionLabel: string; neededCandidateCount: number }) {
+  return (
+    <p className="text-sm font-medium text-amber-400">
+      Not enough resources for {capitalize(actingUnitKind)}&rsquo;s &ldquo;{actionLabel}&rdquo; — click a highlighted idle {capitalize(actingUnitKind)}
+      {actingUnitKind.endsWith('s') ? '' : 's'} on the map to help cover it. Click elsewhere to cancel.
+      {neededCandidateCount === 0 && <span className="block font-normal text-neutral-500">No idle units are available to help.</span>}
+    </p>
+  )
+}
+
+function DeclinePanel(props: {
+  state: GameState
+  players: SeatInfo[]
+  myPlayerId: string | null
+  onMoveToDecline: (cardId: string) => void
+  confirmBeforeRevealingCards: boolean
+  unitContent: UnitContent
+  achievementContent: AchievementContent
+  taleContent: TaleContent
+}) {
+  const { state, players, myPlayerId, onMoveToDecline, confirmBeforeRevealingCards, unitContent, achievementContent, taleContent } = props
+  // My pick would be the one that empties pendingPlayerIds and resolves the
+  // phase — regardless of how many cards I still owe overall, only the
+  // single submission that empties the queue actually reveals anything.
+  const wouldReveal = confirmBeforeRevealingCards && state.pendingPlayerIds.length === 1 && state.pendingPlayerIds[0] === myPlayerId
+  const { stagedCardId, choose, confirm } = useStagedCardChoice(wouldReveal, onMoveToDecline)
+
+  if (!myPlayerId) return null
+
+  const owed = state.pendingPlayerIds.filter((id) => id === myPlayerId).length
+  if (owed === 0) {
+    const stillPending = [...new Set(state.pendingPlayerIds)]
+    return <p className="text-sm text-neutral-300">Waiting for: {stillPending.map((id) => playerName(players, id)).join(', ') || '…'}</p>
+  }
+
+  const me = state.players.find((p) => p.id === myPlayerId)
+  if (!me) return null
+  const candidates = sortCardIdsForDisplay([...me.handCardIds, ...me.discardCardIds], state.cards)
+
+  return (
+    <div className="flex flex-col gap-2 text-sm">
+      <p className="font-medium text-indigo-400">
+        Move {owed} card{owed > 1 ? 's' : ''} to decline.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {candidates.map((cardId) => {
+          const card = state.cards[cardId]
+          const staged = stagedCardId === cardId
+          const scoreDelta = expectedScoreDelta(
+            state,
+            { type: 'MOVE_TO_DECLINE', playerId: myPlayerId, cardId },
+            myPlayerId,
+            unitContent,
+            achievementContent,
+            taleContent,
+          )
+          return (
+            <button
+              key={cardId}
+              onClick={() => choose(cardId)}
+              className={`rounded-md border px-3 py-1 hover:border-red-500 ${staged ? 'border-indigo-500 bg-indigo-950/40' : 'border-red-700'}`}
+            >
+              {card ? capitalize(card.kind) : cardId}
+              {scoreDelta ? <span className={scoreDelta > 0 ? 'text-emerald-400' : 'text-red-400'}>{scoreDeltaSuffix(scoreDelta)}</span> : null}
+            </button>
+          )
+        })}
+        {candidates.length === 0 && <p className="text-neutral-500">Nothing left to decline.</p>}
+      </div>
+      {stagedCardId && (
+        <button onClick={confirm} className="self-start rounded-md bg-indigo-600 px-3 py-1 font-medium text-white hover:bg-indigo-500">
+          {wouldReveal ? 'Reveal all cards' : 'Submit'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+/**
+ * "Take back my pick" — see RoundView's `onRetractChoice`/`onRetractDecline`.
+ * Shown only when the retraction would actually change something
+ * (./undoDecision.ts), so a forced single-card pick never offers it.
+ */
+function RetractPanel(props: {
+  state: GameState
+  myPlayerId: string | null
+  onRetractChoice?: () => void
+  onRetractDecline?: () => void
+  submitting: boolean
+}) {
+  const { state, myPlayerId, onRetractChoice, onRetractDecline, submitting } = props
+  if (!myPlayerId) return null
+  const canRetractChoice = !!onRetractChoice && shouldRetractOwnChoice(state, myPlayerId)
+  const canRetractDecline = !!onRetractDecline && shouldRetractOwnDecline(state, myPlayerId)
+  if (!canRetractChoice && !canRetractDecline) return null
+  return (
+    <div className="flex flex-wrap gap-2 text-sm">
+      {canRetractChoice && (
+        <button
+          type="button"
+          disabled={submitting}
+          onClick={onRetractChoice}
+          title="Take your card choice back and pick again"
+          className="rounded-md border border-neutral-700 px-3 py-1 hover:border-neutral-500 disabled:opacity-50"
+        >
+          Change my card
+        </button>
+      )}
+      {canRetractDecline && (
+        <button
+          type="button"
+          disabled={submitting}
+          onClick={onRetractDecline}
+          title="Take back every card you moved to decline this phase"
+          className="rounded-md border border-neutral-700 px-3 py-1 hover:border-neutral-500 disabled:opacity-50"
+        >
+          Take back my declines
+        </button>
+      )}
+    </div>
+  )
+}
+
+function PurchasePanel(props: {
+  state: GameState
+  players: SeatInfo[]
+  myPlayerId: string | null
+  unitContent: UnitContent
+  achievementContent: AchievementContent
+  taleContent: TaleContent
+  onPurchaseCard: (cardId: string) => void
+  onPassPurchase: () => void
+}) {
+  const { state, players, myPlayerId, unitContent, achievementContent, taleContent, onPurchaseCard, onPassPurchase } = props
+  if (!myPlayerId) return null
+  if (!state.pendingPlayerIds.includes(myPlayerId)) {
+    const stillPending = [...new Set(state.pendingPlayerIds)]
+    return <p className="text-sm text-neutral-300">Waiting for: {stillPending.map((id) => playerName(players, id)).join(', ') || '…'}</p>
+  }
+
+  const me = state.players.find((p) => p.id === myPlayerId)
+  if (!me) return null
+  const achievementsClaimed = Object.keys(state.claimedByAchievementId).length
+  const { current: cost, upcoming } = purchasePriceLadder(achievementsClaimed, achievementContent.purchaseCostTable, achievementContent.gameLength)
+  const declineCardIds = sortCardIdsForDisplay(me.declineCardIds, state.cards)
+
+  return (
+    <div className="flex flex-col gap-2 text-sm">
+      <p className="font-medium text-indigo-400">
+        Buy a card back from decline for <span className="text-amber-400">{cost}</span> gold (you have{' '}
+        {me.resources.gold}), or pass.
+        {upcoming.length > 0 && (
+          <span className="block text-xs font-normal text-neutral-500">Price rises to {upcoming.join(' → ')} gold as more achievements are claimed.</span>
+        )}
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {declineCardIds.map((cardId) => {
+          const card = state.cards[cardId]
+          const scoreDelta = expectedScoreDelta(
+            state,
+            { type: 'PURCHASE_CARD', playerId: myPlayerId, cardId },
+            myPlayerId,
+            unitContent,
+            achievementContent,
+            taleContent,
+          )
+          return (
+            <button
+              key={cardId}
+              disabled={me.resources.gold < cost}
+              onClick={() => onPurchaseCard(cardId)}
+              className="rounded-md border border-amber-500 px-3 py-1 hover:border-amber-300 disabled:opacity-40"
+            >
+              {card ? capitalize(card.kind) : cardId}
+              {scoreDelta ? <span className={scoreDelta > 0 ? 'text-emerald-400' : 'text-red-400'}>{scoreDeltaSuffix(scoreDelta)}</span> : null}
+            </button>
+          )
+        })}
+        <button onClick={onPassPurchase} className="rounded-md border border-neutral-700 px-3 py-1 hover:border-neutral-500">
+          Pass
+        </button>
+      </div>
+      {me.declineCardIds.length === 0 && <p className="text-neutral-500">Nothing in decline to buy back.</p>}
+    </div>
+  )
+}
+
+/** Every card id in a `CardChoiceRecap` map's per-player list, turned into its display kind — drops an id whose card can't be found rather than showing a broken icon. */
+function kindsForCardIds(cardIds: string[] | undefined, cards: Record<string, Card>): string[] {
+  if (!cardIds) return []
+  return cardIds.map((id) => cards[id]?.kind).filter((kind): kind is string => Boolean(kind))
+}
+
+/** One section of CardChoiceHistoryPanel: a label followed by every eligible player's icon row, all wrapped into as few rows as will fit rather than one row per player. */
+function CardChoiceHistorySection({ label, players, eligiblePlayers, kindsByPlayerId }: { label: string; players: SeatInfo[]; eligiblePlayers: Player[]; kindsByPlayerId: (playerId: string) => string[] | undefined }) {
+  return (
+    <div className="flex flex-col gap-1 text-sm">
+      <p className="font-medium text-neutral-300">{label}</p>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        {eligiblePlayers.map((p) => (
+          <span key={p.id} className="flex items-center gap-1.5">
+            <PlayerColorName players={players} playerId={p.id} />
+            <KindIconRow kinds={kindsByPlayerId(p.id) ?? []} emptyLabel="none" />
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Read-only recap of card selection/purchase shown on the board while
+ * reviewing history (issue #314). `recap` is GameView's own
+ * `cardChoicesForRecap` result (engine/turnReview.ts) — NOT derived here
+ * from `state.actionHistory`/`chosenCardIdByPlayerId`/`player.declineCardIds`
+ * directly (issue #462's second follow-up): a forced single-option pick
+ * (RULE_ENFORCEMENT_PLAN.md §4.2/§4.3 — e.g. every remaining player's hand
+ * down to one card) never gets its own `actionHistory` entry, only a step
+ * folded into whatever triggered it, so a scan over top-level entries (or
+ * the live, mutable fields, which get reset/mutated the instant the *next*
+ * round's phase begins) can silently come up empty for an entire round's
+ * picks. GameView already has the genesis/content needed to re-derive those
+ * folded-in steps (see `cardChoicesForRecap`'s own doc comment) — this panel
+ * doesn't.
+ *
+ * Only ever rendered for a review stop GameView has computed
+ * `roundPhaseForRecap`/`showCardChoiceRecap` true for (engine/turnReview.ts)
+ * — `'actions'` (below) or a completed `declinePurchase` group (else
+ * branch), never for `selectCards`/`decline` themselves (issue #316: don't
+ * reveal a partial "n of N chosen" picture while eligible players are still
+ * mid-pick). `roundPhase` is that same `roundPhaseForRecap` result, NOT
+ * `state.roundPhase` (issue #462): a completed `actions` group's stop can
+ * itself replay with `finishRound` already having chained straight through
+ * an empty decline/purchase phase into the *next* round's `selectCards` —
+ * trusting the raw field here would flip this panel into the "Purchased
+ * cards"/"Declined cards" branch (both empty, since nothing was actually
+ * declined/purchased that round) instead of the "Played cards" recap the
+ * `'actions'` group is actually showing.
+ */
+function CardChoiceHistoryPanel({ state, players, roundPhase, recap }: { state: GameState; players: SeatInfo[]; roundPhase: RoundPhase; recap: CardChoiceRecap }) {
+  const eligiblePlayers = state.players.filter((p) => !p.eliminated)
+
+  if (roundPhase === 'actions') {
+    return (
+      <CardChoiceHistorySection
+        label="Played cards:"
+        players={players}
+        eligiblePlayers={eligiblePlayers}
+        kindsByPlayerId={(playerId) => {
+          const cardId = recap.chosenCardIdByPlayerId[playerId]
+          return cardId ? kindsForCardIds([cardId], state.cards) : []
+        }}
+      />
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <CardChoiceHistorySection
+        label="Purchased cards:"
+        players={players}
+        eligiblePlayers={eligiblePlayers}
+        kindsByPlayerId={(playerId) => kindsForCardIds(recap.purchasedCardIdsByPlayerId[playerId], state.cards)}
+      />
+      <CardChoiceHistorySection
+        label="Declined cards:"
+        players={players}
+        eligiblePlayers={eligiblePlayers}
+        kindsByPlayerId={(playerId) => kindsForCardIds(recap.declinedCardIdsByPlayerId[playerId], state.cards)}
+      />
+    </div>
+  )
+}
+
+export function RoundView(props: {
+  state: GameState
+  players: SeatInfo[]
+  myPlayerId: string | null
+  unitContent: UnitContent
+  achievementContent: AchievementContent
+  /** Drives the achievements panel's "Tale bonuses" section and its contribution to each player's live score (see calculateVPBreakdown) — EMPTY_TALE_CONTENT for a game with no Tales active. */
+  taleContent: TaleContent
+  /** Per-card-zone unit plate colours (issue #311 follow-up) — the viewer's own choice from ../GameView.tsx's display settings (./preferences.ts); undefined falls back to DEFAULT_UNIT_PLATE_COLORS inside HexBoard. */
+  unitPlateColors?: UnitPlateColors
+  /**
+   * Whether PlayersStrip's per-kind unit badge shows remaining supply, units
+   * placed, or both (issue #346) — the viewer's own display setting
+   * (./preferences.ts); undefined falls back to the original "remaining"
+   * behaviour, same pattern as `unitPlateColors` above.
+   */
+  unitReserveDisplayMode?: UnitReserveDisplayMode
+  /**
+   * Whether, when the viewer's own pick would be the one that resolves the
+   * select-cards or decline phase (the last entry leaving
+   * `pendingPlayerIds`) and so reveal every player's simultaneous choice,
+   * SelectCardsPanel/DeclinePanel should hold it locally behind a "Reveal
+   * all cards" button instead of submitting it the instant a card is
+   * clicked (issue #528) — the viewer's own display setting
+   * (./preferences.ts). Undefined (e.g. most tests) falls back to false —
+   * the original submit-immediately behaviour — rather than the setting's
+   * default of "on",
+   * since a caller that never passes this prop has nothing loaded to
+   * disagree with in the first place. If another player's own action (e.g.
+   * a retraction) makes the viewer no longer the one who'd trigger a reveal
+   * while a pick sits staged, the button just relabels to "Submit" rather
+   * than firing on its own — see `useStagedCardChoice`'s doc comment
+   * (issue #546).
+   */
+  confirmBeforeRevealingCards?: boolean
+  /** True while a move submitted via ../GameView.tsx's onAction is in flight (issue #434) — shown as a small "Sending…" badge in the board's top-right corner, beside the expand/collapse chevron. */
+  submitting?: boolean
+  /**
+   * What happened during the single turn currently shown by GameView's
+   * "Show history" bar (issue #261) — see engine/turnReview.ts's
+   * `buildTurnReview`. GameView computes this fresh for whichever turn its
+   * bar is currently positioned on (it owns the Prev/Next/slider controls
+   * and the underlying historical-replay cache), diffing the real,
+   * previously-replayed board state from just before that turn against just
+   * after it — so the halos/arrows below always match the historical board
+   * actually shown in `state` (not the live board). Null while "Show
+   * history" isn't active, or while GameView's own "Review history"
+   * (action-by-action) mode is active instead.
+   */
+  turnReview: TurnReview | null
+  /**
+   * True while GameView is showing a replayed historical state instead of
+   * the live game — either via "Review history" (action-by-action) or "Show
+   * history" (turn-by-turn, with `turnReview` set). Hides every panel that
+   * would otherwise let the (non-existent, in review) `myPlayerId` act.
+   */
+  showHistory: boolean
+  /**
+   * Whether to render the shared bank's line at the top of this view. The
+   * standalone app sometimes showed it in its own header instead; ../GameView.tsx
+   * always sets it, since the platform's header knows nothing of the bank.
+   */
+  showBankRow?: boolean
+  /**
+   * Whether the card-choice recap overlay (CardChoiceHistoryPanel) should
+   * render right now (issue #326 follow-up) — GameView decides this since it
+   * alone knows whether "Show history" is on a review group's first turn
+   * stop vs. a later one within the same `actions` group (see
+   * engine/turnReview.ts's `shouldShowCardChoiceRecap`). Meaningless outside
+   * `showHistory`; defaults to false so callers that never enter review
+   * (most tests) don't need to pass it.
+   */
+  showCardChoiceRecap?: boolean
+  /**
+   * Which recap section (issue #462) `showCardChoiceRecap`'s overlay should
+   * show — GameView's `roundPhaseForRecap` result, the same value it
+   * compared against to decide `showCardChoiceRecap` itself. Deliberately
+   * NOT re-derived from `state.roundPhase` inside CardChoiceHistoryPanel:
+   * see that component's own doc comment for why the raw field can lie
+   * about which group's stop this actually is. Meaningless (and unused)
+   * while `showCardChoiceRecap` is false, so it's optional like that prop.
+   */
+  cardChoiceRecapPhase?: RoundPhase
+  /**
+   * The actual card-id data `showCardChoiceRecap`'s overlay renders (issue
+   * #462's second follow-up) — GameView's `cardChoicesForRecap` result
+   * (engine/turnReview.ts), re-derived from a small bounded replay rather
+   * than read off `state` directly; see CardChoiceHistoryPanel's own doc
+   * comment for why. Meaningless (and unused) while `showCardChoiceRecap` is
+   * false, so it's optional like that prop; defaults to empty maps.
+   */
+  cardChoiceRecap?: CardChoiceRecap
+  /**
+   * Returns to live play from history review — called when the player
+   * clicks the board while `showHistory` is true (issue #285), same as the
+   * review banner's "Back to live" button. Undefined outside review.
+   */
+  onExitHistory?: () => void
+  /**
+   * Which of the review screen's 3 territory-control display modes is active
+   * (issue #281, GameView's review banner): 'off' shows nothing extra, 'on'
+   * outlines every currently-controlled region exactly like the victory
+   * screen (see EndGameView.tsx), and 'changes' outlines only the regions
+   * whose majority owner differs from `previousHistoryState` — including a
+   * region that lost its owner entirely, shown in black-and-white stripes
+   * rather than any player's colour (see calculateChangedTerritoryHexes).
+   * Ignored while
+   * `showHistory` is false — this is a history-review-only feature.
+   */
+  territoryControlMode: 'off' | 'on' | 'changes'
+  /**
+   * Live-play territory-control overlay (issue #656): while true and
+   * `showHistory` is false, outlines every region the live board currently
+   * controls, exactly like `territoryControlMode`'s 'on' mode does during
+   * review (and like EndGameView's final board) — computed straight off the
+   * live `state`, not a replayed one, so there's no "changes" variant to
+   * diff against. Defaults to false so existing callers (tests included)
+   * keep compiling unchanged.
+   */
+  liveTerritoryControlOn?: boolean
+  /**
+   * The state just before the currently-reviewed point, for
+   * territoryControlMode 'changes' to diff `state` against — GameView's own
+   * replay cache already holds this (same "previous state" `turnReview`
+   * above is itself derived from), see its doc comment for how the boundary
+   * is chosen for each step mode. Null wherever there's nothing prior to
+   * compare against (genesis, or turn mode's default entry point) — 'changes'
+   * mode then simply has nothing to highlight. Ignored outside 'changes'
+   * mode.
+   */
+  previousHistoryState: GameState | null
+  onChooseCard: (cardId: string) => void
+  onResolveUnit: (unitId: string, actionId: string, target?: Coordinate) => void
+  /** Resolves the same no-target action (see actionNeedsTargeting) for every listed unit id in one submission — see ActionsPanel's bulk-action buttons (issue #61). */
+  onResolveBulkAction: (unitIds: string[], actionId: string) => void
+  /**
+   * Resolves a "supporting actions" pick (issue #147): the chosen idle
+   * same-kind units' resource-gathering actions, in order, immediately
+   * followed by the primary unit's action — one RESOLVE_UNIT_ACTION
+   * submission, so the support units' resources are already banked by the
+   * time the primary action's cost is checked (see UnitActionAssignment's
+   * doc comment, ../engine/actions.ts).
+   */
+  onResolveSupportedAction: (supportAssignments: { unitId: string; actionId: string }[], primary: { unitId: string; actionId: string; target?: Coordinate }) => void
+  onPassActions: () => void
+  onMoveToDecline: (cardId: string) => void
+  onPurchaseCard: (cardId: string) => void
+  onPassPurchase: () => void
+  /**
+   * Takes back the viewer's own card choice (RETRACT_CHOICE) — offered while
+   * `shouldRetractOwnChoice` (./undoDecision.ts) says it would do something.
+   * The standalone app routed its Undo button here; on the platform Undo is
+   * the framework's shared-pointer UNDO_ACTION, which reverts whichever
+   * entry is newest — possibly another player's pick — so this is its own
+   * button. Omitted: no button.
+   */
+  onRetractChoice?: () => void
+  /** Same as `onRetractChoice`, for the viewer's own decline-phase additions (RETRACT_DECLINE with no cardId — all of them at once). */
+  onRetractDecline?: () => void
+  /**
+   * Admin-only testing aid (issue #430): while true, every acting unit's
+   * menu gains an extra "Move anywhere (cheat)" option (see
+   * CHEAT_MOVE_ACTION above) alongside its real actions. Defaults to false
+   * so every existing call site (and the dozens of test fixtures that build
+   * RoundView props directly) keeps compiling unchanged.
+   */
+  cheatModeEnabled?: boolean
+}) {
+  const {
+    state,
+    players,
+    myPlayerId,
+    unitContent,
+    achievementContent,
+    taleContent,
+    unitPlateColors,
+    unitReserveDisplayMode,
+    turnReview,
+    showHistory,
+    showBankRow = false,
+    showCardChoiceRecap = false,
+    cardChoiceRecapPhase,
+    cardChoiceRecap,
+    cheatModeEnabled = false,
+    territoryControlMode,
+    liveTerritoryControlOn = false,
+    previousHistoryState,
+  } = props
+  const [mode, setMode] = useState<ActionUiMode>({ kind: 'idle' })
+  /** Hides the full player roster + achievements sidebar so the board can grow into the freed space — see the "Expand board" toggle below. */
+  const [sidebarHidden, setSidebarHidden] = useState(false)
+
+  const turnKey = `${state.turn}:${state.roundPhase}:${state.pendingPlayerIds[0] ?? ''}`
+  useEffect(() => {
+    setMode({ kind: 'idle' })
+  }, [turnKey])
+
+  const isMyActionTurn = state.roundPhase === 'actions' && state.pendingPlayerIds[0] === myPlayerId
+  const myChosenCardId = myPlayerId ? state.chosenCardIdByPlayerId[myPlayerId] : null
+  const myCard = myChosenCardId ? state.cards[myChosenCardId] : null
+  const myActingUnits = isMyActionTurn && myCard && myPlayerId ? eligibleActingUnits(state, unitContent, myPlayerId, myCard) : []
+  const availableUnits = myActingUnits.filter((u) => hasRemainingActivation(state, unitContent, u))
+
+  // Normally exactly one unit (or none), but a hex can hold more than one
+  // of the player's own acting units at once — e.g. a Ship docked at its
+  // own Port (The Ports Tale) — so the menu covers every acting unit at
+  // the clicked hex, each contributing its own kind's actions (see
+  // HexBoard's ActionMenu doc comment for how those get grouped visually).
+  const menuCoord = mode.kind === 'menu' ? mode.coord : null
+  const menuUnits = menuCoord ? availableUnits.filter((u) => u.coord.q === menuCoord.q && u.coord.r === menuCoord.r) : []
+  const targetingUnitId = mode.kind === 'targeting' ? mode.unitId : null
+  const targetingActionId = mode.kind === 'targeting' ? mode.actionId : null
+  // The "move anywhere" cheat pick (issue #430) uses a synthetic UnitAction
+  // (CHEAT_MOVE_ACTION above) rather than a content lookup, since it must
+  // also work for a unit kind with no real `move` action at all — there's
+  // nothing to find in unitContent.actionsByKind for those, and the point is
+  // to submit it anyway and let the server reject it.
+  const targetingCheat = mode.kind === 'targeting' && !!mode.cheat
+  const targetingUnit = targetingUnitId ? (myActingUnits.find((u) => u.id === targetingUnitId) ?? null) : null
+  const targetingAction = targetingCheat
+    ? CHEAT_MOVE_ACTION
+    : targetingUnit && targetingActionId
+      ? (unitContent.actionsByKind[targetingUnit.kind] ?? []).find((a) => a.id === targetingActionId)
+      : null
+  // Whether the picked action is affordable right this instant — when it
+  // isn't (but isActionSupportable said yes), legal targets are previewed
+  // against a hypothetical boosted state (see boostedStateForSupport) so the
+  // player can still pick where the action will land; the real resolve only
+  // happens once support units are chosen and confirmed (see the
+  // 'supporting' branch of handleBoardClick below). The cheat pick is always
+  // "available now" — it has no cost and needs no support-unit flow.
+  const targetingActionAvailableNow =
+    targetingCheat || !!(targetingUnit && targetingAction && myPlayerId && isActionAvailableForUnit(state, myPlayerId, targetingUnit, targetingAction, unitContent))
+  const targetingSupportCandidates =
+    !targetingCheat && targetingUnit && targetingAction && myPlayerId && !targetingActionAvailableNow
+      ? findSupportCandidates(state, myPlayerId, targetingUnit, unitContent)
+      : []
+
+  let legalTargets: Coordinate[] = []
+  if (targetingCheat) {
+    // Every hex on the board, legal or not — see CHEAT_MOVE_ACTION's doc
+    // comment: the whole point is to submit an out-of-range target through
+    // the normal pipeline and let applyMove's real legality check reject it.
+    legalTargets = Object.values(state.board.tiles).map((t) => t.coord)
+  } else if (targetingUnit && targetingAction && myPlayerId) {
+    const legalTargetsState = targetingActionAvailableNow ? state : boostedStateForSupport(state, myPlayerId, targetingSupportCandidates)
+    legalTargets = computeLegalTargets(legalTargetsState, myPlayerId, targetingUnit, targetingAction, unitContent)
+  }
+
+  // 'supporting' mode's acting unit/action/candidates — recomputed fresh
+  // against the real (not-yet-boosted) `state`, since nothing has actually
+  // been submitted yet at this point (see ActionUiMode's doc comment).
+  const supportingUnitId = mode.kind === 'supporting' ? mode.unitId : null
+  const supportingActionId = mode.kind === 'supporting' ? mode.actionId : null
+  const supportingTarget = mode.kind === 'supporting' ? mode.target : undefined
+  const supportingSelectedIds = mode.kind === 'supporting' ? mode.selectedSupportUnitIds : []
+  const supportingUnit = supportingUnitId ? (myActingUnits.find((u) => u.id === supportingUnitId) ?? null) : null
+  const supportingAction = supportingUnit && supportingActionId ? (unitContent.actionsByKind[supportingUnit.kind] ?? []).find((a) => a.id === supportingActionId) : null
+  const supportingCandidates = supportingUnit && myPlayerId ? findSupportCandidates(state, myPlayerId, supportingUnit, unitContent) : []
+  const supportingSelectedCandidates = supportingCandidates.filter((c) => supportingSelectedIds.includes(c.unit.id))
+  const supportingNeededCandidates =
+    supportingUnit && supportingAction && myPlayerId
+      ? neededSupportCandidates(state, myPlayerId, supportingUnit, supportingAction, supportingCandidates, supportingSelectedCandidates)
+      : []
+
+  function selectAction(unitId: string, actionId: string) {
+    if (!myPlayerId) return
+    const unit = menuUnits.find((u) => u.id === unitId)
+    if (!unit) return
+    if (actionId === CHEAT_MOVE_ACTION_ID) {
+      setMode({ kind: 'targeting', unitId: unit.id, actionId: CHEAT_MOVE_ACTION.id, cheat: true })
+      return
+    }
+    const action = (unitContent.actionsByKind[unit.kind] ?? []).find((a) => a.id === actionId)
+    if (!action) return
+    const availableNow = isActionAvailableForUnit(state, myPlayerId, unit, action, unitContent)
+    if (!availableNow && !isActionSupportable(state, myPlayerId, unit, action, unitContent)) return
+    if (actionNeedsTargeting(action.effect)) {
+      setMode({ kind: 'targeting', unitId: unit.id, actionId })
+    } else if (availableNow) {
+      props.onResolveUnit(unit.id, actionId)
+      setMode({ kind: 'idle' })
+    } else {
+      // No target to pick — go straight to choosing support units.
+      setMode({ kind: 'supporting', unitId: unit.id, actionId, selectedSupportUnitIds: [] })
+    }
+  }
+
+  function handleBoardClick(coord: Coordinate) {
+    if (mode.kind === 'supporting') {
+      if (!supportingUnit || !supportingAction || !myPlayerId) {
+        setMode({ kind: 'idle' })
+        return
+      }
+      // Clicking a unit already picked this pick is a no-op — it has
+      // nothing further to contribute, but shouldn't cancel the pick either.
+      if (supportingSelectedCandidates.some((c) => c.unit.coord.q === coord.q && c.unit.coord.r === coord.r)) return
+      const candidate = supportingNeededCandidates.find((c) => c.unit.coord.q === coord.q && c.unit.coord.r === coord.r)
+      if (!candidate) {
+        setMode({ kind: 'idle' })
+        return
+      }
+      const nextSelected = [...supportingSelectedCandidates, candidate]
+      const boosted = boostedStateForSupport(state, myPlayerId, nextSelected)
+      const actionReady =
+        isActionAvailableForUnit(boosted, myPlayerId, supportingUnit, supportingAction, unitContent) &&
+        (!actionNeedsTargeting(supportingAction.effect) ||
+          (!!supportingTarget &&
+            computeLegalTargets(boosted, myPlayerId, supportingUnit, supportingAction, unitContent).some((c) => c.q === supportingTarget!.q && c.r === supportingTarget!.r)))
+      if (actionReady) {
+        props.onResolveSupportedAction(
+          nextSelected.map((c) => ({ unitId: c.unit.id, actionId: c.action.id })),
+          { unitId: supportingUnit.id, actionId: supportingAction.id, target: supportingTarget },
+        )
+        setMode({ kind: 'idle' })
+      } else {
+        setMode({ kind: 'supporting', unitId: supportingUnit.id, actionId: supportingAction.id, target: supportingTarget, selectedSupportUnitIds: [...supportingSelectedIds, candidate.unit.id] })
+      }
+      return
+    }
+    if (targetingUnit && targetingAction && legalTargets.some((c) => c.q === coord.q && c.r === coord.r)) {
+      if (targetingActionAvailableNow) {
+        props.onResolveUnit(targetingUnit.id, targetingAction.id, coord)
+        setMode({ kind: 'idle' })
+      } else {
+        setMode({ kind: 'supporting', unitId: targetingUnit.id, actionId: targetingAction.id, target: coord, selectedSupportUnitIds: [] })
+      }
+      return
+    }
+    const clickedUnits = availableUnits.filter((u) => u.coord.q === coord.q && u.coord.r === coord.r)
+    if (clickedUnits.length > 0) {
+      setMode((prev) => (prev.kind === 'menu' && prev.coord.q === coord.q && prev.coord.r === coord.r ? { kind: 'idle' } : { kind: 'menu', coord }))
+      return
+    }
+    setMode({ kind: 'idle' })
+  }
+
+  const availableUnitIds = new Set(availableUnits.map((u) => u.id))
+  // Highlighted candidates are only ones still needed to close the
+  // remaining shortfall (see neededSupportCandidates) — an already-selected
+  // unit stays highlighted too (solid, via supportSelected) as feedback for
+  // what's already been picked, even though it's no longer "needed".
+  const supportCandidateUnitIds = new Set([...supportingNeededCandidates.map((c) => c.unit.id), ...supportingSelectedIds])
+  const historyByUnit = showHistory && turnReview ? summarizeUnitHistory(turnReview.events) : null
+  // Temple UX (issue #703): while the player is choosing (or has chosen, and
+  // is now picking support units for) a convert action's target, show the
+  // real per-target gold cost next to each convertible unit instead of
+  // leaving it a surprise — ConvertEffect.costByTargetKind means it isn't
+  // always the same as the flat cost the action-menu button itself previews.
+  // `legalTargets` only ever holds the *current* targetingAction's targets
+  // (see its definition above), so gating on convertCostEffect being convert
+  // is enough to know they're convert targets here too.
+  const convertCostEffect =
+    mode.kind === 'targeting' && targetingAction && targetingAction.effect.actionType === 'convert'
+      ? targetingAction.effect
+      : mode.kind === 'supporting' && supportingAction && supportingAction.effect.actionType === 'convert'
+        ? supportingAction.effect
+        : null
+  const convertCostCoords: Coordinate[] = mode.kind === 'supporting' && supportingTarget ? [supportingTarget] : legalTargets
+  const units: UnitMarker[] = state.units.map((u) => {
+    const history = historyByUnit?.get(u.id)
+    // Card-zone lookup for the plate colour / "in decline" grey glyph
+    // (issue #305/#311) — each player has exactly one card per unit kind
+    // (cardIdFor), so no need to search state.cards. `players` (SeatInfo[])
+    // only carries display info; card zones live on state.players (Player).
+    const engineOwner = state.players.find((p) => p.id === u.ownerId)
+    const cardId = cardIdFor(u.ownerId, u.kind)
+    const cardZone = engineOwner ? findCardZone(engineOwner, cardId) : undefined
+    // A card stays in the 'hand' zone (see cards.ts's findCardZone) for the
+    // whole round once chosen, right up until its owner's turn actually
+    // resolves it (applyAction.ts's finishActionsTurn moves it hand ->
+    // discard then) — so "selected" isn't its own CardZone in practice, it's
+    // this hand card matching the round's chosen pick. Revealed to every
+    // player once the actions phase starts (matching PlayerSidebar's own
+    // "Playing" badge above), not just once it's actually that owner's turn
+    // — see this file's PlayerSidebar component for the same reveal-timing
+    // comment. Once a player's turn passes, cardZone naturally flips to
+    // 'discard' on its own, so an earlier player's pick reads as discard
+    // without any extra bookkeeping here.
+    const isChosenThisRound = state.roundPhase === 'actions' && engineOwner && state.chosenCardIdByPlayerId[engineOwner.id] === cardId
+    const cardState: UnitMarker['cardState'] =
+      cardZone === 'currentlyPlayed' || (cardZone === 'hand' && isChosenThisRound)
+        ? 'selected'
+        : cardZone === 'hand'
+          ? 'hand'
+          : cardZone === 'discard'
+            ? 'discard'
+            : undefined
+    return {
+      coord: u.coord,
+      color: players.find((p) => p.id === u.ownerId)?.color ?? '#a3a3a3',
+      kind: u.kind,
+      // In 'supporting' mode, the yellow "could act this turn" ring is
+      // unrelated to the current pick — only the teal supportCandidate ring
+      // below should show, so units outside the support pool don't look
+      // pickable too (see issue #150).
+      highlighted: !showHistory && isMyActionTurn && mode.kind !== 'supporting' && availableUnitIds.has(u.id),
+      supportCandidate: !showHistory && mode.kind === 'supporting' && supportCandidateUnitIds.has(u.id),
+      supportSelected: !showHistory && mode.kind === 'supporting' && supportingSelectedIds.includes(u.id),
+      historyHalos: history?.halos,
+      historyDelta: history && Object.keys(history.resourceDelta).length > 0 ? history.resourceDelta : undefined,
+      conversionCost:
+        !showHistory && convertCostEffect && myPlayerId && convertCostCoords.some((c) => c.q === u.coord.q && c.r === u.coord.r)
+          ? convertTargetCost(state, myPlayerId, u.coord, convertCostEffect, unitContent)
+          : undefined,
+      connectedNeighborCoords: u.connectedNeighborCoords,
+      cardState,
+      declined: cardZone === 'decline',
+    }
+  })
+  const historyArrows: HistoryArrow[] = historyByUnit ? [...historyByUnit.values()].flatMap((h) => h.moves) : []
+
+  // Territory-control overlay (issue #281, live-play toggle issue #656) —
+  // 'off' review mode with the live toggle also off passes no
+  // territoryControl at all to HexBoard (undefined, not []: see its own doc
+  // comment, supplying the prop at all switches HexBoard into
+  // victory-screen-style rendering, which neither "off" state should trigger).
+  const pointsForHex = (hex: { terrain: string; regionSize: number }) => (achievementContent.terrainVictoryPoints[hex.terrain] ?? 0) * hex.regionSize
+  let territoryControl: { coord: Coordinate; color: string; terrain: string; points: number }[] | undefined
+  let territoryValueRange: { min: number; max: number } | undefined
+  if ((showHistory && territoryControlMode === 'on') || (!showHistory && liveTerritoryControlOn)) {
+    territoryControl = calculateTerritoryControlByHex(state.board, state.units, achievementContent.terrainScoresAs).map((hex) => ({
+      coord: hex.coord,
+      color: players.find((p) => p.id === hex.ownerId)?.color ?? '#a3a3a3',
+      terrain: hex.terrain,
+      points: pointsForHex(hex),
+    }))
+  } else if (showHistory && territoryControlMode === 'changes') {
+    territoryControl = previousHistoryState
+      ? calculateChangedTerritoryHexes(state.board, previousHistoryState.units, state.units, achievementContent.terrainScoresAs).map((hex) => ({
+          coord: hex.coord,
+          color: hex.ownerId ? (players.find((p) => p.id === hex.ownerId)?.color ?? '#a3a3a3') : '#ffffff',
+          terrain: hex.terrain,
+          points: pointsForHex(hex),
+          striped: hex.ownerId === null,
+        }))
+      : []
+    // Scale border width against every territory before or after this step,
+    // not just the handful of hexes that actually changed hands — otherwise
+    // a small territory could render at max width just for being the
+    // biggest among a few tiny changes (see HexBoard's territoryValueRange
+    // doc comment).
+    if (previousHistoryState) {
+      const overallPoints = [
+        ...calculateTerritoryControlByHex(state.board, previousHistoryState.units, achievementContent.terrainScoresAs),
+        ...calculateTerritoryControlByHex(state.board, state.units, achievementContent.terrainScoresAs),
+      ].map(pointsForHex)
+      if (overallPoints.length > 0) {
+        territoryValueRange = { min: Math.min(...overallPoints), max: Math.max(...overallPoints) }
+      }
+    }
+  }
+
+  const ghostCells: GhostCell[] =
+    mode.kind === 'supporting' && supportingTarget ? [{ coord: supportingTarget, legal: true }] : legalTargets.map((coord) => ({ coord, legal: true }))
+  const actionMenu =
+    menuCoord && menuUnits.length > 0 && myPlayerId
+      ? {
+          coord: menuCoord,
+          options: menuUnits.flatMap((unit) => [
+            ...(unitContent.actionsByKind[unit.kind] ?? []).map((a) => {
+              const availableNow = isActionAvailableForUnit(state, myPlayerId, unit, a, unitContent)
+              const supportable = !availableNow && isActionSupportable(state, myPlayerId, unit, a, unitContent)
+              return {
+                unitId: unit.id,
+                unitKind: capitalize(unit.kind),
+                id: a.id,
+                label: a.name,
+                description: a.description,
+                outcome: computeActionOutcomePreview(state, myPlayerId, unit, a),
+                disabled: !availableNow && !supportable,
+                supportable,
+                shortfall: supportable ? computeActionShortfall(state, myPlayerId, unit, a) : undefined,
+              }
+            }),
+            // Issue #430: admin-only, every acting unit gets this regardless
+            // of whether its kind has a real 'move' action — see
+            // CHEAT_MOVE_ACTION's doc comment.
+            ...(cheatModeEnabled
+              ? [
+                  {
+                    unitId: unit.id,
+                    unitKind: capitalize(unit.kind),
+                    id: CHEAT_MOVE_ACTION_ID,
+                    label: CHEAT_MOVE_ACTION.name,
+                    description: CHEAT_MOVE_ACTION.description,
+                    disabled: false,
+                  },
+                ]
+              : []),
+          ]),
+          onSelect: selectAction,
+        }
+      : undefined
+
+  return (
+    <div className="flex flex-col gap-4">
+      {showBankRow && (
+        <div className="flex flex-wrap items-center gap-4">
+          <BankResources state={state} />
+        </div>
+      )}
+      {/* Turn status panels ("Waiting for X…") re-render as other players act in real time; their
+          height changes shift everything below them. Hidden while reviewing history so that view
+          stays still instead of jumping around underneath the player. */}
+      {!showHistory && state.roundPhase === 'selectCards' && (
+        <SelectCardsPanel
+          state={state}
+          players={players}
+          myPlayerId={myPlayerId}
+          onChooseCard={props.onChooseCard}
+          confirmBeforeRevealingCards={props.confirmBeforeRevealingCards ?? false}
+        />
+      )}
+      {!showHistory && state.roundPhase === 'actions' && mode.kind === 'supporting' && supportingUnit && supportingAction && (
+        <SupportHint actingUnitKind={supportingUnit.kind} actionLabel={supportingAction.name} neededCandidateCount={supportingNeededCandidates.length} />
+      )}
+      {!showHistory && state.roundPhase === 'actions' && mode.kind !== 'supporting' && (
+        <ActionsPanel
+          state={state}
+          players={players}
+          myPlayerId={myPlayerId}
+          unitContent={unitContent}
+          onPassActions={props.onPassActions}
+          onResolveBulkAction={props.onResolveBulkAction}
+        />
+      )}
+      {!showHistory && state.roundPhase === 'decline' && (
+        <DeclinePanel
+          state={state}
+          players={players}
+          myPlayerId={myPlayerId}
+          onMoveToDecline={props.onMoveToDecline}
+          confirmBeforeRevealingCards={props.confirmBeforeRevealingCards ?? false}
+          unitContent={unitContent}
+          achievementContent={achievementContent}
+          taleContent={taleContent}
+        />
+      )}
+      {!showHistory && <RetractPanel state={state} myPlayerId={myPlayerId} onRetractChoice={props.onRetractChoice} onRetractDecline={props.onRetractDecline} submitting={props.submitting ?? false} />}
+      {!showHistory && state.roundPhase === 'purchase' && (
+        <PurchasePanel
+          state={state}
+          players={players}
+          myPlayerId={myPlayerId}
+          unitContent={unitContent}
+          achievementContent={achievementContent}
+          taleContent={taleContent}
+          onPurchaseCard={props.onPurchaseCard}
+          onPassPurchase={props.onPassPurchase}
+        />
+      )}
+
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+        <div className="relative min-w-0 flex-1">
+          <HexBoard
+            board={state.board}
+            units={units}
+            unitPlateColors={unitPlateColors}
+            arrows={historyArrows}
+            ghostCells={ghostCells}
+            actionMenu={actionMenu}
+            territoryControl={territoryControl}
+            territoryValueRange={territoryValueRange}
+            interactive={isMyActionTurn || showHistory}
+            onHexClick={isMyActionTurn ? handleBoardClick : showHistory ? props.onExitHistory : undefined}
+            expanded={sidebarHidden}
+          />
+          {/* Read-only recap of card selection/purchase, overlaid on the
+              board's top-left corner while reviewing history (issue #314) — the
+              interactive pick panels above only make sense during live play
+              (see the matching `!showHistory` panels above), but a player
+              stepping through history still wants to see what everyone chose
+              without an extra click. Only shown for `actions`/`purchase`,
+              once every eligible player's pick for the phase before it is
+              settled — see CardChoiceHistoryPanel's doc comment (issue #316)
+              — and only at the review stop that first shows it, not every
+              stop after (issue #326 follow-up) — see GameView's
+              `showCardChoiceRecap` doc comment. */}
+          {showCardChoiceRecap && (
+            <div className="pointer-events-none absolute left-2 top-2 z-10 max-w-[calc(100%_-_1rem)] rounded-md border border-neutral-700 bg-neutral-900/90 p-3 shadow-lg">
+              <CardChoiceHistoryPanel
+                state={state}
+                players={players}
+                roundPhase={cardChoiceRecapPhase ?? state.roundPhase}
+                recap={cardChoiceRecap ?? { chosenCardIdByPlayerId: {}, purchasedCardIdsByPlayerId: {}, declinedCardIdsByPlayerId: {} }}
+              />
+            </div>
+          )}
+          {/* Overlaid on the board's own top-right corner rather than a separate row above it (issue #434 follow-up: grouped in a row with the "Sending…" badge below so neither overlaps the other) — a standard collapse/expand chevron, flipping direction with sidebarHidden. */}
+          <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
+            {props.submitting && (
+              <span
+                role="status"
+                className="flex items-center gap-1.5 rounded-md border border-neutral-700 bg-neutral-900/90 px-2 py-1 text-xs text-neutral-300"
+              >
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400" aria-hidden="true" />
+                Sending…
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => setSidebarHidden((v) => !v)}
+              aria-label={sidebarHidden ? 'Collapse board' : 'Expand board'}
+              title={
+                sidebarHidden
+                  ? 'Bring back the full player roster and achievements panel beside the board.'
+                  : 'Hide the full player roster and achievements panel so the board can expand into that space.'
+              }
+              className="rounded-full border border-neutral-700 bg-neutral-900/80 p-1.5 hover:border-neutral-500"
+            >
+              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                {sidebarHidden ? <polyline points="15 18 9 12 15 6" /> : <polyline points="9 18 15 12 9 6" />}
+              </svg>
+            </button>
+          </div>
+        </div>
+        {/* Sits beside the board (not below it) so the full roster and achievements stay in view without scrolling past the map — see PlayersStrip/AchievementsPanel's icon-based, per-player-card layout, built for this narrower column. Hideable (see the chevron button overlaid on the board's corner) so the board can grow into this space instead. */}
+        {!sidebarHidden && (
+          <div className="flex w-full flex-col gap-4 lg:w-72 lg:shrink-0 xl:w-80">
+            <PlayersStrip
+              state={state}
+              players={players}
+              myPlayerId={myPlayerId}
+              unitContent={unitContent}
+              achievementContent={achievementContent}
+              taleContent={taleContent}
+              resourceDeltaByPlayerId={showHistory ? turnReview?.resourceDeltaByPlayerId : null}
+              previousHistoryState={showHistory ? previousHistoryState : null}
+              unitReserveDisplayMode={unitReserveDisplayMode}
+            />
+            <AchievementsPanel state={state} players={players} achievementContent={achievementContent} taleContent={taleContent} />
+          </div>
+        )}
+      </div>
+
+    </div>
+  )
+}

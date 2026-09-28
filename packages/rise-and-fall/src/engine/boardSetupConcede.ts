@@ -1,8 +1,8 @@
-// A player conceding during board setup. The engine's own CONCEDE handles
-// the round phases (elimination.ts, applyConcede in ./engine/applyAction.ts)
-// but was never reachable during board setup in the standalone app, and the
-// platform lets a player concede at any point of an active game — board setup
-// included. So this finishes the job for that one case, keeping the setup
+// A player conceding during board setup — CONCEDE's board-setup branch
+// (dispatchAction, ./applyAction.ts). The round phases' concede is
+// applyConcede there; this one was added with the move onto the platform,
+// which lets a player concede at any point of an active game, board setup
+// included, where the standalone app never offered it. It keeps the setup
 // rotation well-formed without the leaver.
 //
 // Tile and unit placement each follow a wrapping index into `turnOrder`
@@ -12,14 +12,13 @@
 // earlier in this lap have placed one more unit than those after), so unit
 // placement never lands on a player with nothing left to place.
 //
-// Server-reachable (imported by ./rules.ts): keep the `.ts` extensions.
+// Server-reachable: keep the `.ts` extensions.
 
-import { currentTilePlacerId, currentUnitPlacerId } from './engine/boardSetup.ts'
-import { syncCardZonesWithBoard } from './engine/cards.ts'
-import { eliminatePlayer } from './engine/elimination.ts'
-import { beginSelectCardsPhase } from './engine/round.ts'
-import type { GameContent } from './gameContent.ts'
-import type { EngineState } from './types.ts'
+import { currentTilePlacerId, currentUnitPlacerId } from './boardSetup.ts'
+import { syncCardZonesWithBoard } from './cards.ts'
+import { eliminatePlayer } from './elimination.ts'
+import { beginSelectCardsPhase } from './round.ts'
+import type { GameState as EngineState } from './types.ts'
 
 /** Who places after `current` once `leaverId` is gone — `current` itself unless it's the leaver, then the next seat round. */
 function nextPlacerAfterLeaving(turnOrder: string[], current: string | null, leaverId: string): string | null {
@@ -33,7 +32,7 @@ function nextPlacerAfterLeaving(turnOrder: string[], current: string | null, lea
   return null
 }
 
-export function concedeDuringBoardSetup(state: EngineState, playerId: string, content: GameContent): EngineState {
+export function concedeDuringBoardSetup(state: EngineState, playerId: string, companionKindsByCardKind: Record<string, string[]>): EngineState {
   const boardSetup = state.boardSetup
   if (state.status !== 'boardSetup' || !boardSetup) return state
 
@@ -62,7 +61,7 @@ export function concedeDuringBoardSetup(state: EngineState, playerId: string, co
 
   const unitPlacementStarted = boardSetup.tileTierQueue.length === 0 && Object.keys(boardSetup.unitsRemainingByPlayerId).length > 0
   if (unitPlacementStarted && Object.values(unitsRemainingByPlayerId).every((kinds) => kinds.length === 0)) {
-    next = syncCardZonesWithBoard({ ...next, status: 'active', boardSetup: null }, content.unitContent.companionKindsByCardKind)
+    next = syncCardZonesWithBoard({ ...next, status: 'active', boardSetup: null }, companionKindsByCardKind)
     next = beginSelectCardsPhase(next)
   }
   return next

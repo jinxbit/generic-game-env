@@ -29,7 +29,6 @@
 import type { ActionDescription, ActionResult, GameDefinition, LobbyState, LoggedAction, Random } from '@game-platform/sdk'
 import { resolveHistory } from '@game-platform/sdk'
 import { buildEngineGenesis, phaseOf, toEngine, toPlatform, type GameState } from './adapter.ts'
-import { concedeDuringBoardSetup } from './concede.ts'
 import { listGameLengthBounds, listMapTemplates, listTales } from './content/resolveContent.ts'
 import { applyGameAction, nextForcedFollowUp } from './engine/applyAction.ts'
 import { moveCard } from './engine/cards.ts'
@@ -270,10 +269,8 @@ export const gameDefinition: GameDefinition<GameData, GameOptions, GameAction> =
   },
 
   onPlayerEliminated(state, playerId) {
-    const engine = toEngine(state, true)
     const content = contentFor(state)
-    if (engine.status === 'boardSetup') return toPlatform(concedeDuringBoardSetup(engine, playerId, content), state)
-    const result = applyGameAction(engine, { type: 'CONCEDE', playerId }, content.unitContent, content.achievementContent, content.boardGenerationContent, content.taleContent)
+    const result = applyGameAction(toEngine(state, true), { type: 'CONCEDE', playerId }, content.unitContent, content.achievementContent, content.boardGenerationContent, content.taleContent)
     return result.ok ? toPlatform(result.state, state) : state
   },
 

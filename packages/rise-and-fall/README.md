@@ -33,7 +33,7 @@ moved onto the platform:
   design documents (`RULE_ENFORCEMENT_PLAN.md`, `HIDDEN_INFORMATION_PLAN.md`,
   `todo.md`, …) and issue numbers; those live in the original repository.
   Changes here: explicit `.ts` import extensions (the rules run in the Edge
-  Functions), and two exports the platform needs — `applyGameAction` (one
+  Functions), CONCEDE during board setup, and two exports the platform needs — `applyGameAction` (one
   dispatch, no log entry, no follow-ups) and `nextForcedFollowUp`.
 - **`src/adapter.ts` is the seam.** `toEngine` joins the platform's envelope
   and `GameData` into an `EngineState`; `toPlatform` splits an engine result
@@ -48,8 +48,8 @@ moved onto the platform:
   game's player count, Tales and length — the engine never imports JSON.
 - **The framework took over** the action log, undo/redo, admin mode, the
   bookkeeping of CONCEDE (the engine still runs its own concede in
-  `onPlayerEliminated`; `src/concede.ts` handles a concede during board
-  setup, which the original app never allowed) and the forced-follow-up loop
+  `onPlayerEliminated`, and now also handles a concede during board setup —
+  `src/engine/boardSetupConcede.ts` — which the original app never allowed) and the forced-follow-up loop
   (a one-card hand's pick, an owed decline with no choice, a tile tier with
   one arrangement left — `nextForcedAction`).
 - **Narration** is the engine's own (`describePrimaryAction` and

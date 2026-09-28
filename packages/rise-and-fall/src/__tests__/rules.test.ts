@@ -9,7 +9,8 @@ import { seatPlayers } from '@game-platform/sdk/testing'
 import { describe, expect, it } from 'vitest'
 import type { GameState } from '../adapter.ts'
 import { currentTilePlacerId } from '../engine/boardSetup.ts'
-import { contentFor, DEFAULT_GAME_OPTIONS, describeGameOptions, gameDefinition, normalizeGameOptions, toEngine } from '../rules.ts'
+import { replayActions as replayEngine } from '../engine/replay.ts'
+import { contentFor, DEFAULT_GAME_OPTIONS, describeGameOptions, engineGenesisOf, gameDefinition, normalizeGameOptions, toEngine } from '../rules.ts'
 import { newGame, play, simplestMove, testRandom, withoutTimestamps } from '../testing.ts'
 import type { GameOptions } from '../types.ts'
 
@@ -177,6 +178,17 @@ describe('concede', () => {
     const engine = toEngine(s)
     for (const id of ['p1', 'p3']) expect(engine.units.filter((u) => u.ownerId === id)).toHaveLength(3)
     expect(engine.units.filter((u) => u.ownerId === 'p2')).toHaveLength(0)
+  })
+
+  it('replays through the engine alone too — what the view’s turn review and charts use', () => {
+    let s = newGame({ players: 3 })
+    s = play(s, simplestMove(s)!)
+    s = play(s, { type: 'CONCEDE', playerId: 'p2' } as never)
+    s = advance(s, (x) => x.phase === 'selectCards')
+    const content = contentFor(s)
+    const replayed = replayEngine(engineGenesisOf(s), s.actionHistory as never, content.unitContent, content.achievementContent, content.boardGenerationContent, content.taleContent)
+    const withoutLog = (engine: typeof replayed) => ({ ...engine, actionHistory: [] })
+    expect(withoutLog(replayed)).toEqual(withoutLog(toEngine(s)))
   })
 
   it('a solo builder who leaves hands the map to everyone else', () => {

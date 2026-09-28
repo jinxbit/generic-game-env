@@ -11,6 +11,7 @@ import { beginActionsPhase, beginPostActionsPhase, beginPurchasePhase, finishRou
 import { EMPTY_BOARD_GENERATION_CONTENT } from './boardGenerationContent.ts'
 import type { BoardGenerationContent } from './boardGenerationContent.ts'
 import { currentTilePlacerId, placeTile, placeUnit } from './boardSetup.ts'
+import { concedeDuringBoardSetup } from './boardSetupConcede.ts'
 import { EMPTY_TALE_CONTENT } from './taleContent.ts'
 import type { TaleContent } from './taleContent.ts'
 import { companionKindsByCardKind } from './tales.ts'
@@ -379,6 +380,12 @@ function dispatchAction(
   }
   if (action.type === 'SET_ADMIN_MODE') {
     return applySetAdminMode(state, action.enabled)
+  }
+  if (action.type === 'CONCEDE' && state.status === 'boardSetup') {
+    const player = state.players.find((p) => p.id === action.playerId)
+    if (!player) return { ok: false, error: `Unknown player: ${action.playerId}` }
+    if (player.eliminated) return { ok: false, error: 'Player is already eliminated' }
+    return { ok: true, state: concedeDuringBoardSetup(state, action.playerId, unitContent.companionKindsByCardKind) }
   }
 
   if (state.status !== 'active') {

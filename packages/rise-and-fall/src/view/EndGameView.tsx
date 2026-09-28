@@ -1,0 +1,627 @@
+import { Fragment, useLayoutEffect, useRef, useState } from 'react'
+import { toBlob } from 'html-to-image'
+import { listAchievements, listTerrainTypes } from '../content/resolveContent.ts'
+import type { AchievementContent } from '../engine/achievementContent.ts'
+import { cardIdFor, findCardZone, sortCardIdsForDisplay } from '../engine/cards.ts'
+import type { AchievementClaimEvent, ScoreSnapshot } from '../engine/scoreHistory.ts'
+import { calculateTerritoryControlByHex } from '../engine/scoring.ts'
+import type { TaleContent } from '../engine/taleContent.ts'
+import type { SpendingBreakdown, UnitValueDetail } from '../engine/unitValue.ts'
+import { calculateVPBreakdown, calculateVPDetail } from '../engine/victoryPoints.ts'
+import type { VPDetail } from '../engine/victoryPoints.ts'
+import type { GameState } from '../engine/types.ts'
+import type { SeatInfo } from '@game-platform/sdk/ui'
+import { niceMax } from './chartScale.ts'
+import { GoldOverTimeChart } from './GoldOverTimeChart.tsx'
+import { HexBoard } from './HexBoard.tsx'
+import type { UnitMarker } from './HexBoard.tsx'
+import { ScoreCategoryChart } from './ScoreCategoryChart.tsx'
+import { ScoreOverTimeChart } from './ScoreOverTimeChart.tsx'
+import { scoredCategories } from './scoreCategories.ts'
+import { SpendingChart } from './SpendingChart.tsx'
+import { TerrainScoreOverTimeChart } from './TerrainScoreOverTimeChart.tsx'
+import { UnitIcon } from './UnitIcon.tsx'
+import { UnitValueChart } from './UnitValueChart.tsx'
+
+const ACHIEVEMENTS = listAchievements()
+const TERRAIN_TYPES = listTerrainTypes()
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+/** Naive English pluralization ("city" -> "cities", "temple" -> "temples") — good enough for this game's unit/structure kind names. */
+function pluralize(word: string, count: number): string {
+  if (count === 1) return word
+  if (/[^aeiou]y$/i.test(word)) return `${word.slice(0, -1)}ies`
+  return `${word}s`
+}
+
+function achievementName(achievementId: string): string {
+  return ACHIEVEMENTS.find((a) => a.id === achievementId)?.name ?? achievementId
+}
+
+function terrainName(terrainId: string): string {
+  return TERRAIN_TYPES.find((t) => t.id === terrainId)?.name ?? capitalize(terrainId)
+}
+
+/** "eliminated" or "conceded" — same removal from the game (Player.eliminated), but worth telling apart on the end-game screen (see Player.conceded's doc comment in ../engine/types). */
+function eliminationLabel(player: { conceded?: boolean }): string {
+  return player.conceded ? 'conceded' : 'eliminated'
+}
+
+/** "1st"/"2nd"/"3rd"/"4th"... — 11th/12th/13th stay "-th" (the usual English exception to the mod-10 rule). */
+function ordinal(n: number): string {
+  const mod100 = n % 100
+  if (mod100 >= 11 && mod100 <= 13) return `${n}th`
+  switch (n % 10) {
+    case 1:
+      return `${n}st`
+    case 2:
+      return `${n}nd`
+    case 3:
+      return `${n}rd`
+    default:
+      return `${n}th`
+  }
+}
+
+/**
+ * Standard competition ranking ("1224" ranking): players tied on total VP
+ * share the same place, and whoever's next skips ahead by however many are
+ * tied above them (e.g. two players tied for 1st -> the next player is 3rd,
+ * not 2nd) — consistent with this game's "no tiebreaker" win rule, where
+ * tied totals really do share a result rather than one arbitrarily coming
+ * out ahead. `ranked` must already be sorted by descending total.
+ */
+function ranksFor(ranked: { id: string }[], totalOf: (id: string) => number): Map<string, number> {
+  const ranks = new Map<string, number>()
+  let place = 1
+  for (let i = 0; i < ranked.length; i++) {
+    if (i > 0 && totalOf(ranked[i].id) !== totalOf(ranked[i - 1].id)) place = i + 1
+    ranks.set(ranked[i].id, place)
+  }
+  return ranks
+}
+
+/**
+ * Every unit `playerId` has on the board, grouped by kind — the "what did
+ * they build" half of their end-game player details, alongside resources.
+ * `declined` flags a kind whose card is currently in `playerId`'s decline
+ * pile (see isCardDeclined in ../engine/victoryPoints.ts): those units are
+ * still on the board and shown here, but per ruling they aren't earning
+ * board-count VP while the card is down, which the caller renders distinctly
+ * so a player can tell why a stack of units isn't adding to their score.
+ */
+function unitCountsFor(state: GameState, playerId: string): { kind: string; count: number; declined: boolean }[] {
+  const counts = new Map<string, number>()
+  for (const unit of state.units) {
+    if (unit.ownerId !== playerId) continue
+    counts.set(unit.kind, (counts.get(unit.kind) ?? 0) + 1)
+  }
+  const owner = state.players.find((p) => p.id === playerId)
+  return [...counts.entries()].map(([kind, count]) => ({
+    kind,
+    count,
+    declined: owner ? findCardZone(owner, cardIdFor(playerId, kind)) === 'decline' : false,
+  }))
+}
+
+/** Unit kinds whose card currently sits in `playerId`'s decline pile, in the same fixed display order used elsewhere (CARD_DISPLAY_ORDER) — for the "In decline" breakdown row. */
+function declinedKindsFor(state: GameState, playerId: string): string[] {
+  const player = state.players.find((p) => p.id === playerId)
+  if (!player) return []
+  return sortCardIdsForDisplay(player.declineCardIds, state.cards)
+    .map((id) => state.cards[id]?.kind)
+    .filter((kind): kind is string => Boolean(kind))
+}
+
+interface BreakdownCell {
+  vp: number
+  /** Extra context alongside the points — a quantity ("4 hexes"), not shown for sources without one (achievements, structures: either claimed for the row's full value or not present at all). */
+  sub?: string
+}
+
+interface BreakdownRow {
+  key: string
+  label: string
+  cellByPlayerId: Map<string, BreakdownCell>
+}
+
+interface BreakdownGroup {
+  categoryLabel: string
+  rows: BreakdownRow[]
+}
+
+/**
+ * Pivots every active player's VPDetail into rows-per-scoring-criterion,
+ * grouped by category (in SCORE_CATEGORIES' order) — the "score breakdown
+ * table pivoted by scoring criteria" requested for the end-of-game screen:
+ * every row is the same criterion for every player's column, rather than
+ * each player having their own free-form list of what they scored. A
+ * criterion only becomes a row if at least one active player actually has
+ * it (e.g. no "Forest" row if nobody controls any Forest) — same
+ * drop-all-zero-rows convention as scoredCategories() (./scoreCategories.ts).
+ */
+function breakdownGroupsFor(detailByPlayerId: Record<string, VPDetail>, activeIds: string[]): BreakdownGroup[] {
+  const achievementRows = new Map<string, BreakdownRow>()
+  const boardCountRows = new Map<string, BreakdownRow>()
+  const terrainRows = new Map<string, BreakdownRow>()
+  const goldRow: BreakdownRow = { key: 'gold', label: 'Gold', cellByPlayerId: new Map() }
+  const structureRows = new Map<string, BreakdownRow>()
+
+  for (const playerId of activeIds) {
+    const detail = detailByPlayerId[playerId]
+    if (!detail) continue
+
+    for (const achievement of detail.achievements) {
+      const row = achievementRows.get(achievement.achievementId) ?? { key: achievement.achievementId, label: achievementName(achievement.achievementId), cellByPlayerId: new Map() }
+      row.cellByPlayerId.set(playerId, { vp: achievement.vp })
+      achievementRows.set(achievement.achievementId, row)
+    }
+
+    for (const boardCount of detail.boardCount) {
+      const row = boardCountRows.get(boardCount.kind) ?? { key: boardCount.kind, label: capitalize(boardCount.kind), cellByPlayerId: new Map() }
+      row.cellByPlayerId.set(playerId, { vp: boardCount.vp, sub: `${boardCount.count} on board` })
+      boardCountRows.set(boardCount.kind, row)
+    }
+
+    for (const terrainControl of detail.terrainControl) {
+      const row = terrainRows.get(terrainControl.terrain) ?? { key: terrainControl.terrain, label: terrainName(terrainControl.terrain), cellByPlayerId: new Map() }
+      row.cellByPlayerId.set(playerId, { vp: terrainControl.vp, sub: `${terrainControl.hexCount} ${pluralize('hex', terrainControl.hexCount)}` })
+      terrainRows.set(terrainControl.terrain, row)
+    }
+
+    if (detail.gold.amount > 0) {
+      goldRow.cellByPlayerId.set(playerId, { vp: detail.gold.vp, sub: `${detail.gold.amount} gold` })
+    }
+
+    for (const structure of detail.controllableStructures) {
+      const row = structureRows.get(structure.kind) ?? { key: structure.kind, label: structure.name, cellByPlayerId: new Map() }
+      row.cellByPlayerId.set(playerId, { vp: structure.vp })
+      structureRows.set(structure.kind, row)
+    }
+  }
+
+  return [
+    { categoryLabel: 'Gold', rows: goldRow.cellByPlayerId.size > 0 ? [goldRow] : [] },
+    { categoryLabel: 'Terrain', rows: [...terrainRows.values()] },
+    { categoryLabel: 'Units', rows: [...boardCountRows.values()] },
+    { categoryLabel: 'Achievements', rows: [...achievementRows.values()] },
+    { categoryLabel: 'Structures', rows: [...structureRows.values()] },
+  ].filter((group) => group.rows.length > 0)
+}
+
+/**
+ * Forces mobile Safari/Chrome to drop whatever pinch-zoom level the player
+ * left the game at back to the page's normal 1x scale — bug report:
+ * "victory screen opens zoomed out, half the screen is blank and everything
+ * is too small." The round view's hex board has no built-in pan/zoom
+ * controls, so a player on a big board commonly pinch-zooms out to see more
+ * of it; since the victory screen swaps in over the same document (no
+ * navigation/reload) rather than as a fresh page, that zoom level otherwise
+ * carries straight over onto a screen that was never laid out with it in
+ * mind. Toggling the viewport meta tag's `content` (any actual change, even
+ * a no-op round-trip back to the original value) is the standard trick for
+ * making mobile browsers recompute the page's zoom from scratch.
+ */
+function resetMobileViewportZoom(): void {
+  const viewport = document.querySelector('meta[name="viewport"]')
+  const content = viewport?.getAttribute('content')
+  if (!viewport || !content) return
+  viewport.setAttribute('content', `${content}, maximum-scale=1`)
+  viewport.setAttribute('content', content)
+}
+
+/**
+ * The end-of-game screen: every player, ranked by final total VP, with a
+ * full breakdown of what that total is made of — not just the bottom line,
+ * but each thing they have and the points it's worth (calculateVPDetail).
+ * Winner(s) — everyone tied for the highest total, per the "no tiebreaker"
+ * rule (GameState.winnerPlayerIds, already computed once by finishRound())
+ * — are highlighted.
+ */
+export function EndGameView({
+  state,
+  players,
+  achievementContent,
+  taleContent,
+  scoreHistory,
+  achievementClaims,
+  unitValueDetail,
+  spendingBreakdown,
+}: {
+  state: GameState
+  players: SeatInfo[]
+  achievementContent: AchievementContent
+  taleContent: TaleContent
+  /** The "total score over time" series (./engine/scoreHistory.ts), for the score and gold-over-time line charts below. Undefined/null (a caller that hasn't derived it, e.g. this component's own tests) simply skips both charts. */
+  scoreHistory?: ScoreSnapshot[] | null
+  /** Which round each achievement was claimed in (./engine/scoreHistory.ts), for the score chart's per-round claim markers. Undefined/empty simply omits the markers. */
+  achievementClaims?: AchievementClaimEvent[] | null
+  /** Per-player, per-unit-kind value breakdown (./engine/unitValue.ts), for the "unit value" stacked bar chart below. Undefined/null (a caller that hasn't derived it, e.g. this component's own tests) simply skips that chart. */
+  unitValueDetail?: Record<string, UnitValueDetail[]> | null
+  /** Per-player gold-spending breakdown by category (./engine/unitValue.ts), for the "Spending" stacked bar chart below. Undefined/null (a caller that hasn't derived it, e.g. this component's own tests) simply skips that chart. */
+  spendingBreakdown?: Record<string, SpendingBreakdown> | null
+}) {
+  useLayoutEffect(() => resetMobileViewportZoom(), [])
+  const screenRef = useRef<HTMLDivElement>(null)
+  const [copiedScreenshot, setCopiedScreenshot] = useState(false)
+
+  const detailByPlayerId = calculateVPDetail(state, achievementContent, taleContent)
+  const breakdownByPlayerId = calculateVPBreakdown(state, achievementContent, taleContent)
+  const winnerIds = new Set(state.winnerPlayerIds)
+
+  const ranked = [...state.players].sort((a, b) => (detailByPlayerId[b.id]?.total ?? 0) - (detailByPlayerId[a.id]?.total ?? 0))
+  const rankedIds = ranked.map((p) => p.id)
+  const ranks = ranksFor(ranked, (id) => detailByPlayerId[id]?.total ?? 0)
+  const eliminatedIds = new Set(state.players.filter((p) => p.eliminated).map((p) => p.id))
+  const activeIds = rankedIds.filter((id) => !eliminatedIds.has(id))
+  const categories = scoredCategories(breakdownByPlayerId, activeIds)
+  const breakdownGroups = breakdownGroupsFor(detailByPlayerId, activeIds)
+
+  // Shared y-axis ceiling for the three "over time" line charts below (issue
+  // #618): computed once, across all three metrics, so scale is directly
+  // comparable chart-to-chart rather than each chart picking its own
+  // tightest-fitting ceiling.
+  const overTimeMax =
+    scoreHistory && scoreHistory.length > 1
+      ? niceMax(
+          Math.max(
+            1,
+            ...scoreHistory.flatMap((snapshot) =>
+              rankedIds.flatMap((id) => [snapshot.totalByPlayerId[id] ?? 0, snapshot.goldByPlayerId[id] ?? 0, snapshot.terrainVPByPlayerId[id] ?? 0]),
+            ),
+          ),
+        )
+      : undefined
+
+  async function handleCopyScreenshot() {
+    if (!screenRef.current) return
+    try {
+      const blob = await toBlob(screenRef.current, { backgroundColor: '#0a0a0a', pixelRatio: 2 })
+      if (!blob) return
+      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
+      setCopiedScreenshot(true)
+      setTimeout(() => setCopiedScreenshot(false), 1500)
+    } catch {
+      // Screenshotting or clipboard image access can fail (unsupported browser, denied
+      // permission, insecure context); nothing useful to do about it here.
+    }
+  }
+
+  const boardUnits: UnitMarker[] = state.units.map((unit) => {
+    const owner = state.players.find((p) => p.id === unit.ownerId)
+    return {
+      coord: unit.coord,
+      color: players.find((p) => p.id === unit.ownerId)?.color ?? '#a3a3a3',
+      kind: unit.kind,
+      connectedNeighborCoords: unit.connectedNeighborCoords,
+      // Grey out units whose card is in decline (issue #305's convention),
+      // so the final board also shows why a stack isn't scoring board-count VP.
+      declined: owner ? findCardZone(owner, cardIdFor(unit.ownerId, unit.kind)) === 'decline' : false,
+    }
+  })
+
+  const territoryControl = calculateTerritoryControlByHex(state.board, state.units, achievementContent.terrainScoresAs).map((hex) => ({
+    coord: hex.coord,
+    color: players.find((p) => p.id === hex.ownerId)?.color ?? '#a3a3a3',
+    terrain: hex.terrain,
+    points: (achievementContent.terrainVictoryPoints[hex.terrain] ?? 0) * hex.regionSize,
+  }))
+
+  return (
+    <div ref={screenRef} className="flex flex-col gap-6 rounded-md border border-amber-700/50 bg-amber-500/10 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-lg font-semibold text-amber-300">Game over</p>
+          <p className="text-sm text-amber-300/90">
+            Winner{state.winnerPlayerIds.length > 1 ? 's' : ''}:{' '}
+            {state.winnerPlayerIds.map((id) => players.find((p) => p.id === id)?.display_name ?? id).join(', ') || 'none'}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void handleCopyScreenshot()}
+          title="Copy an image of this victory screen to the clipboard"
+          className="shrink-0 rounded border border-amber-700/50 px-2 py-1 text-xs text-amber-300 hover:bg-amber-500/20"
+        >
+          {copiedScreenshot ? 'Copied!' : 'Copy screenshot'}
+        </button>
+      </div>
+
+      <div>
+        <p className="mb-2 text-sm font-medium text-neutral-200">Final score</p>
+        <ol className="flex flex-col divide-y divide-neutral-800 rounded-md border border-neutral-800">
+          {ranked.map((player) => {
+            const row = players.find((p) => p.id === player.id)
+            const isWinner = winnerIds.has(player.id)
+            return (
+              <li key={player.id} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+                <span className="w-8 shrink-0 text-neutral-500">{ordinal(ranks.get(player.id) ?? ranked.length)}</span>
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: row?.color ?? '#a3a3a3' }} />
+                <span className={`flex-1 ${isWinner ? 'font-semibold text-amber-200' : 'text-neutral-200'}`}>
+                  {row?.display_name ?? player.id}
+                  {isWinner && <span title="Winner"> 🏆</span>}
+                  {player.eliminated && <span className="text-neutral-500"> ({eliminationLabel(player)})</span>}
+                </span>
+                <span className={`font-medium ${isWinner ? 'text-amber-200' : 'text-neutral-200'}`}>
+                  {player.eliminated ? '—' : `${detailByPlayerId[player.id]?.total ?? 0} pts`}
+                </span>
+              </li>
+            )
+          })}
+        </ol>
+      </div>
+
+      <div>
+        <p className="mb-2 text-sm font-medium text-neutral-200">Final board</p>
+        <HexBoard board={state.board} units={boardUnits} territoryControl={territoryControl} />
+      </div>
+
+      {categories.length > 0 && (
+        <div className="flex flex-col gap-3" data-testid="score-categories">
+          <p className="text-sm font-medium text-neutral-200">Score categories</p>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-max border-collapse text-left text-sm">
+              <thead>
+                <tr className="border-b border-neutral-800 text-xs text-neutral-500">
+                  <th className="py-1 pr-3 font-normal">Category</th>
+                  {ranked.map((player) => (
+                    <th key={player.id} className="px-3 py-1 font-normal text-neutral-400">
+                      {players.find((p) => p.id === player.id)?.display_name ?? player.id}
+                      {player.eliminated && <span className="text-neutral-500"> ({eliminationLabel(player)})</span>}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {categories.map((category) => {
+                  const activeValues = rankedIds.filter((id) => !eliminatedIds.has(id)).map((id) => breakdownByPlayerId[id]?.[category.key] ?? 0)
+                  const leaderValue = activeValues.length > 0 ? Math.max(...activeValues) : 0
+                  return (
+                    <tr key={category.key} className="border-b border-neutral-800/60 last:border-0">
+                      <td className="py-1 pr-3 text-neutral-400">{category.label}</td>
+                      {rankedIds.map((id) => {
+                        if (eliminatedIds.has(id)) {
+                          return (
+                            <td key={id} className="px-3 py-1 text-neutral-500">
+                              —
+                            </td>
+                          )
+                        }
+                        const value = breakdownByPlayerId[id]?.[category.key] ?? 0
+                        const isLeader = value > 0 && value === leaderValue
+                        return (
+                          <td key={id} className={`px-3 py-1 ${isLeader ? 'font-semibold text-amber-200' : 'text-neutral-300'}`}>
+                            {value}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  )
+                })}
+                <tr className="text-neutral-200">
+                  <td className="py-1 pr-3 font-medium">Total</td>
+                  {rankedIds.map((id) =>
+                    eliminatedIds.has(id) ? (
+                      <td key={id} className="px-3 py-1 text-neutral-500">
+                        —
+                      </td>
+                    ) : (
+                      <td key={id} className="px-3 py-1 font-medium">
+                        {breakdownByPlayerId[id]?.total ?? 0}
+                      </td>
+                    ),
+                  )}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <ScoreCategoryChart breakdownByPlayerId={breakdownByPlayerId} players={players} playerIds={activeIds} />
+        </div>
+      )}
+
+      {scoreHistory && scoreHistory.length > 1 && (
+        <ScoreOverTimeChart
+          history={scoreHistory}
+          players={players}
+          playerIds={rankedIds}
+          achievementClaims={achievementClaims ?? []}
+          achievementName={achievementName}
+          maxValue={overTimeMax}
+        />
+      )}
+
+      {scoreHistory && scoreHistory.length > 1 && <GoldOverTimeChart history={scoreHistory} players={players} playerIds={rankedIds} maxValue={overTimeMax} />}
+
+      {scoreHistory && scoreHistory.length > 1 && <TerrainScoreOverTimeChart history={scoreHistory} players={players} playerIds={rankedIds} maxValue={overTimeMax} />}
+
+      {unitValueDetail && (
+        <div className="flex flex-col gap-3" data-testid="unit-value">
+          <p className="text-sm font-medium text-neutral-200">Unit value</p>
+          <UnitValueChart detailByPlayerId={unitValueDetail} players={players} playerIds={activeIds} />
+        </div>
+      )}
+
+      {spendingBreakdown && (
+        <div className="flex flex-col gap-3" data-testid="spending">
+          <p className="text-sm font-medium text-neutral-200">
+            Spending <span className="font-normal text-neutral-500">(in victory points)</span>
+          </p>
+          <SpendingChart breakdownByPlayerId={spendingBreakdown} players={players} playerIds={activeIds} />
+        </div>
+      )}
+
+      <div data-testid="score-breakdown">
+        <p className="mb-2 text-sm font-medium text-neutral-200">Score breakdown</p>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-max border-collapse text-left text-sm">
+            <thead>
+              <tr className="border-b border-neutral-800 text-xs text-neutral-500">
+                <th className="py-1 pr-3 font-normal">Player</th>
+                {ranked.map((player) => {
+                  const row = players.find((p) => p.id === player.id)
+                  const isWinner = winnerIds.has(player.id)
+                  return (
+                    <th key={player.id} data-testid={`breakdown-header-${player.id}`} className="px-3 py-1 align-top font-normal">
+                      <span className="flex items-center gap-2">
+                        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: row?.color ?? '#a3a3a3' }} />
+                        <span className={isWinner ? 'font-semibold text-amber-200' : 'font-medium text-neutral-200'}>{row?.display_name ?? player.id}</span>
+                        {isWinner && <span title="Winner">🏆</span>}
+                        {player.eliminated && <span className="text-neutral-500">({eliminationLabel(player)})</span>}
+                      </span>
+                    </th>
+                  )
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="border-b border-neutral-800/60">
+                <td className="py-1 pr-3 text-neutral-500">Place</td>
+                {ranked.map((player) => (
+                  <td key={player.id} data-testid={`breakdown-place-${player.id}`} className="px-3 py-1 text-xs text-neutral-500">
+                    {ordinal(ranks.get(player.id) ?? ranked.length)}
+                  </td>
+                ))}
+              </tr>
+              <tr className="border-b border-neutral-800/60">
+                <td className="py-1 pr-3 text-neutral-500">Points</td>
+                {ranked.map((player) => {
+                  if (player.eliminated) {
+                    return (
+                      <td key={player.id} data-testid={`breakdown-points-${player.id}`} className="px-3 py-1 text-xs text-neutral-500">
+                        {capitalize(eliminationLabel(player))}
+                      </td>
+                    )
+                  }
+                  const isWinner = winnerIds.has(player.id)
+                  const total = detailByPlayerId[player.id]?.total ?? 0
+                  return (
+                    <td key={player.id} data-testid={`breakdown-points-${player.id}`} className={`px-3 py-1 ${isWinner ? 'font-semibold text-amber-200' : 'font-medium text-neutral-200'}`}>
+                      {total} point{total === 1 ? '' : 's'}
+                    </td>
+                  )
+                })}
+              </tr>
+              {breakdownGroups.length > 0 ? (
+                breakdownGroups.map((group) => (
+                  <Fragment key={group.categoryLabel}>
+                    <tr data-testid={`breakdown-group-${group.categoryLabel}`}>
+                      <td colSpan={ranked.length + 1} className="bg-neutral-900/50 py-1 pr-3 pl-1 text-[11px] font-semibold tracking-wide text-neutral-500 uppercase">
+                        {group.categoryLabel}
+                      </td>
+                    </tr>
+                    {group.rows.map((row) => (
+                      <tr key={row.key} data-testid={`breakdown-row-${group.categoryLabel}-${row.key}`} className="border-b border-neutral-800/60">
+                        <td className="py-1 pr-3 pl-3 text-neutral-400">{row.label}</td>
+                        {ranked.map((player) => {
+                          const cell = eliminatedIds.has(player.id) ? undefined : row.cellByPlayerId.get(player.id)
+                          return (
+                            <td key={player.id} data-testid={`breakdown-cell-${group.categoryLabel}-${row.key}-${player.id}`} className="px-3 py-1 text-xs text-neutral-300">
+                              {cell ? (
+                                <>
+                                  {cell.vp} point{cell.vp === 1 ? '' : 's'}
+                                  {cell.sub && <span className="text-neutral-500"> ({cell.sub})</span>}
+                                </>
+                              ) : (
+                                <span className="text-neutral-600">—</span>
+                              )}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    ))}
+                  </Fragment>
+                ))
+              ) : (
+                <tr className="border-b border-neutral-800/60">
+                  <td className="py-1 pr-3 text-neutral-500">Breakdown</td>
+                  {ranked.map((player) => (
+                    <td key={player.id} className="px-3 py-1 text-xs text-neutral-500">
+                      {player.eliminated ? capitalize(eliminationLabel(player)) : 'No points scored'}
+                    </td>
+                  ))}
+                </tr>
+              )}
+              <tr className="border-b border-neutral-800/60">
+                <td className="py-1 pr-3 text-neutral-500">Resources</td>
+                {ranked.map((player) =>
+                  player.eliminated ? (
+                    <td key={player.id} data-testid={`breakdown-resources-${player.id}`} className="px-3 py-1 text-xs text-neutral-500">
+                      {capitalize(eliminationLabel(player))}
+                    </td>
+                  ) : (
+                    <td key={player.id} data-testid={`breakdown-resources-${player.id}`} className="px-3 py-1 text-xs text-neutral-400">
+                      {player.resources.gold} Gold, {player.resources.wood} Wood, {player.resources.stone} Stone
+                    </td>
+                  ),
+                )}
+              </tr>
+              <tr className="border-b border-neutral-800/60">
+                <td className="py-1 pr-3 align-top text-neutral-500">On board</td>
+                {ranked.map((player) => {
+                  if (player.eliminated) {
+                    return (
+                      <td key={player.id} data-testid={`breakdown-units-${player.id}`} className="px-3 py-1 align-top text-xs text-neutral-500">
+                        {capitalize(eliminationLabel(player))}
+                      </td>
+                    )
+                  }
+                  const unitCounts = unitCountsFor(state, player.id)
+                  return (
+                    <td key={player.id} data-testid={`breakdown-units-${player.id}`} className="px-3 py-1 align-top">
+                      {unitCounts.length > 0 ? (
+                        <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-neutral-400">
+                          {unitCounts.map(({ kind, count, declined }) => (
+                            <span
+                              key={kind}
+                              className={`inline-flex items-center gap-1 ${declined ? 'text-neutral-600' : ''}`}
+                              title={declined ? `${capitalize(kind)} — card in decline, not scoring` : capitalize(kind)}
+                            >
+                              <UnitIcon kind={kind} className={`h-3.5 w-3.5 shrink-0 ${declined ? 'text-neutral-600' : 'text-neutral-400'}`} />
+                              <span>{count}</span>
+                              {declined && <span className="text-[10px] text-neutral-600">(decline)</span>}
+                            </span>
+                          ))}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-neutral-500">—</span>
+                      )}
+                    </td>
+                  )
+                })}
+              </tr>
+              <tr>
+                <td className="py-1 pr-3 align-top text-neutral-500">In decline</td>
+                {ranked.map((player) => {
+                  if (player.eliminated) {
+                    return (
+                      <td key={player.id} data-testid={`breakdown-decline-${player.id}`} className="px-3 py-1 align-top text-xs text-neutral-500">
+                        {capitalize(eliminationLabel(player))}
+                      </td>
+                    )
+                  }
+                  const declinedKinds = declinedKindsFor(state, player.id)
+                  return (
+                    <td key={player.id} data-testid={`breakdown-decline-${player.id}`} className="px-3 py-1 align-top">
+                      {declinedKinds.length > 0 ? (
+                        <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-neutral-400">
+                          {declinedKinds.map((kind, i) => (
+                            <UnitIcon key={i} kind={kind} title={capitalize(kind)} className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
+                          ))}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-neutral-500">—</span>
+                      )}
+                    </td>
+                  )
+                })}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}

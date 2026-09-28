@@ -11,22 +11,23 @@ describe('isGuestAuthAllowed', () => {
     vi.unstubAllEnvs()
   })
 
-  it('is false when VITE_ALLOW_GUEST_AUTH is unset, regardless of environment', () => {
+  it('is true by default, including in a production build', () => {
     vi.stubEnv('VITE_ALLOW_GUEST_AUTH', undefined)
-    vi.stubEnv('VITE_ENVIRONMENT', 'Preview')
-    expect(isGuestAuthAllowed()).toBe(false)
-  })
-
-  it('is false in a production build even if VITE_ALLOW_GUEST_AUTH leaked in (issue #677)', () => {
-    vi.stubEnv('VITE_ALLOW_GUEST_AUTH', 'true')
     vi.stubEnv('VITE_ENVIRONMENT', undefined)
-    expect(isGuestAuthAllowed()).toBe(false)
+    expect(isGuestAuthAllowed()).toBe(true)
   })
 
-  it('is true only when both opted in and non-production', () => {
+  it('is true when explicitly opted in', () => {
     vi.stubEnv('VITE_ALLOW_GUEST_AUTH', 'true')
     vi.stubEnv('VITE_ENVIRONMENT', 'Preview')
     expect(isGuestAuthAllowed()).toBe(true)
+  })
+
+  it('is false when a deploy opts out with VITE_ALLOW_GUEST_AUTH=false', () => {
+    vi.stubEnv('VITE_ALLOW_GUEST_AUTH', 'false')
+    expect(isGuestAuthAllowed()).toBe(false)
+    vi.stubEnv('VITE_ALLOW_GUEST_AUTH', ' FALSE ')
+    expect(isGuestAuthAllowed()).toBe(false)
   })
 })
 
@@ -35,9 +36,8 @@ describe('signInAsGuest', () => {
     vi.unstubAllEnvs()
   })
 
-  it('refuses to sign in when guest auth is not allowed, without touching Supabase', async () => {
-    vi.stubEnv('VITE_ALLOW_GUEST_AUTH', undefined)
-    vi.stubEnv('VITE_ENVIRONMENT', undefined)
+  it('refuses to sign in when guest auth is turned off, without touching Supabase', async () => {
+    vi.stubEnv('VITE_ALLOW_GUEST_AUTH', 'false')
     await expect(signInAsGuest()).rejects.toThrow('Guest sign-in is not available')
   })
 })

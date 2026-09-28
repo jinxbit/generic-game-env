@@ -46,8 +46,7 @@ the rules framework (`packages/sdk`) change is needed anywhere in this plan.
 - In-game chat renders at the top of the game page.
 - Posting requires a signed-in, registered user (Discord/Google/email —
   same `useAuth()` session every other write already requires; guest-auth
-  sessions, gated behind `VITE_ALLOW_GUEST_AUTH` and testing-only per
-  `.env.example`, count as signed in the same way they do everywhere else in
+  sessions count as signed in the same way they do everywhere else in
   the app).
 - Disabled in production until explicitly enabled (§4).
 

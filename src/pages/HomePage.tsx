@@ -119,7 +119,7 @@ export function HomePage() {
         <h1 className="text-3xl font-semibold">{SITE.title}</h1>
         <p className="max-w-sm text-neutral-300">{SITE.tagline}</p>
         <p className="max-w-sm text-neutral-400">
-          Sign in with Discord, Google, or an email and password to create or join a game with your friends.
+          Sign in with Discord, Google, or an email and password — or continue as a guest — to create or join a game with your friends.
         </p>
         {error && <ErrorBanner message={error.message} details={error.details} onDismiss={() => setError(null)} />}
         <div className="flex flex-col items-center gap-3">

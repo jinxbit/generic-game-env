@@ -10,8 +10,8 @@
 // the wrong project because nothing said otherwise.
 //
 // `isProductionBuild()` (src/lib/environment.ts) is the shared predicate
-// behind this file's gate and also guards guest sign-in (src/lib/auth.ts) —
-// keep them using the same convention rather than each reimplementing it.
+// behind this file's gate — reuse it rather than reimplementing the
+// convention wherever production needs telling apart.
 //
 // So: `VITE_ENVIRONMENT` is set ONLY on non-production builds (Vercel's
 // Preview scope). Production leaves it unset and therefore renders nothing —

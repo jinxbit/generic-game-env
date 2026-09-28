@@ -13,6 +13,12 @@
 // the table, so `redactGame` hands back the whole game. The dice are the only
 // randomness, drawn in ROLL from the framework's `Random`.
 //
+// Rules versions: version 2 gives every player one share of each colour at
+// setup and allows trading a colour priced 0; version 1 did neither. Both
+// run from this one code path, branching on `rulesVersion`
+// (`tradesAtZeroPrice`, `setup`), and both stay registered
+// (`gameDefinitionV1`) so a game started under version 1 still replays.
+//
 // Pure and deterministic, like everything the framework runs — imported by
 // the Edge Functions too, so keep the `.ts` extensions on relative imports.
 
@@ -40,6 +46,9 @@ export * from './board.ts'
 export type GameState = PlatformGameState<GameData, GameOptions>
 
 export const DEFAULT_GAME_OPTIONS: GameOptions = { startingCash: 0 }
+
+/** R-SETUP-01 (rules version 2): shares of each colour every player starts with. */
+export const STARTING_SHARES = 1
 
 /** Bounds the options editor offers and normalizeGameOptions clamps to. */
 export const STARTING_CASH_RANGE = { min: 0, max: 50_000, step: 1000 }
@@ -97,17 +106,30 @@ export function placementsForRoll(game: GameData): { cell: number; colour: Colou
   return legalPlacements(game.board, game.roll.zone, rollColours(game, game.roll.colour))
 }
 
-/** Whether `playerId` could buy at least one share right now (R-SHARE-02/03). */
-export function canBuyAny(game: GameData, playerId: PlayerId): boolean {
-  const p = game.players[playerId]
-  if (!p || game.boughtThisTurn >= MAX_BUY_PER_TURN) return false
-  return COLOURS.some((colour) => game.prices[colour] > 0 && game.bank[colour] > 0 && p.cash >= sharePrice(game, colour))
+/**
+ * R-SHARE-03: whether shares of a colour priced 0 can be bought and sold
+ * (for nothing). Rules version 1 refused it (AMBIG-3); version 2 allows it.
+ */
+export function tradesAtZeroPrice(rulesVersion: number): boolean {
+  return rulesVersion >= 2
 }
 
-/** Whether `playerId` holds a share worth selling. */
-export function canSellAny(game: GameData, playerId: PlayerId): boolean {
+/** Whether a colour can be traded at its current price under `rulesVersion`. */
+function tradable(game: GameData, colour: Colour, rulesVersion: number): boolean {
+  return game.prices[colour] > 0 || tradesAtZeroPrice(rulesVersion)
+}
+
+/** Whether `playerId` could buy at least one share right now (R-SHARE-02/03). */
+export function canBuyAny(game: GameData, playerId: PlayerId, rulesVersion: number): boolean {
   const p = game.players[playerId]
-  return !!p && COLOURS.some((colour) => p.shares[colour] > 0 && game.prices[colour] > 0)
+  if (!p || game.boughtThisTurn >= MAX_BUY_PER_TURN) return false
+  return COLOURS.some((colour) => tradable(game, colour, rulesVersion) && game.bank[colour] > 0 && p.cash >= sharePrice(game, colour))
+}
+
+/** Whether `playerId` holds a share they may sell. */
+export function canSellAny(game: GameData, playerId: PlayerId, rulesVersion: number): boolean {
+  const p = game.players[playerId]
+  return !!p && COLOURS.some((colour) => p.shares[colour] > 0 && tradable(game, colour, rulesVersion))
 }
 
 /** R-DEBT-02: at most this many shares of `colour` in one forced sale. */
@@ -242,12 +264,12 @@ function requireColour(colour: unknown): Colour {
 }
 
 /** R-SHARE-01..04. */
-function onBuy(game: GameData, playerId: PlayerId, rawColour: unknown, rawCount: unknown): void {
+function onBuy(game: GameData, rulesVersion: number, playerId: PlayerId, rawColour: unknown, rawCount: unknown): void {
   requireTurnPlayer(game, playerId, ['preTrade', 'postTrade'])
   const colour = requireColour(rawColour)
   const count = requireCount(rawCount)
   if (game.boughtThisTurn + count > MAX_BUY_PER_TURN) fail(`At most ${MAX_BUY_PER_TURN} shares a turn — you can buy ${MAX_BUY_PER_TURN - game.boughtThisTurn} more.`)
-  if (game.prices[colour] <= 0) fail(`${colour} has no price yet, so its shares can't be bought.`)
+  if (!tradable(game, colour, rulesVersion)) fail(`${colour} has no price yet, so its shares can't be bought.`)
   if (game.bank[colour] < count) fail(`The bank has only ${game.bank[colour]} ${colour} shares left.`)
   const cost = count * sharePrice(game, colour)
   const p = game.players[playerId]
@@ -258,12 +280,12 @@ function onBuy(game: GameData, playerId: PlayerId, rawColour: unknown, rawCount:
 }
 
 /** R-SHARE-01/02: any number, at the current price. */
-function onSell(game: GameData, playerId: PlayerId, rawColour: unknown, rawCount: unknown): void {
+function onSell(game: GameData, rulesVersion: number, playerId: PlayerId, rawColour: unknown, rawCount: unknown): void {
   requireTurnPlayer(game, playerId, ['preTrade', 'postTrade'])
   const colour = requireColour(rawColour)
   const count = requireCount(rawCount)
   if (game.players[playerId].shares[colour] < count) fail(`You hold only ${game.players[playerId].shares[colour]} ${colour} shares.`)
-  if (game.prices[colour] <= 0) fail(`${colour} shares are worth nothing right now.`)
+  if (!tradable(game, colour, rulesVersion)) fail(`${colour} shares are worth nothing right now.`)
   sell(game, playerId, colour, count, sharePrice(game, colour))
 }
 
@@ -360,10 +382,10 @@ function apply(state: GameState, action: GameAction, random: Random): GameState 
   let winners: PlayerId[] | null = null
   switch (action.type) {
     case 'BUY':
-      onBuy(game, action.playerId, action.colour, action.count)
+      onBuy(game, state.rulesVersion, action.playerId, action.colour, action.count)
       break
     case 'SELL':
-      onSell(game, action.playerId, action.colour, action.count)
+      onSell(game, state.rulesVersion, action.playerId, action.colour, action.count)
       break
     case 'ROLL':
       turn = onRoll(state, game, action.playerId, random)
@@ -445,7 +467,7 @@ function describe(action: GameAction, before: GameState, after: GameState): stri
 
 export const gameDefinition: GameDefinition<GameData, GameOptions, GameAction> = {
   id: 'shark',
-  rulesVersion: 1,
+  rulesVersion: 2,
   title: 'Shark',
   turnLabel: 'Turn',
   minPlayers: 3,
@@ -458,12 +480,16 @@ export const gameDefinition: GameDefinition<GameData, GameOptions, GameAction> =
   },
 
   setup(lobby: LobbyState<GameOptions>) {
-    const players: Record<PlayerId, PlayerData> = Object.fromEntries(lobby.turnOrder.map((id) => [id, { cash: lobby.options.startingCash, shares: emptyShares() }]))
+    // R-SETUP-01: from rules version 2, every player starts with one share of each colour.
+    const startingShares = lobby.rulesVersion >= 2 ? STARTING_SHARES : 0
+    const players: Record<PlayerId, PlayerData> = Object.fromEntries(
+      lobby.turnOrder.map((id) => [id, { cash: lobby.options.startingCash, shares: perColour(startingShares) }]),
+    )
     const game: GameData = {
       board: Array.from({ length: 120 }, () => null),
       supply: perColour(MARKERS_PER_COLOUR),
       prices: perColour(0),
-      bank: perColour(SHARES_PER_COLOUR),
+      bank: perColour(SHARES_PER_COLOUR - startingShares * lobby.turnOrder.length),
       players,
       seatOrder: [...lobby.turnOrder],
       turnPlayerId: lobby.turnOrder[0] ?? null,
@@ -511,7 +537,7 @@ export const gameDefinition: GameDefinition<GameData, GameOptions, GameAction> =
     // Nothing left to trade after the placement: end the turn rather than ask.
     const g = state.game
     if (state.status !== 'active' || g.step !== 'postTrade' || !g.turnPlayerId) return null
-    if (canBuyAny(g, g.turnPlayerId) || canSellAny(g, g.turnPlayerId)) return null
+    if (canBuyAny(g, g.turnPlayerId, state.rulesVersion) || canSellAny(g, g.turnPlayerId, state.rulesVersion)) return null
     return { type: 'END_TURN', playerId: g.turnPlayerId }
   },
 
@@ -531,3 +557,6 @@ export const gameDefinition: GameDefinition<GameData, GameOptions, GameAction> =
     return phase && phase in STEP_LABELS ? STEP_LABELS[phase as Step] : 'In progress'
   },
 }
+
+/** Rules version 1 — no starting shares, no trading at price 0. Kept registered so games started under it still replay. */
+export const gameDefinitionV1: GameDefinition<GameData, GameOptions, GameAction> = { ...gameDefinition, rulesVersion: 1 }

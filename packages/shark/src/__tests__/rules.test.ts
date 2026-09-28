@@ -11,6 +11,17 @@ function put(game: GameData, row: number, col: number, colour: Colour): void {
   game.board[cellOf(row, col)] = colour
 }
 
+/**
+ * A new game with nobody holding shares (as rules version 1 started), so a
+ * scenario's dividends and falls come only from the holdings it sets up.
+ */
+function emptyHanded(params: Parameters<typeof newGame>[0] = {}): GameState {
+  return arrange(newGame(params), (g) => {
+    for (const id of g.seatOrder) g.players[id].shares = { blue: 0, green: 0, red: 0, yellow: 0 }
+    g.bank = { blue: 40, green: 40, red: 40, yellow: 40 }
+  })
+}
+
 function reject(state: GameState, action: Parameters<typeof play>[1], random = dice('red', 1)): string {
   const result = applyAction(state as PlatformState, action, { random })
   if (result.ok) throw new Error(`${action.type} was accepted`)
@@ -18,31 +29,46 @@ function reject(state: GameState, action: Parameters<typeof play>[1], random = d
 }
 
 describe('R-SETUP: genesis', () => {
-  it('starts with nothing: no cash, no shares, prices at 0, full supply and bank; seat 1 to act', () => {
-    const s = newGame()
+  it('R-SETUP-01/02: no cash, one share of each colour per player, prices at 0, full supply; seat 1 to act', () => {
+    const s = newGame({ players: 4 })
+    expect(s.rulesVersion).toBe(2)
     expect(s.status).toBe('active')
     expect(s.phase).toBe('preTrade')
     expect(s.activePlayerId).toBe('p1')
     expect(s.pendingPlayerIds).toEqual(['p1'])
-    expect(s.game.players.p2).toEqual({ cash: 0, shares: { blue: 0, green: 0, red: 0, yellow: 0 } })
+    for (const id of ['p1', 'p2', 'p3', 'p4']) expect(s.game.players[id]).toEqual({ cash: 0, shares: { blue: 1, green: 1, red: 1, yellow: 1 } })
     expect(s.game.prices).toEqual({ blue: 0, green: 0, red: 0, yellow: 0 })
     expect(s.game.supply.red).toBe(20)
-    expect(s.game.bank.red).toBe(40)
+    expect(s.game.bank).toEqual({ blue: 36, green: 36, red: 36, yellow: 36 })
     expect(gameDefinition.minPlayers).toBe(3)
     expect(gameDefinition.maxPlayers).toBe(6)
+  })
+
+  it('rules version 1 still starts with empty hands and a full bank', () => {
+    const s = newGame({ rulesVersion: 1 })
+    expect(s.rulesVersion).toBe(1)
+    expect(s.game.players.p2).toEqual({ cash: 0, shares: { blue: 0, green: 0, red: 0, yellow: 0 } })
+    expect(s.game.bank.red).toBe(40)
+  })
+
+  it('the starting shares earn dividends on the first rise', () => {
+    let s = roll(newGame(), 'red', 4)
+    s = play(s, { type: 'PLACE', playerId: 'p1', cell: cellOf(5, 0), colour: 'red' })
+    // Red 0 → 1: p1 takes the new price plus 1 000 on their one share; the others 1 000 each.
+    expect([s.game.players.p1.cash, s.game.players.p2.cash, s.game.players.p3.cash]).toEqual([2000, 1000, 1000])
   })
 
   it('the starting-cash house rule is clamped to whole thousands', () => {
     expect(gameDefinition.normalizeOptions({ startingCash: 12_345 })).toEqual({ startingCash: 12_000 })
     expect(gameDefinition.normalizeOptions({ startingCash: -5 })).toEqual({ startingCash: 0 })
     expect(gameDefinition.normalizeOptions('junk')).toEqual({ startingCash: 0 })
-    expect(newGame({ options: { startingCash: 10_000 } }).game.players.p3.cash).toBe(10_000)
+    expect(emptyHanded({ options: { startingCash: 10_000 } }).game.players.p3.cash).toBe(10_000)
   })
 })
 
 describe('§5: a turn', () => {
   it('R-TURN-02/03: roll, place an isolated first marker (1 000 F.T., price 1), then trade and end the turn', () => {
-    let s = newGame()
+    let s = emptyHanded()
     s = roll(s, 'red', 4)
     expect(s.phase).toBe('place')
     expect(s.game.roll).toEqual({ colour: 'red', zone: 4 })
@@ -61,7 +87,7 @@ describe('§5: a turn', () => {
   })
 
   it('refuses the wrong zone, the wrong colour, acting out of turn and placing before rolling', () => {
-    let s = newGame()
+    let s = emptyHanded()
     expect(reject(s, { type: 'PLACE', playerId: 'p1', cell: 0, colour: 'red' })).toMatch(/can't do that now/)
     expect(reject(s, { type: 'ROLL', playerId: 'p2' })).toMatch(/isn't your turn/)
     s = roll(s, 'red', 1)
@@ -71,13 +97,13 @@ describe('§5: a turn', () => {
   })
 
   it('R-TURN-02: a white face lets the player choose the colour', () => {
-    let s = roll(newGame(), 'white', 2)
+    let s = roll(emptyHanded(), 'white', 2)
     s = play(s, { type: 'PLACE', playerId: 'p1', cell: cellOf(0, 4), colour: 'yellow' })
     expect(s.game.board[cellOf(0, 4)]).toBe('yellow')
   })
 
   it('R-TURN-03 (AMBIG-2): with nowhere legal to place, the turn is missed at once', () => {
-    let s = arrange(newGame(), (g) => {
+    let s = arrange(emptyHanded(), (g) => {
       for (let row = 0; row < 5; row++) for (let col = 0; col < 4; col++) put(g, row, col, 'blue')
     })
     s = roll(s, 'red', 1)
@@ -89,7 +115,7 @@ describe('§5: a turn', () => {
 
   it('ends the turn by itself when there is nothing left to trade', () => {
     // Blue is priced 1, p1 has 1 000 but has already bought 5 this turn and holds nothing sellable.
-    let s = arrange(newGame(), (g) => {
+    let s = arrange(emptyHanded(), (g) => {
       g.boughtThisTurn = 5
     })
     s = roll(s, 'red', 6)
@@ -108,7 +134,7 @@ describe('R-SHARE: trading', () => {
     })
 
   it('R-SHARE-02 (AMBIG-7): at most 5 bought per turn, across both trade steps', () => {
-    let s = play(rich(newGame()), { type: 'BUY', playerId: 'p1', colour: 'red', count: 3 })
+    let s = play(rich(emptyHanded()), { type: 'BUY', playerId: 'p1', colour: 'red', count: 3 })
     expect(s.game.players.p1.cash).toBe(44_000)
     s = roll(s, 'green', 6)
     s = play(s, { type: 'PLACE', playerId: 'p1', cell: cellOf(9, 11), colour: 'green' })
@@ -120,19 +146,40 @@ describe('R-SHARE: trading', () => {
     expect(s.game.bank.red).toBe(40)
   })
 
-  it('R-SHARE-03 (AMBIG-3): no buying at price 0, beyond your cash or beyond the bank', () => {
-    const s = rich(newGame())
-    expect(reject(s, { type: 'BUY', playerId: 'p1', colour: 'blue', count: 1 })).toMatch(/no price/)
+  it('R-SHARE-03: shares of a colour priced 0 can be bought and sold for nothing, within the 5-share cap', () => {
+    let s = newGame()
+    s = play(s, { type: 'BUY', playerId: 'p1', colour: 'blue', count: 3 })
+    expect(s.game.players.p1).toEqual({ cash: 0, shares: { blue: 4, green: 1, red: 1, yellow: 1 } })
+    expect(s.game.bank.blue).toBe(40 - 3 - 3)
+    expect(s.actionHistory.at(-1)!.action.type).toBe('BUY')
+    s = play(s, { type: 'SELL', playerId: 'p1', colour: 'green', count: 1 })
+    expect(s.game.players.p1.shares.green).toBe(0)
+    expect(s.game.players.p1.cash).toBe(0)
+    expect(reject(s, { type: 'BUY', playerId: 'p1', colour: 'yellow', count: 3 })).toMatch(/buy 2 more/)
+  })
+
+  it('R-SHARE-03: no buying beyond your cash or beyond the bank; no selling what you do not hold', () => {
+    const s = rich(emptyHanded())
     expect(reject(arrange(s, (g) => (g.players.p1.cash = 3000)), { type: 'BUY', playerId: 'p1', colour: 'red', count: 2 })).toMatch(/costs 4 000 F.T./)
     expect(reject(arrange(s, (g) => (g.bank.red = 1)), { type: 'BUY', playerId: 'p1', colour: 'red', count: 2 })).toMatch(/only 1 red/)
     expect(reject(s, { type: 'SELL', playerId: 'p1', colour: 'red', count: 1 })).toMatch(/hold only 0/)
     expect(reject(s, { type: 'BUY', playerId: 'p1', colour: 'red', count: 0 })).toMatch(/at least 1/)
   })
+
+  it('rules version 1 (AMBIG-3) still refuses trading a colour priced 0', () => {
+    const s = newGame({ rulesVersion: 1 })
+    expect(reject(s, { type: 'BUY', playerId: 'p1', colour: 'blue', count: 1 })).toMatch(/no price/)
+    const holding = arrange(s, (g) => {
+      g.players.p1.shares.blue = 1
+      g.bank.blue = 39
+    })
+    expect(reject(holding, { type: 'SELL', playerId: 'p1', colour: 'blue', count: 1 })).toMatch(/worth nothing/)
+  })
 })
 
 describe('R-PAY: money from a placement', () => {
   it('§6.2 worked example: red 7 → 9 pays A 19 000, B 4 000, C 2 000 and D 14 000', () => {
-    let s = arrange(newGame({ players: 4 }), (g) => {
+    let s = arrange(emptyHanded({ players: 4 }), (g) => {
       // A red group of 3, an isolated red one box away, and a red group of 4 elsewhere: price 7.
       for (const col of [0, 1, 2]) put(g, 0, col, 'red')
       put(g, 0, 4, 'red')
@@ -151,7 +198,7 @@ describe('R-PAY: money from a placement', () => {
   })
 
   it('§6.1 example: a new group of 2 elsewhere lifts 3 to 5, and the placer takes 5 000', () => {
-    let s = arrange(newGame(), (g) => {
+    let s = arrange(emptyHanded(), (g) => {
       for (const col of [0, 1, 2]) put(g, 0, col, 'green')
       put(g, 9, 11, 'green')
     })
@@ -162,7 +209,7 @@ describe('R-PAY: money from a placement', () => {
   })
 
   it('R-PAY-01 (AMBIG-4): growing a group already at 7 moves nothing and pays the 1 000 bonus', () => {
-    let s = arrange(newGame(), (g) => {
+    let s = arrange(emptyHanded(), (g) => {
       for (let col = 0; col < 7; col++) put(g, 5, col, 'blue')
       g.players.p2.shares.blue = 3
     })
@@ -174,7 +221,7 @@ describe('R-PAY: money from a placement', () => {
   })
 
   it('R-PAY-03 / §6.2 important point 1: eliminating a group of 4 leaves an isolated marker at 1; holders but not the placer pay the fall', () => {
-    let s = arrange(newGame(), (g) => {
+    let s = arrange(emptyHanded(), (g) => {
       // Yellow: a group of 4 in column 0 of zone 4, plus an isolated marker. Price 4.
       for (const row of [5, 6, 7, 8]) put(g, row, 0, 'yellow')
       put(g, 0, 11, 'yellow')
@@ -195,7 +242,7 @@ describe('R-PAY: money from a placement', () => {
   })
 
   it('R-PAY-03 (AMBIG-5): joining two capped groups lowers the price, and other holders pay', () => {
-    let s = arrange(newGame(), (g) => {
+    let s = arrange(emptyHanded(), (g) => {
       for (let col = 0; col < 5; col++) put(g, 5, col, 'red')
       for (let col = 6; col < 11; col++) put(g, 5, col, 'red')
       g.players.p2.shares.red = 1
@@ -212,7 +259,7 @@ describe('R-PAY: money from a placement', () => {
 
 describe('R-DEBT: forced sales', () => {
   function fallWith(edit: (g: GameData) => void): GameState {
-    let s = arrange(newGame(), (g) => {
+    let s = arrange(emptyHanded(), (g) => {
       for (const row of [5, 6]) put(g, row, 0, 'yellow')
       for (const row of [7, 8]) put(g, row, 1, 'blue')
       put(g, 9, 11, 'green')
@@ -268,7 +315,7 @@ describe('R-DEBT: forced sales', () => {
 
 describe('R-END: the end of the game', () => {
   it('R-END-01/02/03: a price reaching 15 ends the game; shares count at the current price', () => {
-    let s = arrange(newGame(), (g) => {
+    let s = arrange(emptyHanded(), (g) => {
       for (let col = 0; col < 7; col++) put(g, 0, col, 'green')
       for (let col = 0; col < 7; col++) put(g, 9, col, 'green')
       put(g, 4, 11, 'green')
@@ -286,7 +333,7 @@ describe('R-END: the end of the game', () => {
   })
 
   it('R-END-01: placing the last marker of a colour ends the game; a tie shares the win', () => {
-    let s = arrange(newGame(), (g) => {
+    let s = arrange(emptyHanded(), (g) => {
       g.supply.red = 1
       g.players.p2.cash = 1000
     })
@@ -300,7 +347,7 @@ describe('R-END: the end of the game', () => {
 
 describe('R-LEAVE: conceding', () => {
   it('the turn player leaving passes the turn on and returns their shares', () => {
-    let s = arrange(newGame({ players: 4 }), (g) => {
+    let s = arrange(emptyHanded({ players: 4 }), (g) => {
       g.players.p1.shares.red = 4
       g.bank.red = 36
     })
@@ -319,7 +366,7 @@ describe('R-LEAVE: conceding', () => {
   })
 
   it('a debtor leaving drops their forced sale', () => {
-    let s = arrange(newGame({ players: 4 }), (g) => {
+    let s = arrange(emptyHanded({ players: 4 }), (g) => {
       for (const row of [5, 6]) put(g, row, 0, 'yellow')
       for (const row of [7, 8]) put(g, row, 1, 'blue')
       put(g, 9, 11, 'green')

@@ -73,15 +73,18 @@ function checkInvariants(s: GameState): void {
   }
 }
 
-/** What every game together reached — the last test checks the bot exercised the rarer paths. */
+/** What the current-rules games together reached — the last test checks the bot exercised the rarer paths. */
 const everSeen = new Set<string>()
 
 describe('random games', () => {
   for (const players of [3, 4, 5, 6]) {
-    for (const seed of [1, 2, 3, 4, 5]) {
-      it(`${players} players, seed ${seed}${players === 4 ? ', with a concession' : ''}`, () => {
+    // Seeds 1–10 play the current rules; 11–12 keep rules version 1 (no
+    // starting shares, no trading at price 0) exercised, since it stays registered.
+    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) {
+      const rulesVersion = seed > 10 ? 1 : 2
+      it(`${players} players, seed ${seed}, rules v${rulesVersion}${players === 4 ? ', with a concession' : ''}`, () => {
         const r = createRandom('shark-fuzz', players, seed)
-        let s = newGame({ players, options: { startingCash: seed === 3 ? 20_000 : 0 } })
+        let s = newGame({ players, rulesVersion, options: { startingCash: seed === 3 ? 20_000 : 0 } })
         const genesis = s
         const concedeAt = players === 4 ? r.int(20, 200) : -1
         const seen = new Set<string>()
@@ -109,13 +112,14 @@ describe('random games', () => {
             s = result.state as GameState
           }
           checkInvariants(s)
+          if (rulesVersion === 1) continue
           everSeen.add(s.game.step)
           if (s.game.autoSales.length > 0) everSeen.add('autoSale')
           if (Object.keys(s.game.writeOffs).length > 0) everSeen.add('writeOff')
           if (s.game.lastRoll?.missed) everSeen.add('missedTurn')
           if ((s.game.lastPlacement?.eliminated.length ?? 0) > 0) everSeen.add('elimination')
         }
-        for (const type of seen) everSeen.add(type)
+        if (rulesVersion === 2) for (const type of seen) everSeen.add(type)
         if (process.env.FUZZ_STATS) console.log(players, seed, s.actionHistory.length, JSON.stringify(s.game.endReason), [...seen].join(","), JSON.stringify(s.game.finalWealth))
         expect(s.status).toBe('completed')
         expect(s.game.finalWealth).not.toBeNull()
@@ -126,7 +130,8 @@ describe('random games', () => {
     }
   }
 
-  it('between them, reached forced sales (chosen and automatic), write-offs and eliminations', () => {
-    expect([...everSeen]).toEqual(expect.arrayContaining(['debts', 'FORCED_SELL', 'autoSale', 'writeOff', 'elimination']))
+  // Write-offs are rare once everyone holds starting shares; rules.test.ts pins them.
+  it('between them, reached forced sales (chosen and automatic) and eliminations under the current rules', () => {
+    expect([...everSeen]).toEqual(expect.arrayContaining(['debts', 'FORCED_SELL', 'autoSale', 'elimination']))
   })
 })

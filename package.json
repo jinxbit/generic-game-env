@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@game-platform/incorporated": "*",
+    "@game-platform/kogge": "*",
     "@game-platform/sdk": "*",
     "@game-platform/shark": "*",
     "@game-platform/unique-pick": "*",

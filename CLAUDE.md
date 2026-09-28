@@ -17,11 +17,13 @@ Games are packages: the rules framework is `packages/sdk`
 (`@game-platform/sdk`), and each game is its own package — here the
 example game, **Unique Pick** (`packages/unique-pick`), which exists to
 exercise every platform feature and is the test fixture, **Incorporated**
-(`packages/incorporated`, rules spec in its `RULES.md`) and **Kogge**
-(`packages/kogge`, rules spec in its `RULES.md`). A game can live in
+(`packages/incorporated`, rules spec in its `RULES.md`), **Kogge**
+(`packages/kogge`, rules spec in its `RULES.md`) and **Shark**
+(`packages/shark`, rules spec in its `RULES.md`). A game can live in
 its own repo and be installed. One deployment hosts whichever games
 `src/games/registry.ts` registers. Read `packages/unique-pick/README.md`
-before building or changing a game.
+before building or changing a game, and `GAME_IMPLEMENTATION_LEARNINGS.md`
+before adding one.
 
 ## Commands
 
@@ -333,6 +335,7 @@ a write for this: the reverted #648 attempt doubled latency that way.
 | --- | --- |
 | `README.md` | Setup and operations: Supabase, Discord/Google OAuth, Discord + Web Push notifications, guest auth, hotseat, server-side rule enforcement, game-state export. |
 | `packages/unique-pick/README.md` | **How a game package works**: the `GameDefinition`/`GameUi` contract, the rules every game must follow, rules versions, and starting a game in its own repo. |
+| `GAME_IMPLEMENTATION_LEARNINGS.md` | Lessons from implementing games here: workflow from rulebook to package, engine patterns, pitfalls hit, platform wiring checklist, testing helpers. |
 | `packages/sdk/README.md` | The framework package: entry points and how the registry fits together. |
 | `CHAT_PLAN.md` | Site-wide + in-game chat design record. |
 | `DELIVERY_PIPELINE_PLAN.md` | How a change reaches production: the pre-production environment, branch topology, what auto-merges and what never does. |

@@ -1,9 +1,13 @@
 // The Edge Runtime resolves bare package specifiers only through the
 // `imports` map in supabase/functions/deno.json (found by walking up from
-// each function — a per-function `import_map` in config.toml is ignored), and
-// a gap there only surfaces at deploy time: the in-process test stack
-// resolves the same imports through node_modules and never notices. These
-// checks close that gap.
+// each function), and a gap there only surfaces at deploy time: the
+// in-process test stack resolves the same imports through node_modules and
+// never notices. `supabase functions deploy` needs more than the runtime
+// does: it bundles in a Docker container holding only the files it mounts,
+// and it follows those specifiers into packages/ only for a function whose
+// config.toml `import_map` names the shared file — without it the bundle
+// fails with `Module not found ".../packages/<game>/src/rules.ts"`. These
+// checks close both gaps.
 
 /// <reference types="node" />
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -70,5 +74,14 @@ describe('Edge Function imports', () => {
     // Without this Deno looks for npm:/jsr: dependencies in the repo's
     // node_modules (it sees the root package.json) and fails to resolve them.
     expect(denoConfig.nodeModulesDir).toBe('none')
+  })
+
+  it('points every function at the shared Deno config in config.toml, so the deploy mounts the packages', () => {
+    const config = readFileSync(join(root, 'supabase/config.toml'), 'utf8')
+    for (const name of functionNames) {
+      const section = config.split(/^\[/m).find((block) => block.startsWith(`functions.${name}]`))
+      expect(section, `supabase/config.toml has no [functions.${name}] section`).toBeDefined()
+      expect(section, `[functions.${name}] in supabase/config.toml must set import_map = "./functions/deno.json"`).toMatch(/^import_map\s*=\s*"\.\/functions\/deno\.json"\s*$/m)
+    }
   })
 })

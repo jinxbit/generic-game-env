@@ -146,3 +146,45 @@ orioledb_version = ""
 
 [experimental.pgdelta]
 enabled = true
+
+# Every function shares supabase/functions/deno.json, and each one must name it
+# here. The Edge Runtime finds that file on its own by walking up from a
+# function, but `supabase functions deploy` does not: it bundles in a Docker
+# container that sees only the files it chose to mount, and it only follows
+# the @game-platform/* specifiers into packages/ when a function's
+# `import_map` is set. Without these entries the deploy mounts
+# src/games/registry.ts but none of the game packages it imports, and fails
+# with `Module not found ".../packages/<game>/src/rules.ts"`.
+# edgeFunctionImports.test.ts fails if a function is missing from this list.
+[functions.apply-action]
+import_map = "./functions/deno.json"
+
+[functions.get-game-state]
+import_map = "./functions/deno.json"
+
+[functions.notify-discord-chat]
+import_map = "./functions/deno.json"
+
+[functions.notify-discord-lifecycle]
+import_map = "./functions/deno.json"
+
+[functions.notify-discord-turn]
+import_map = "./functions/deno.json"
+
+[functions.notify-web-push]
+import_map = "./functions/deno.json"
+
+[functions.notify-web-push-chat]
+import_map = "./functions/deno.json"
+
+[functions.notify-web-push-lifecycle]
+import_map = "./functions/deno.json"
+
+[functions.redo-action]
+import_map = "./functions/deno.json"
+
+[functions.start-game]
+import_map = "./functions/deno.json"
+
+[functions.undo-action]
+import_map = "./functions/deno.json"

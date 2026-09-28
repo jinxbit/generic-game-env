@@ -1,0 +1,16 @@
+{
+  "name": "@game-platform/incorporated",
+  "version": "0.1.0",
+  "description": "Incorporated — corporations bid for shares, fight for industries and lobby world powers.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    "./rules": "./src/rules.ts",
+    "./view": "./src/view.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "peerDependencies": {
+    "@game-platform/sdk": "*",
+    "react": "^19"
+  }
+}

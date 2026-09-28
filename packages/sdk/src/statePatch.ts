@@ -16,6 +16,10 @@
  * code: measured at 0.02 ms per diff on real late-game states. Here the
  * patches are computed from states already in memory at write time and
  * stored in the same row write, so they cost no round trip at all.
+ *
+ * Patches are stored and sent as JSON, so they follow JSON's rules: an
+ * object key whose value is `undefined` is the same as an absent key, and
+ * is diffed that way — a `{v: undefined}` node would arrive as `{}`.
  */
 /**
  * Compact on purpose — patches are most of what a hidden-information game
@@ -42,11 +46,16 @@ function deepEqual(a: unknown, b: unknown): boolean {
     return a.length === b.length && a.every((v, i) => deepEqual(v, b[i]))
   }
   if (isPlainObject(a) && isPlainObject(b)) {
-    const aKeys = Object.keys(a)
-    const bKeys = Object.keys(b)
-    return aKeys.length === bKeys.length && aKeys.every((key) => key in b && deepEqual(a[key], b[key]))
+    const aKeys = definedKeys(a)
+    const bKeys = definedKeys(b)
+    return aKeys.length === bKeys.length && aKeys.every((key) => b[key] !== undefined && deepEqual(a[key], b[key]))
   }
   return false
+}
+
+/** An object's keys as JSON sees them: one holding `undefined` isn't there. */
+function definedKeys(value: Record<string, unknown>): string[] {
+  return Object.keys(value).filter((key) => value[key] !== undefined)
 }
 
 /** The smaller of a partial patch and outright replacement. */
@@ -75,12 +84,12 @@ export function diffState(previous: unknown, current: unknown): StatePatch {
   if (isPlainObject(previous) && isPlainObject(current)) {
     const o: Record<string, StatePatchNode> = {}
     const u: string[] = []
-    for (const key of Object.keys(current)) {
-      const sub = key in previous ? diffState(previous[key], current[key]) : { v: current[key] }
+    for (const key of definedKeys(current)) {
+      const sub = previous[key] !== undefined ? diffState(previous[key], current[key]) : { v: current[key] }
       if (sub) o[key] = sub
     }
-    for (const key of Object.keys(previous)) {
-      if (!(key in current)) u.push(key)
+    for (const key of definedKeys(previous)) {
+      if (current[key] === undefined) u.push(key)
     }
     return smaller(u.length > 0 ? { o, u } : { o }, current)
   }
@@ -105,6 +114,8 @@ export function applyStatePatch<T>(previous: T, patch: StatePatch): T {
     }
     return result as T
   }
+  // `{}`: a `{v: undefined}` node (an `undefined` array element) after its JSON round trip.
+  if (!('o' in patch)) return undefined as T
   const prevObj: Record<string, unknown> = isPlainObject(previous) ? previous : {}
   const result: Record<string, unknown> = { ...prevObj }
   for (const key of patch.u ?? []) delete result[key]

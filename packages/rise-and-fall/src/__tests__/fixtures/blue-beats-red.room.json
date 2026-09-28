@@ -1,0 +1,10 @@
+{
+  "name": "Player A vs Player B — blue wins on achievements",
+  "settings": {
+    "ruleEnforcementEnabled": false
+  },
+  "expected": {
+    "finalScores": { "Player A": 174, "Player B": 138 },
+    "winners": ["Player A"]
+  }
+}

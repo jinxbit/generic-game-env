@@ -27,7 +27,10 @@ type DraftEvent = LogLine
 function describeStep(action: Action, before: GameState, after: GameState): DraftEvent[] {
   if (!isFrameworkAction(action)) {
     const description = definitionFor(before).describeAction(action, before, after)
-    return [{ playerId: action.playerId, message: description.message, redactedMessage: description.redactedMessage }]
+    return [
+      { playerId: action.playerId, message: description.message, redactedMessage: description.redactedMessage },
+      ...(description.extraLines ?? []).map((line) => ({ playerId: line.playerId, message: line.message })),
+    ]
   }
   switch (action.type) {
     case 'CONCEDE':

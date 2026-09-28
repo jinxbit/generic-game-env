@@ -1,0 +1,447 @@
+import type { Action, LoggedAction } from './actions.ts'
+import { EMPTY_ACHIEVEMENT_CONTENT } from './achievementContent.ts'
+import type { AchievementContent } from './achievementContent.ts'
+import { applyActionWithSteps } from './applyAction.ts'
+import { EMPTY_BOARD_GENERATION_CONTENT } from './boardGenerationContent.ts'
+import type { BoardGenerationContent } from './boardGenerationContent.ts'
+import { UNIT_KINDS, cardIdFor, findCardZone } from './cards.ts'
+import { replayActions } from './replay.ts'
+import { describeResourceDelta } from './resources.ts'
+import { EMPTY_TALE_CONTENT } from './taleContent.ts'
+import type { TaleContent } from './taleContent.ts'
+import type { GameEvent, GameState } from './types.ts'
+import { EMPTY_UNIT_CONTENT } from './unitContent.ts'
+import type { UnitContent } from './unitContent.ts'
+
+/** One derived log line, not yet stamped with an id/turn — see describeStep below. */
+export interface DraftEvent {
+  playerId: string | null
+  message: string
+  /** Carried straight through onto the stamped GameEvent — see its doc comment in ./types.ts. */
+  secret?: { turn: number; redactedMessage: string }
+}
+
+/**
+ * Placeholder substituted into `message` wherever `playerId`'s display name
+ * (and colour, see RoundView's LogPanel) belongs — narration is built here
+ * without access to the player-name/colour lookup table (that's DB-row data
+ * living outside the engine), so the raw guid can't be interpolated directly
+ * without leaking it to players in the rendered log.
+ */
+export const PLAYER_PLACEHOLDER = '{player}'
+
+/**
+ * Same idea as PLAYER_PLACEHOLDER, but for the one spot (the game-end
+ * winners line) that needs an arbitrary-length, comma-joined list of player
+ * names rather than a single `event.playerId` — encodes the guids directly
+ * in the token since GameEvent only carries one `playerId` slot, and
+ * RoundView's LogPanel parses this back out to resolve names/colours.
+ */
+function playersPlaceholder(playerIds: string[]): string {
+  return `{players:${playerIds.join(',')}}`
+}
+
+/**
+ * Renders the primary, one-line narration for whatever action was just
+ * dispatched — the direct equivalent of what each apply* handler used to
+ * write straight into GameState.log. Everything it needs (card names, tile
+ * terrain, resource deltas, purchase cost) is either already on the
+ * action's own payload or cheaply recovered by diffing `before`/`after`,
+ * the same before/after-snapshot technique ./turnReview.ts already uses for
+ * its per-unit event extraction.
+ */
+export function describePrimaryAction(action: Action, before: GameState, after: GameState, unitContent: UnitContent): DraftEvent[] {
+  switch (action.type) {
+    case 'PLACE_TILE': {
+      // A placed tile can land on an already-tracked hex (e.g. converting a
+      // seeded water tile to its real terrain) as easily as a brand-new
+      // one, so the signal is a terrain *change* at a key, not a new key.
+      const changedKey = Object.keys(after.board.tiles).find((key) => before.board.tiles[key]?.terrain !== after.board.tiles[key].terrain)
+      const terrain = changedKey ? after.board.tiles[changedKey].terrain : 'unknown'
+      return [{ playerId: action.playerId, message: `${PLAYER_PLACEHOLDER} placed a ${terrain} tile` }]
+    }
+    case 'PLACE_UNIT':
+      return [{ playerId: action.playerId, message: `${PLAYER_PLACEHOLDER} placed a starting ${action.unitKind}` }]
+    case 'CHOOSE_CARD': {
+      const name = after.cards[action.cardId]?.name ?? action.cardId
+      return [
+        {
+          playerId: action.playerId,
+          message: `${PLAYER_PLACEHOLDER} chose to play ${name}`,
+          secret: { turn: after.turn, redactedMessage: `${PLAYER_PLACEHOLDER} chose a card` },
+        },
+      ]
+    }
+    case 'RETRACT_CHOICE':
+      // Never needs a `secret` redaction like CHOOSE_CARD's above: it
+      // doesn't reveal which card was chosen, only that the earlier
+      // "chose a card" line (already itself masked while still secret) no
+      // longer holds.
+      return [{ playerId: action.playerId, message: `${PLAYER_PLACEHOLDER} retracted their card choice` }]
+    case 'RESOLVE_UNIT_ACTION': {
+      const cardId = before.chosenCardIdByPlayerId[action.playerId]
+      const card = cardId ? before.cards[cardId] : undefined
+      const actionNames: string[] = []
+      for (const assignment of action.unitActions) {
+        const def = card ? unitContent.actionsByKind[card.kind]?.find((a) => a.id === assignment.actionId) : undefined
+        const name = def?.name ?? assignment.actionId
+        if (!actionNames.includes(name)) actionNames.push(name)
+      }
+      const resourcesBefore = before.players.find((p) => p.id === action.playerId)?.resources
+      const resourcesAfter = after.players.find((p) => p.id === action.playerId)?.resources
+      const delta = resourcesBefore && resourcesAfter ? describeResourceDelta(resourcesBefore, resourcesAfter) : ''
+      const kindLabel = card?.kind ?? 'unit'
+      const events: DraftEvent[] = [
+        { playerId: action.playerId, message: `${PLAYER_PLACEHOLDER}'s ${kindLabel} resolved ${actionNames.join(', ')}${delta}` },
+      ]
+      // Skipped once the round itself has also turned over in this same
+      // dispatch (e.g. the last player's last unit closes out the round):
+      // by then `after.pendingPlayerIds` has already been reset for the
+      // *next* round's select-cards phase, which can coincidentally put
+      // this same player back at the front — and the "Round N begins" line
+      // below already implies their turn ended, so it'd be redundant
+      // anyway.
+      if (after.turn === before.turn && before.pendingPlayerIds[0] === action.playerId && after.pendingPlayerIds[0] !== action.playerId) {
+        events.push({ playerId: action.playerId, message: `${PLAYER_PLACEHOLDER}'s ${kindLabel} finished acting — turn ends` })
+      }
+      return events
+    }
+    case 'PASS_ACTIONS':
+      return [{ playerId: action.playerId, message: `${PLAYER_PLACEHOLDER} passed on resolving further actions` }]
+    case 'MOVE_TO_DECLINE':
+      return [{ playerId: action.playerId, message: `${PLAYER_PLACEHOLDER} moved a card into decline` }]
+    case 'RETRACT_DECLINE':
+      // Never names the card(s), same "doesn't reveal what was chosen" reasoning
+      // as RETRACT_CHOICE above — true whether this retracted one card or, per
+      // issue #505's no-`cardId` form, every one of the player's own additions
+      // from this phase at once.
+      return [{ playerId: action.playerId, message: `${PLAYER_PLACEHOLDER} retracted their decline selection` }]
+    case 'PURCHASE_CARD': {
+      const goldBefore = before.players.find((p) => p.id === action.playerId)?.resources.gold ?? 0
+      const goldAfter = after.players.find((p) => p.id === action.playerId)?.resources.gold ?? 0
+      const cost = goldBefore - goldAfter
+      return [{ playerId: action.playerId, message: `${PLAYER_PLACEHOLDER} purchased a card back from decline for ${cost} gold` }]
+    }
+    case 'PASS_PURCHASE':
+      return [{ playerId: action.playerId, message: `${PLAYER_PLACEHOLDER} passed on purchasing` }]
+    case 'CONCEDE':
+      return [{ playerId: action.playerId, message: `${PLAYER_PLACEHOLDER} conceded` }]
+    case 'UNDO_ACTION':
+      return [
+        action.playerId
+          ? { playerId: action.playerId, message: `${PLAYER_PLACEHOLDER} undid the last action` }
+          : { playerId: null, message: 'The last action was undone' },
+      ]
+    case 'REDO_ACTION':
+      return [
+        action.playerId
+          ? { playerId: action.playerId, message: `${PLAYER_PLACEHOLDER} redid the previously undone action` }
+          : { playerId: null, message: 'The previously undone action was redone' },
+      ]
+    case 'SET_ADMIN_MODE':
+      return [
+        action.playerId
+          ? { playerId: action.playerId, message: `${PLAYER_PLACEHOLDER} turned admin mode ${action.enabled ? 'on' : 'off'}` }
+          : { playerId: null, message: `Admin mode was turned ${action.enabled ? 'on' : 'off'}` },
+      ]
+    default: {
+      const exhaustive: never = action
+      throw new Error(`Unknown action: ${JSON.stringify(exhaustive)}`)
+    }
+  }
+}
+
+/**
+ * Everything that used to be logged as a side effect cascading out of a
+ * single dispatched action (achievement claims, eliminations, phase
+ * transitions, card-zone syncs, game end) — derived generically by diffing
+ * `before`/`after`, rather than replicated per action type, since the same
+ * cascade (e.g. a round ending) can be triggered from several different
+ * action types once every nested phase-transition function has run.
+ */
+export function describeCascade(before: GameState, after: GameState, achievementContent: AchievementContent): DraftEvent[] {
+  const events: DraftEvent[] = []
+
+  for (const [achievementId, claimantId] of Object.entries(after.claimedByAchievementId)) {
+    if (before.claimedByAchievementId[achievementId]) continue
+    const kind = achievementContent.unitKindByAchievementId[achievementId] ?? achievementId
+    events.push({ playerId: claimantId, message: `${PLAYER_PLACEHOLDER} claimed the ${kind} mastery achievement` })
+  }
+
+  for (const player of after.players) {
+    const beforePlayer = before.players.find((p) => p.id === player.id)
+    // Conceding already gets its own primary-action line ("Player X
+    // conceded") above in describePrimaryAction — this cascade line is only
+    // for the automatic no-card-available rule, so skip it here or every
+    // concede would also log a misleading "was eliminated" line right after.
+    if (beforePlayer && !beforePlayer.eliminated && player.eliminated && !player.conceded) {
+      events.push({ playerId: player.id, message: `${PLAYER_PLACEHOLDER} was eliminated — no card available to play` })
+    }
+  }
+
+  if (before.boardSetup && before.boardSetup.tileTierQueue.length > 0 && after.boardSetup && after.boardSetup.tileTierQueue.length === 0) {
+    events.push({ playerId: null, message: 'All tiles placed — starting-unit placement begins' })
+  }
+
+  for (const player of after.players) {
+    const beforePlayer = before.players.find((p) => p.id === player.id)
+    if (!beforePlayer) continue
+    for (const kind of UNIT_KINDS) {
+      const cardId = cardIdFor(player.id, kind)
+      if (!after.cards[cardId]) continue
+      const beforeZone = findCardZone(beforePlayer, cardId)
+      const afterZone = findCardZone(player, cardId)
+      if (beforeZone === afterZone) continue
+      if (afterZone === 'supply') {
+        events.push({ playerId: player.id, message: `${PLAYER_PLACEHOLDER}'s ${kind} card returned to supply (no units left on the board)` })
+      } else if (beforeZone === 'supply' && afterZone === 'hand') {
+        events.push({ playerId: player.id, message: `${PLAYER_PLACEHOLDER}'s ${kind} card entered their hand (first unit placed)` })
+      }
+    }
+  }
+
+  if (after.turn !== before.turn) {
+    // (The "discard recycled into hand" system note isn't derived here: by
+    // the time this whole action's cascade finishes, whether a mid-cascade
+    // discard->hand recycle happened is no longer reliably distinguishable
+    // from "this player simply had an empty discard the whole time" using
+    // only the before/after snapshot pair — the intermediate state that
+    // would disambiguate it isn't kept around. Low-value line to lose:
+    // the round transition itself is still reported below regardless.)
+    if (after.turnOrder.length > 0 && after.turnOrder[0] !== before.turnOrder[0]) {
+      events.push({ playerId: after.turnOrder[0], message: `${PLAYER_PLACEHOLDER} becomes the first player` })
+    }
+    events.push({ playerId: null, message: `Round ${after.turn} begins` })
+  }
+
+  if (before.status !== 'completed' && after.status === 'completed') {
+    const totalAchievementsClaimed = Object.keys(after.claimedByAchievementId).length
+    events.push({
+      playerId: null,
+      message: `Game ends — ${totalAchievementsClaimed} achievements claimed. Winner(s): ${
+        after.winnerPlayerIds.length > 0 ? playersPlaceholder(after.winnerPlayerIds) : 'none'
+      }`,
+    })
+  }
+
+  return events
+}
+
+/**
+ * True for a CHOOSE_CARD/MOVE_TO_DECLINE/RETRACT_DECLINE/PURCHASE_CARD entry
+ * whose real `cardId` payload has been replaced with `null` by
+ * redactStateForPlayer's actionHistory redaction (./redaction.ts) — still
+ * secret from this viewer. unredactedPrefix (./redaction.ts) only ever lets
+ * such an entry through when it's already been undone (no longer "effective"
+ * per resolveHistory, ./historyFold.ts — see that function's own doc
+ * comment), so by construction it's guaranteed to contribute nothing to the
+ * replayed state. extendGameLog below relies on that guarantee to skip
+ * straight over one instead of calling applyActionWithSteps() on a payload
+ * that was never a real action to begin with — which used to fail outright
+ * (`cardId` isn't in the player's hand) and, since that failure aborts the
+ * whole narration loop, silently swallowed every event from that point on,
+ * including the very UNDO_ACTION/REDO_ACTION entries that followed it
+ * (issue #514; PURCHASE_CARD added for the same reason under issue #600 —
+ * a masked one can only ever reach here already-undone, same as the other
+ * three, since it has no retraction of its own to close it first).
+ */
+function isMaskedRedactionEntry(action: Action): boolean {
+  if (
+    action.type !== 'CHOOSE_CARD' &&
+    action.type !== 'MOVE_TO_DECLINE' &&
+    action.type !== 'RETRACT_DECLINE' &&
+    action.type !== 'PURCHASE_CARD'
+  )
+    return false
+  return (action.cardId as unknown) === null
+}
+
+/**
+ * True for a RETRACT_CHOICE entry whose matching CHOOSE_CARD was masked (see
+ * isMaskedRedactionEntry above) and so was skipped rather than replayed —
+ * `before.chosenCardIdByPlayerId[playerId]` is then still `null` locally,
+ * exactly as if that player had never picked at all. Replaying such a
+ * RETRACT_CHOICE via applyActionWithSteps would fail applyRetractChoice's
+ * "hasn't chosen a card yet" guard even though the real game legitimately
+ * had a pick to retract — this narration-only state just never recorded it.
+ * A validly-logged RETRACT_CHOICE always follows a real CHOOSE_CARD from the
+ * same player earlier the same round, so `before.chosenCardIdByPlayerId`
+ * being null here can only mean this, never a genuinely invalid history
+ * (issue #527, the RETRACT_CHOICE counterpart of isMaskedRedactionEntry).
+ */
+function isRetractionOfMaskedChoice(action: Action, before: GameState): boolean {
+  return action.type === 'RETRACT_CHOICE' && before.chosenCardIdByPlayerId[action.playerId] == null
+}
+
+/**
+ * Continues narrating on top of a `state` already derived from some prefix
+ * of a game's actionHistory (e.g. a previous buildGameLog/buildGameLogFrom/
+ * extendGameLog call's own result) — the same per-action replay+diff
+ * buildGameLog does, just factored out so a caller that's already holding
+ * that intermediate state doesn't have to replay all the way from genesis
+ * again merely to narrate a handful of new actions appended on top (see
+ * GamePage.tsx's incrementally-extended gameLog cache, which is what makes
+ * the log affordable to keep live-updating across a long game instead of
+ * re-deriving the entire history on every single action). `nextEventId`
+ * seeds the running `evt_N` counter so ids stay unique/increasing across a
+ * caller's earlier and newly-appended halves.
+ *
+ * `genesis`/`historySoFar` (the raw entries already reflected in `state`)
+ * are only actually needed for UNDO_ACTION/REDO_ACTION entries (design
+ * change, issue #412) among `actions`: those aren't a forward step from
+ * `state` via applyAction() like every other entry — see resolveHistory
+ * (./historyFold.ts) — so narrating one means re-deriving `state` via a full
+ * replayActions() over `historySoFar` plus everything walked so far in this
+ * call, the same way applyUndoAction/applyRedoAction (./undoRedo.ts) do for
+ * a live submission. A masked CHOOSE_CARD/MOVE_TO_DECLINE/RETRACT_DECLINE
+ * entry (see isMaskedRedactionEntry above) is likewise not a forward step —
+ * it's a no-op placeholder guaranteed to be undone later in `actions`.
+ *
+ * `ok` is false when an entry failed to reapply (see the defensive bail
+ * below) — the loop stops at that point, same as ever, but callers that
+ * cache per-action state (e.g. GamePage.tsx's history-review replay cache)
+ * need this explicit signal to detect that: a legacy stale forced follow-up
+ * entry (applyAction.ts's isStaleForcedFollowUp) is a legitimate no-op that
+ * leaves `state` at the exact same reference it started at, so "did `state`
+ * change" can no longer be used to infer failure the way it once could.
+ */
+export function extendGameLog(
+  genesis: GameState,
+  historySoFar: LoggedAction[],
+  state: GameState,
+  actions: LoggedAction[],
+  nextEventId: number,
+  unitContent: UnitContent = EMPTY_UNIT_CONTENT,
+  achievementContent: AchievementContent = EMPTY_ACHIEVEMENT_CONTENT,
+  boardGenerationContent: BoardGenerationContent = EMPTY_BOARD_GENERATION_CONTENT,
+  taleContent: TaleContent = EMPTY_TALE_CONTENT,
+): { state: GameState; events: GameEvent[]; ok: boolean } {
+  const events: GameEvent[] = []
+  let id = nextEventId
+  let history = historySoFar
+
+  for (const logged of actions) {
+    const before = state
+    history = [...history, logged]
+
+    let after: GameState
+    let primaryDrafts: DraftEvent[]
+    if (logged.action.type === 'UNDO_ACTION' || logged.action.type === 'REDO_ACTION') {
+      after = replayActions(genesis, history, unitContent, achievementContent, boardGenerationContent, taleContent)
+      primaryDrafts = describePrimaryAction(logged.action, before, after, unitContent)
+    } else if (isMaskedRedactionEntry(logged.action)) {
+      // Nothing to narrate — see isMaskedRedactionEntry's doc comment — and
+      // nothing to replay forward either, since this entry is guaranteed to
+      // be folded away by an UNDO_ACTION later in `actions`.
+      after = before
+      primaryDrafts = []
+    } else if (isRetractionOfMaskedChoice(logged.action, before)) {
+      // Nothing to replay — see isRetractionOfMaskedChoice's doc comment:
+      // the masked CHOOSE_CARD this retracts was already skipped as a no-op
+      // above, so retracting it is one too, and by coincidence exactly the
+      // right one (both leave chosenCardIdByPlayerId/pendingPlayerIds
+      // exactly where they already were). Unlike a masked entry, though,
+      // RETRACT_CHOICE's own line is never secret (describePrimaryAction's
+      // RETRACT_CHOICE case never names the card), so it still needs a
+      // draft here.
+      after = before
+      primaryDrafts = describePrimaryAction(logged.action, before, after, unitContent)
+    } else {
+      // trustedReplay: `logged` was already validated once, when originally
+      // submitted (see applyAction's own doc comment) — narrating it again
+      // doesn't need PLACE_TILE's expensive room-search recheck.
+      //
+      // A forced single-option follow-up (RULE_ENFORCEMENT_PLAN.md §4.2/§4.3)
+      // isn't its own actionHistory entry — it's folded into this SAME entry
+      // (applyAction.ts) — so applyActionWithSteps' own step-by-step
+      // breakdown is what narrates each folded-in step exactly like an
+      // ordinary action ("the log line should be derived from what
+      // happened," not from a stored flag), rather than a single
+      // describePrimaryAction call over the whole cascade's before/after.
+      const result = applyActionWithSteps(before, logged.action, unitContent, achievementContent, boardGenerationContent, taleContent, true)
+      if (!result.ok) return { state, events, ok: false } // a validly-logged action should never fail to reapply; bail defensively rather than throw mid-log
+      after = result.state
+      primaryDrafts = result.steps.flatMap((step) => describePrimaryAction(step.action, step.before, step.after, unitContent))
+    }
+
+    const drafts = [...primaryDrafts, ...describeCascade(before, after, achievementContent)]
+    for (const draft of drafts) {
+      events.push({
+        id: `evt_${id++}`,
+        turn: after.turn,
+        playerId: draft.playerId,
+        message: draft.message,
+        timestamp: logged.timestamp,
+        secret: draft.secret,
+        adminMode: logged.viaAdminMode,
+      })
+    }
+
+    state = after
+  }
+
+  return { state, events, ok: true }
+}
+
+/**
+ * Rebuilds the game's narration log purely from `actionHistory` — nothing
+ * about it is stored on GameState (see GameEvent's doc comment in
+ * ./types.ts). Replays each logged action from `genesis` exactly like
+ * ./replay.ts's replayActions (via extendGameLog above), deriving one or
+ * more display lines per step from the before/after state pair rather than
+ * threading a log array through every mutator. `id`/`turn` are assigned
+ * fresh on every call (they only need to be unique within this one derived
+ * list, e.g. for a React key); `timestamp` comes from the LoggedAction
+ * itself, the real moment that action was dispatched. Also returns the
+ * final replayed `state`, for a caller that wants to keep extending this
+ * same log later (see extendGameLog) without redoing this full replay.
+ *
+ * `gameCreatedAt` stamps the synthetic "Board setup begins" opening entry
+ * (issue #537: the log's bottom-most/oldest row — the game's start — needs a
+ * real date to show, and this entry has no LoggedAction to draw one from
+ * otherwise). Optional and defaulting to '' — same "render nothing" handling
+ * as any other unparseable timestamp (see RoundView's formatLogTimestamp/
+ * formatLogDate) — since GameState itself deliberately carries no creation
+ * timestamp (see buildGenesisState) and most callers here are engine tests
+ * with no `games` row to draw one from; GamePage.tsx passes `game.created_at`.
+ */
+export function buildGameLogFrom(
+  genesis: GameState,
+  actionHistory: LoggedAction[],
+  unitContent: UnitContent = EMPTY_UNIT_CONTENT,
+  achievementContent: AchievementContent = EMPTY_ACHIEVEMENT_CONTENT,
+  boardGenerationContent: BoardGenerationContent = EMPTY_BOARD_GENERATION_CONTENT,
+  taleContent: TaleContent = EMPTY_TALE_CONTENT,
+  gameCreatedAt: string = '',
+): { state: GameState; events: GameEvent[] } {
+  const initial: GameEvent[] = []
+  if (genesis.status === 'boardSetup') {
+    initial.push({ id: 'evt_1', turn: genesis.turn, playerId: null, message: 'Board setup begins', timestamp: gameCreatedAt })
+  }
+
+  const { state, events } = extendGameLog(
+    genesis,
+    [],
+    genesis,
+    actionHistory,
+    initial.length + 1,
+    unitContent,
+    achievementContent,
+    boardGenerationContent,
+    taleContent,
+  )
+  return { state, events: [...initial, ...events] }
+}
+
+/** Same as buildGameLogFrom, but for a caller that only wants the log itself (e.g. every existing caller before GamePage.tsx started caching its own copy of `state` too — see buildGameLogFrom's doc comment). */
+export function buildGameLog(
+  genesis: GameState,
+  actionHistory: LoggedAction[],
+  unitContent: UnitContent = EMPTY_UNIT_CONTENT,
+  achievementContent: AchievementContent = EMPTY_ACHIEVEMENT_CONTENT,
+  boardGenerationContent: BoardGenerationContent = EMPTY_BOARD_GENERATION_CONTENT,
+  taleContent: TaleContent = EMPTY_TALE_CONTENT,
+  gameCreatedAt: string = '',
+): GameEvent[] {
+  return buildGameLogFrom(genesis, actionHistory, unitContent, achievementContent, boardGenerationContent, taleContent, gameCreatedAt).events
+}

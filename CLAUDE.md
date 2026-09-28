@@ -212,13 +212,17 @@ a write for this: the reverted #648 attempt doubled latency that way.
   `src/lib/` directly and unmodified.** There is no rule-logic duplication
   between client and server, and there must not be. Bare package specifiers
   resolve through the `imports` map in `supabase/functions/deno.json`, which
-  the Edge Runtime finds by walking up from each function (a per-function
-  `import_map` in `config.toml` is ignored — verified against a local
-  `supabase functions serve`). It also sets `"nodeModulesDir": "none"` so Deno
+  the Edge Runtime finds by walking up from each function. `supabase functions
+  deploy` does not: it bundles in Docker with only the files it chose to
+  mount, and follows `@game-platform/*` into `packages/` only for a function
+  whose `[functions.<name>] import_map` in `config.toml` points at that file —
+  so **every function needs that entry**, or the deploy fails with `Module not
+  found ".../packages/<game>/src/rules.ts"`. It also sets `"nodeModulesDir": "none"` so Deno
   fetches `npm:`/`jsr:` dependencies itself instead of looking in the repo's
   `node_modules`. `src/test/__tests__/edgeFunctionImports.test.ts` fails if a
-  reachable specifier isn't mapped or a mapped file is missing. **Adding a
-  game means adding its `rules` entry to that map.**
+  reachable specifier isn't mapped, a mapped file is missing, or a function
+  has no `import_map` entry. **Adding a game means adding its `rules` entry to
+  that map; adding a function means adding its `config.toml` entry.**
 - **The Edge Runtime does not honor `sloppy-imports`.** Every relative import
   in the graph reachable from `supabase/functions/` must carry an explicit
   `.ts` extension, and JSON imports need `with { type: 'json' }`. That graph

@@ -1,4 +1,3 @@
-import { isProductionBuild } from './environment'
 import { supabase } from './supabase'
 
 export async function signInWithDiscord() {
@@ -63,24 +62,24 @@ export async function updatePassword(newPassword: string) {
 }
 
 /**
- * Whether guest sign-in may be offered/used at all: `VITE_ALLOW_GUEST_AUTH`
- * opts it in per deploy, but that alone isn't trusted to keep it out of
- * production — a shared (not Preview-scoped) Vercel env var would leak it
- * there. So this also requires a non-production build by the
- * `VITE_ENVIRONMENT` convention (`isProductionBuild`, src/lib/environment.ts),
- * the same signal the environment badge uses, which needs no extra
- * configuration to stay off in production.
+ * Whether guest (anonymous) sign-in is offered. It is on in every
+ * environment, production included — it used to be a testing-only escape
+ * hatch blocked outright in production (issue #677), and is now a regular
+ * way in for players who don't want an account. A deploy can still turn it
+ * off with `VITE_ALLOW_GUEST_AUTH=false`, e.g. for a Supabase project that
+ * doesn't have anonymous sign-ins enabled, where the button would only fail.
  */
 export function isGuestAuthAllowed(): boolean {
-  return import.meta.env.VITE_ALLOW_GUEST_AUTH === 'true' && !isProductionBuild(import.meta.env.VITE_ENVIRONMENT)
+  return import.meta.env.VITE_ALLOW_GUEST_AUTH?.trim().toLowerCase() !== 'false'
 }
 
 /**
- * Testing-only bypass for Discord sign-in — creates a real (anonymous)
- * Supabase session, so RLS/`auth.uid()` and the rest of the app work
- * unmodified. Requires "Allow anonymous sign-ins" enabled in the Supabase
- * dashboard (Authentication → Sign In / Providers). Gated by
- * `isGuestAuthAllowed()` so it's opt-in per deploy and disabled in production.
+ * Signs in without an account — creates a real (anonymous) Supabase session,
+ * so RLS/`auth.uid()` and the rest of the app work unmodified. Requires
+ * "Allow anonymous sign-ins" enabled in the Supabase dashboard
+ * (Authentication → Sign In / Providers). The session lives only in this
+ * browser: signing out or clearing site data loses the guest identity and
+ * with it the seats it holds.
  */
 export async function signInAsGuest() {
   if (!isGuestAuthAllowed()) throw new Error('Guest sign-in is not available')

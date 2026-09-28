@@ -12,7 +12,7 @@ build another.
 
 What the platform gives a game for free:
 
-- Accounts (Discord/Google OAuth, email/password, optional guest sign-in),
+- Accounts (Discord/Google OAuth, email/password, guest sign-in),
   display names and per-account preferences.
 - Rooms with codes, public/private listing, a lobby with ready checks,
   owner-editable configuration, cancel/delete lifecycle, and a "your turn"
@@ -621,24 +621,22 @@ real player (both notification functions only fire for `async` games). See
 `src/test/productionSmoke/README.md` for the full isolation story, which games
 are eligible, and the per-run cost.
 
-## Testing without Discord OAuth set up
+## Guest sign-in
 
-Set `VITE_ALLOW_GUEST_AUTH=true` (see `.env.example`) to show a "Continue
-as guest (testing)" button next to the Discord one. It uses Supabase's
-built-in anonymous sign-in, which produces a real session/`auth.uid()`, so
-RLS and the rest of the app work exactly as with a Discord identity — the
-only difference is the display name (`Guest 1234`) and no persistent
-account across browsers/devices.
+The home page offers a "Continue as guest" button next to the Discord one,
+in every environment including production. It uses Supabase's built-in
+anonymous sign-in, which produces a real session/`auth.uid()`, so RLS and
+the rest of the app work exactly as with a Discord identity — the only
+difference is the display name (`Guest 1234`) and no persistent account
+across browsers/devices: signing out or clearing site data loses the guest
+identity and the seats it holds.
 
 This requires **Authentication → Sign In / Providers → Allow anonymous
-sign-ins** to be enabled in the Supabase dashboard (off by default).
-
-Leave `VITE_ALLOW_GUEST_AUTH` unset in production — Discord sign-in is
-meant to be mandatory there; this is a testing-only escape hatch. This isn't
-just convention: `isGuestAuthAllowed()` (`src/lib/auth.ts`) also requires a
-non-production build by the same `VITE_ENVIRONMENT` signal the environment
-badge uses, so a shared/mis-scoped Vercel env var can't turn
-guest sign-in on in production by itself.
+sign-ins** to be enabled in each Supabase project (off by default; the local
+stack's `supabase/config.toml` turns it on). For a project without it, set
+`VITE_ALLOW_GUEST_AUTH=false` to hide the button (`isGuestAuthAllowed()`,
+`src/lib/auth.ts`). Consider enabling CAPTCHA / keeping the
+`anonymous_users` rate limit on, since anyone can mint a guest session.
 
 ## Hotseat identity — how it works
 

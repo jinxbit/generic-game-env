@@ -178,7 +178,7 @@ automatically.
 per Supabase project, so Discord and Google sign-in will not work on staging
 until they are configured there too. The cheap path is to lean on
 email/password (`EmailPasswordAuth.tsx`, issue #384) and optionally
-`VITE_ALLOW_GUEST_AUTH` for staging, and only wire OAuth there if the OAuth
+guest sign-in (on by default) for staging, and only wire OAuth there if the OAuth
 flow itself is what needs testing.
 
 ---

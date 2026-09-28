@@ -16,7 +16,7 @@ export function GuestSignIn({ onError }: { onError?: (error: AppError) => void }
       onClick={() => void handleClick()}
       className="inline-flex items-center gap-2 rounded-md border border-neutral-700 px-4 py-2 font-medium text-neutral-300 hover:border-neutral-500 hover:text-white"
     >
-      Continue as guest (testing)
+      Continue as guest
     </button>
   )
 }

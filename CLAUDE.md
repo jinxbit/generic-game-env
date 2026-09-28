@@ -16,8 +16,9 @@ This repo is an npm-workspaces monorepo and the **main platform repo**.
 Games are packages: the rules framework is `packages/sdk`
 (`@game-platform/sdk`), and each game is its own package — here the
 example game, **Unique Pick** (`packages/unique-pick`), which exists to
-exercise every platform feature and is the test fixture, and **Incorporated**
-(`packages/incorporated`, rules spec in its `RULES.md`). A game can live in
+exercise every platform feature and is the test fixture, **Incorporated**
+(`packages/incorporated`, rules spec in its `RULES.md`) and **Kogge**
+(`packages/kogge`, rules spec in its `RULES.md`). A game can live in
 its own repo and be installed. One deployment hosts whichever games
 `src/games/registry.ts` registers. Read `packages/unique-pick/README.md`
 before building or changing a game.

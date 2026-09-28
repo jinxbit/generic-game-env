@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { SeatInfo } from '@game-platform/sdk/ui'
-import { COLOURS, forcedSalePrice, formatFT, MAX_BUY_PER_TURN, maxForcedSale, sharePrice, STEP_LABELS, type GameState } from '../rules.ts'
+import { COLOURS, forcedSalePrice, formatFT, MAX_BUY_PER_TURN, maxForcedSale, sharePrice, STEP_LABELS, tradesAtZeroPrice, type GameState } from '../rules.ts'
 import type { Colour, GameAction } from '../types.ts'
 import { BTN, BTN_PRIMARY, COLOUR_HEX, INPUT, nameOf, titleCase } from './helpers.ts'
 
@@ -31,6 +31,7 @@ function TradeControls({ state, me, submitting, onAction }: { state: GameState; 
   const [count, setCount] = useState(1)
   const mine = g.players[me]
   const left = MAX_BUY_PER_TURN - g.boughtThisTurn
+  const unpriced = g.prices[colour] === 0 && !tradesAtZeroPrice(state.rulesVersion)
   return (
     <div className="flex flex-wrap items-center gap-2">
       <ColourPicker value={colour} options={COLOURS} onChange={setColour} disabled={submitting} />
@@ -46,7 +47,7 @@ function TradeControls({ state, me, submitting, onAction }: { state: GameState; 
       <button
         type="button"
         className={BTN}
-        disabled={submitting || g.prices[colour] === 0 || count > left || mine.cash < count * sharePrice(g, colour) || g.bank[colour] < count}
+        disabled={submitting || unpriced || count > left || mine.cash < count * sharePrice(g, colour) || g.bank[colour] < count}
         onClick={() => onAction({ type: 'BUY', playerId: me, colour, count })}
       >
         Buy for {formatFT(count * sharePrice(g, colour))}
@@ -54,7 +55,7 @@ function TradeControls({ state, me, submitting, onAction }: { state: GameState; 
       <button
         type="button"
         className={BTN}
-        disabled={submitting || g.prices[colour] === 0 || mine.shares[colour] < count}
+        disabled={submitting || unpriced || mine.shares[colour] < count}
         onClick={() => onAction({ type: 'SELL', playerId: me, colour, count })}
       >
         Sell for {formatFT(count * sharePrice(g, colour))}

@@ -1,7 +1,8 @@
 # Shark — Implementation Rules Spec
 
 > This file is the source of truth for the Shark rules engine in
-> `packages/shark`. Rule ids (`R-PLACE-03` and so on) are cited in the code
+> `packages/shark`, as of **rules version 2**. §10 lists what version 1,
+> still registered for games started under it, did differently. Rule ids (`R-PLACE-03` and so on) are cited in the code
 > and the tests. `[AMBIG-n]` marks a point the rulebook leaves open; §9 lists
 > the behaviour chosen for each. Changing any of them changes how existing
 > games replay, so it ships with a new `rulesVersion`.
@@ -34,10 +35,12 @@ added this game. Section numbers in brackets (`[§6.1 d]`) point back into it.
 
 ## 3. Setup
 
-- **R-SETUP-01** 3–6 players. Nobody has money or shares
-  (`startingCash` option, default 0 — a house rule, not in the rulebook).
-- **R-SETUP-02** All prices start at 0, all 20 markers of each colour are in
-  the supply, the bank holds all 40 shares of each colour.
+- **R-SETUP-01** 3–6 players. Nobody has money (`startingCash` option,
+  default 0 — a house rule, not in the rulebook). Every player starts with
+  **one share of each colour**, taken from the bank.
+- **R-SETUP-02** All prices start at 0 and all 20 markers of each colour are
+  in the supply. The bank holds the other shares: 40 of each colour minus
+  one per player.
 - **R-SETUP-03** The first player is the first seat; play goes on in seat
   order ("by common agreement … clockwise").
 
@@ -77,7 +80,8 @@ Each turn, in order [§6]:
 - **R-SHARE-02** At most **5 shares bought per turn in total**, across both
   trade steps and all colours. Selling is unlimited.
 - **R-SHARE-03** A purchase needs the cash to pay for it and enough shares
-  in the bank. A colour at price 0 can't be bought [AMBIG-3].
+  in the bank. A colour at price 0 can be bought and sold too — for nothing
+  (purchases still count toward the 5-share cap).
 - **R-SHARE-04** Only the player whose turn it is trades, and only in the
   trade steps.
 
@@ -151,8 +155,19 @@ C (1 share) 2 000; D (7 shares) 14 000.
 | --- | --- | --- |
 | AMBIG-1 | Faces of the colour die. | Blue, green, red, yellow and two white ("the white faces"). |
 | AMBIG-2 | "Misses his turn" when nothing can be placed. | The turn ends at once; there is no second trade step. |
-| AMBIG-3 | Buying a colour priced 0. | Not allowed — it would be free. Selling at 0 is also refused (it would be pointless). |
+| AMBIG-3 | Buying and selling a colour priced 0. | Allowed, for nothing (version 2). Version 1 refused both. |
 | AMBIG-4 | Payment for a placement that doesn't move the price but isn't isolated (a group already of 7+, or one that only knocks out others). | The 1 000 isolated-marker bonus. |
 | AMBIG-5 | Joining groups whose capped sizes add up to more than 7 lowers the colour's price. | Treated as a fall (R-PAY-03), so shareholders other than the placer pay. |
 | AMBIG-6 | A debtor whose shares can't cover the debt. | They sell everything; the bank writes off the rest. |
 | AMBIG-7 | Where the 5-share cap is counted. | Per turn of the buying player, across both trade steps. |
+
+## 10. Rules versions
+
+A game always replays under the version it started with, so both versions
+stay registered (`gameDefinition` and `gameDefinitionV1` in `src/rules.ts`,
+one code path branching on `rulesVersion`).
+
+| Version | Differences |
+| --- | --- |
+| 2 (current) | Every player starts with one share of each colour (R-SETUP-01). Colours priced 0 can be bought and sold, for nothing (R-SHARE-03). |
+| 1 | Nobody starts with shares; the bank holds all 40 of each colour. A colour priced 0 can't be bought or sold. |

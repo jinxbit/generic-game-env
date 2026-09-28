@@ -35,6 +35,11 @@ The package follows the layout of the example game
 - **Dice** come only from the framework's `Random`, in `ROLL` (two draws: the
   colour die, then the zone die). A roll with no legal placement ends the
   turn inside the same action.
+- **Rules versions.** Version 2 (current) starts every player with one
+  share of each colour and allows trading a colour priced 0. Version 1 did
+  neither and stays registered (`gameDefinitionV1`) so games started under it
+  still replay. Both run from one code path that branches on
+  `state.rulesVersion` (RULES.md §10).
 - **No hidden information.** Cash, shares and dice are public, so
   `redactGame` returns the whole state and `isActionSecret` is always false.
 

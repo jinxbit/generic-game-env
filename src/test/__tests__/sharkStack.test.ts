@@ -30,7 +30,7 @@ async function startRoom(stack: ProductionStack): Promise<void> {
     playerCount: PLAYERS.length,
     status: 'lobby',
     gameType: 'shark',
-    settings: testGameSettings({ rulesVersion: 1, hiddenInformationEnabled: true, gameOptions: { startingCash: 5000 } }),
+    settings: testGameSettings({ rulesVersion: 2, hiddenInformationEnabled: true, gameOptions: { startingCash: 5000 } }),
   })
   for (const userId of USERS) stack.addUser(userId)
   stack.db.seed('games', game as unknown as Record<string, unknown>)
@@ -74,6 +74,9 @@ describe('Shark through the Edge Functions', () => {
 
   it('rolls on the server and keeps every view exact, through undo and redo, to the end', async () => {
     await startRoom(stack)
+    const genesis = await trueState(stack)
+    expect(genesis.rulesVersion).toBe(2)
+    expect(genesis.game.players['seat-0'].shares).toEqual({ blue: 1, green: 1, red: 1, yellow: 1 })
     const clients = PLAYERS.map((p) => new Client(stack, p.id))
     for (let moves = 0; moves < 400; moves++) {
       if (moves === 7) {

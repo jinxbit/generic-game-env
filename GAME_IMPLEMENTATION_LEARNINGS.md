@@ -22,7 +22,7 @@ merged, green game package with the least rework.
    (geometry, groups, scoring, "is this move legal and what would it do")
    is trivially testable and is reused by the view for highlighting and
    previews. The rules module then only sequences the turn.
-4. **Wire it into the platform** (five small edits — see §4), then run
+4. **Wire it into the platform** (five small edits — see §5), then run
    `npm run lint`, `npm run build`, `npm run test` and the `deno check`.
 5. **Tests in three layers:** rules unit tests (one `describe` per RULES.md
    section), a randomised fuzz game with invariants and a replay check, and a
@@ -57,7 +57,32 @@ merged, green game package with the least rework.
   recorded numbers; drawing a different number of values on replay is an
   error.
 
-## 3. Pitfalls actually hit
+## 3. Changing rules after a game has shipped
+
+A rules change that alters genesis or legality makes existing games replay
+differently, so it needs a new `rulesVersion` (see
+`packages/unique-pick/README.md`, "Changing the rules"). When the change is
+small, you don't need a second copy of the package — Shark's version 2
+(starting shares, trading at price 0) shows the cheap pattern:
+
+- Branch on the version inside the one code path: `setup` reads
+  `lobby.rulesVersion`, and every other hook reads `state.rulesVersion`
+  (Shark's `tradesAtZeroPrice(rulesVersion)`). Helpers that the view or
+  `nextForcedAction` also use take the version as a parameter.
+- Export the old definition as a spread with the old number
+  (`export const gameDefinitionV1 = { ...gameDefinition, rulesVersion: 1 }`)
+  and register **both** in `src/games/registry.ts`. The registry keys by
+  id + version and gives new games the newest one.
+- Make `newGame` in `testing.ts` accept `rulesVersion`, register every
+  version, pin each old behaviour with one short test, and keep a few fuzz
+  seeds on the old version so it stays exercised.
+- Existing scenario tests often assume the old genesis (Shark's assumed
+  empty hands). Rather than rewrite their arithmetic, start them from an
+  `arrange`d state that recreates the old assumption, and add fresh tests
+  for the new genesis.
+- The Edge Function stack test should start a game on the current version.
+
+## 4. Pitfalls actually hit
 
 - **Shallow copies mutate history.** `{ ...state.game }` copies only the top
   level; writing `game.players[id] = …` then edits the *previous* state's
@@ -82,7 +107,7 @@ merged, green game package with the least rework.
   "hold only 2" vs "2 shares already cover the debt" are different
   failures; test both.
 
-## 4. Platform wiring checklist
+## 5. Platform wiring checklist
 
 | File | Change |
 | --- | --- |
@@ -95,7 +120,7 @@ merged, green game package with the least rework.
 
 No migration is needed: the database stores `GameState` as opaque JSON.
 
-## 5. Edge Runtime constraints (easy to forget)
+## 6. Edge Runtime constraints (easy to forget)
 
 - Every relative import reachable from `rules.ts` needs an explicit `.ts`
   extension. A missing one fails only at **deploy** time; `deno check` catches
@@ -107,7 +132,7 @@ No migration is needed: the database stores `GameState` as opaque JSON.
 - Re-exporting from the rules entry (`export * from './board.ts'`) is fine
   and lets the view and tests import everything from `../rules`.
 
-## 6. View tips
+## 7. View tips
 
 - The view receives `myPlayerId` (null when read-only) and should show
   controls only when `pendingPlayerIds` includes it; everything else is a
@@ -120,7 +145,7 @@ No migration is needed: the database stores `GameState` as opaque JSON.
 - A view test that plays a whole game with `simplestMove`, rendering every
   N states, catches crashes on rare states cheaply.
 
-## 7. Testing helpers to provide in `src/testing.ts`
+## 8. Testing helpers to provide in `src/testing.ts`
 
 - `newGame(params)` — registers the game and builds genesis with `seatPlayers`.
 - `play(state, action, random)` — `act` with a seed or a source.

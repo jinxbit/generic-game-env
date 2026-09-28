@@ -2,7 +2,7 @@
 
 import { createNewGame, registerGame, type PlayMode, type Uint32Source } from '@game-platform/sdk'
 import { act, seatPlayers } from '@game-platform/sdk/testing'
-import { COLOUR_DIE, COLOURS, gameDefinition, maxForcedSale, placementsForRoll, pricesOf, withEnvelope, type GameState } from './rules.ts'
+import { COLOUR_DIE, COLOURS, gameDefinition, gameDefinitionV1, maxForcedSale, placementsForRoll, pricesOf, withEnvelope, type GameState } from './rules.ts'
 import type { ColourFace, GameAction, GameData, GameOptions } from './types.ts'
 
 export { act, withoutTimestamps } from '@game-platform/sdk/testing'
@@ -33,13 +33,16 @@ export function dice(colour: ColourFace, zone: number): Uint32Source {
 
 /**
  * A fresh genesis with players `p1..pN` (Alice, Bob, Carol, ...). Defaults:
- * 3 players, live, the rulebook's options. Registers the game first.
+ * 3 players, live, the default options, the newest rules version.
+ * Registers every rules version first.
  */
-export function newGame(params: { players?: number; playMode?: PlayMode; options?: Partial<GameOptions>; hiddenInformationEnabled?: boolean } = {}): GameState {
+export function newGame(params: { players?: number; playMode?: PlayMode; options?: Partial<GameOptions>; hiddenInformationEnabled?: boolean; rulesVersion?: number } = {}): GameState {
   registerGame(gameDefinition)
+  registerGame(gameDefinitionV1)
   return createNewGame({
     gameId: 'game_1',
     gameType: gameDefinition.id,
+    rulesVersion: params.rulesVersion,
     playMode: params.playMode ?? 'live',
     hiddenInformationEnabled: params.hiddenInformationEnabled,
     options: params.options,

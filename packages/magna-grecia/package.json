@@ -1,0 +1,16 @@
+{
+  "name": "@game-platform/magna-grecia",
+  "version": "0.1.0",
+  "description": "Magna Grecia — found cities, build roads and markets across southern Italy, and win the oracles' attention.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    "./rules": "./src/rules.ts",
+    "./view": "./src/view.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "peerDependencies": {
+    "@game-platform/sdk": "*",
+    "react": "^19"
+  }
+}

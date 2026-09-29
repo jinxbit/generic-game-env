@@ -18,8 +18,9 @@ export function DeckChoice({ state, players, myPlayerId, submitting, onAction }:
             <h3 className="font-semibold">{deck.name}</h3>
             <ul className="text-xs text-neutral-400">
               {deck.cards.map(([def, n]) => (
-                <li key={def}>
+                <li key={def} title={cardDef(def).text}>
                   {n}× {cardDef(def).name}
+                  {cardDef(def).text && !cardDef(def).types.includes('Land') && <span className="text-neutral-500"> — {cardDef(def).text}</span>}
                 </li>
               ))}
             </ul>

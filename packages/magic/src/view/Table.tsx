@@ -159,7 +159,7 @@ export function Table({ state, players, myPlayerId, submitting, onAction }: Prop
     const usable = abilities.map((a, i) => ({ a, i })).filter(({ i }) => activationProblem(g, me, p, i) === null)
     if (usable.length === 0) return null
     return (
-      <div className="flex max-w-24 flex-wrap justify-center gap-1">
+      <div className="flex max-w-32 flex-wrap justify-center gap-1">
         {usable.map(({ a, i }) =>
           a.produces === 'any' ? (
             COLORS.map((color) => (
@@ -336,7 +336,9 @@ export function Table({ state, players, myPlayerId, submitting, onAction }: Prop
               return (
                 <li key={item.id} className="flex flex-wrap items-center gap-2">
                   <span className="text-neutral-500">{i === 0 ? 'Top' : `${i + 1}.`}</span>
-                  <span className="font-medium">{name}</span>
+                  <span className="font-medium" title={cardDef(item.card?.def ?? item.source!.def).text}>
+                    {name}
+                  </span>
                   {item.x > 0 && <span>X = {item.x}</span>}
                   <span className="text-neutral-400">
                     ({nameOf(players, item.controller)}

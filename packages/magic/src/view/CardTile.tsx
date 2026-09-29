@@ -41,7 +41,9 @@ export function CardTile({
   const d = cardDef(def)
   const isCreature = d.types.includes('Creature')
   const stats = permanent && game && isCreature ? creatureStats(game, permanent) : null
-  const keywords = permanent && game ? keywordsOf(game, permanent) : (d.keywords ?? [])
+  // The rules text is printed on the card; keywords it doesn't mention (from an aura, or until end of turn) are listed under it.
+  const printed = new Set(d.keywords ?? [])
+  const gained = permanent && game ? keywordsOf(game, permanent).filter((k) => !printed.has(k)) : []
   const pt = stats ? `${stats.power}/${stats.toughness}` : isCreature ? (d.statics?.some((s) => s.kind === 'ptFromLands') ? '*/*' : `${d.power}/${d.toughness}`) : null
   const ring = selected ? 'ring-2 ring-indigo-400' : targetable ? 'ring-2 ring-amber-400 animate-pulse' : ''
   const tapped = permanent?.tapped ? 'opacity-60 rotate-[4deg]' : ''
@@ -55,7 +57,8 @@ export function CardTile({
         {d.types.join(' ')}
         {d.subtypes.length > 0 && ` — ${d.subtypes.join(' ')}`}
       </span>
-      {keywords.length > 0 && <span className="text-[10px] text-amber-200">{keywords.map((k) => KEYWORD_LABELS[k]).join(', ')}</span>}
+      {d.text && <span className="min-h-0 flex-1 overflow-y-auto text-[10px] leading-snug text-neutral-200">{d.text}</span>}
+      {gained.length > 0 && <span className="text-[10px] text-amber-200">+ {gained.map((k) => KEYWORD_LABELS[k]).join(', ')}</span>}
       <span className="mt-auto flex items-end justify-between gap-1">
         {badge ? <span className="rounded bg-rose-700 px-1 text-[10px] font-semibold text-white">{badge}</span> : <span />}
         <span className="flex items-center gap-1">
@@ -65,7 +68,7 @@ export function CardTile({
       </span>
     </>
   )
-  const box = `flex h-28 w-24 flex-col gap-0.5 rounded-lg border p-1.5 text-left text-xs transition ${frameClass(def)} ${ring} ${tapped}`
+  const box = `flex ${d.types.includes('Land') ? 'h-20' : 'h-44'} w-32 flex-col gap-0.5 rounded-lg border p-1.5 text-left text-xs transition ${frameClass(def)} ${ring} ${tapped}`
   return (
     <div className="flex flex-col items-center gap-1">
       {onClick ? (

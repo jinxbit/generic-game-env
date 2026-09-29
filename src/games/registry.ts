@@ -18,8 +18,9 @@ import { gameDefinition as incorporated } from '@game-platform/incorporated/rule
 import { gameDefinition as kogge } from '@game-platform/kogge/rules'
 import { gameDefinition as riseAndFall } from '@game-platform/rise-and-fall/rules'
 import { gameDefinition as shark, gameDefinitionV1 as sharkV1 } from '@game-platform/shark/rules'
+import { gameDefinition as texasHoldem } from '@game-platform/texas-holdem/rules'
 import { gameDefinition as uniquePick } from '@game-platform/unique-pick/rules'
 
-export const REGISTERED_GAMES = [uniquePick, incorporated, kogge, shark, sharkV1, riseAndFall]
+export const REGISTERED_GAMES = [uniquePick, incorporated, kogge, shark, sharkV1, riseAndFall, texasHoldem]
 
 for (const definition of REGISTERED_GAMES) registerGame(definition)

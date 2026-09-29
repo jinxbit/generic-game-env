@@ -1,0 +1,16 @@
+{
+  "name": "@game-platform/texas-holdem",
+  "version": "0.1.0",
+  "description": "Texas Hold'em — no-limit poker played as a tournament: last player with chips wins.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    "./rules": "./src/rules.ts",
+    "./view": "./src/view.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "peerDependencies": {
+    "@game-platform/sdk": "*",
+    "react": "^19"
+  }
+}

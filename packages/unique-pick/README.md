@@ -77,6 +77,17 @@ owns `game`, and keeps these envelope fields accurate:
   each naming its own player; they're shown to everyone, so keep secrets out
   of them.
 - `describePhase(phase)` — label for listing screens and notifications.
+- `assetKinds` (optional) — kinds of reusable **asset** a game can start
+  from, such as a saved map. The platform stores them in its asset library
+  (the `game_assets` table), lets a room pick one (or have one picked at
+  random at Start), and copies the chosen payload into the room; `setup`
+  receives it as `lobby.assets[kind]` and it stays on the state as
+  `GameState.assets`. Per kind: `label`, `normalize(raw)` (validate a stored
+  payload — it comes from a client-writable row, so accept anything),
+  `playerRange(data)` (which player counts it suits), and optionally
+  `extract(state)` ("save this game's map"). The view's `GameUi.assetKinds`
+  supplies a `Preview` and optionally an `Editor` for each kind. Rise & Fall's
+  saved maps (`packages/rise-and-fall/src/savedMap.ts`) are the example.
 
 Every game action must carry `playerId: string`; the framework reserves the
 action types `CONCEDE`, `UNDO_ACTION`, `REDO_ACTION`, `SET_ADMIN_MODE` and

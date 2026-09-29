@@ -3,6 +3,7 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { AdminImportPage } from './pages/AdminImportPage'
 import { AdminRoomsPage } from './pages/AdminRoomsPage'
 import { CreateGamePage } from './pages/CreateGamePage'
+import { GameAssetsPage } from './pages/GameAssetsPage'
 import { GamePage } from './pages/GamePage'
 import { HomePage } from './pages/HomePage'
 import { LobbyPage } from './pages/LobbyPage'
@@ -36,6 +37,7 @@ function App() {
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/lobby/:roomCode" element={<LobbyPage />} />
           <Route path="/game/:roomCode" element={<GamePage />} />
+          <Route path="/assets/:gameType/:kind" element={<GameAssetsPage />} />
         </Routes>
         {environmentBadge && <EnvironmentBadge {...environmentBadge} />}
       </div>

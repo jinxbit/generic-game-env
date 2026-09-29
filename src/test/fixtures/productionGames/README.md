@@ -177,6 +177,16 @@ field bar that seat order, and its declared result is the one the original
 game recorded. Its display
 names were already anonymized in the standalone app's repository.
 
+The fifth, `three-player-rise-and-fall-saved-map` (rule-enforced), is another
+real game from the standalone app, played on a board from that app's saved-map
+pool. It was converted the same way, with the board as the room's saved map
+(`games.assets.map`, `src/lib/roomAssets.ts`): the game starts from it and
+skips tile placement, exactly as it did there. It replays to the original bar
+the tiles' `placementId`s, which a saved map drops — they only matter while
+tiles are being placed. A game's saved map travels on its state
+(`GameState.assets`), and `loadFixtures.ts` puts it back on the rebuilt room,
+so such a game is a drop-in like any other.
+
 ## Privacy
 
 These files are committed to the repository. A real export contains display

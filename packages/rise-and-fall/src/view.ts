@@ -7,6 +7,7 @@
 import type { GameUi } from '@game-platform/sdk/ui'
 import { GameOptionsEditor } from './GameOptionsEditor.tsx'
 import { GameView } from './GameView.tsx'
+import { SavedMapEditor, SavedMapPreview } from './view/SavedMapViews.tsx'
 import type { GameAction, GameData, GameOptions } from './types.ts'
 
 export { GameOptionsEditor, GameView }
@@ -16,4 +17,5 @@ export const ui: GameUi<GameData, GameOptions, GameAction> = {
   tagline: 'Lay out a hex map, then rise and fall across it with unit-kind cards, achievements and victory points.',
   View: GameView,
   OptionsEditor: GameOptionsEditor,
+  assetKinds: { map: { Preview: SavedMapPreview, Editor: SavedMapEditor } },
 }

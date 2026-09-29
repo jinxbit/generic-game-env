@@ -25,6 +25,30 @@ export interface ActionDescription {
 }
 
 /**
+ * A kind of reusable asset a game can start from — a saved map, a starting
+ * layout. The platform stores, lists and copies assets (the `game_assets`
+ * table, supabase/migrations/0003_game_assets.sql) without ever reading the
+ * payload; these hooks are the game's whole say in what one is. A room's
+ * chosen asset is copied into the room and reaches `setup` as
+ * `lobby.assets[kind]`, already through `normalize`.
+ *
+ * Pure and server-safe, like everything else here: `normalize` and
+ * `playerRange` run in the start-game Edge Function too.
+ */
+export interface AssetKind<TData = unknown, TState = GameState> {
+  /** Singular display name, e.g. "Map". */
+  label: string
+  /** One line for pickers and the asset library, e.g. what an asset of this kind replaces in setup. */
+  description?: string
+  /** The payload as the game expects it, or null if it isn't a valid one — from a stored row, so it must accept anything. */
+  normalize(raw: unknown): TData | null
+  /** Which player counts a game may start from this payload with (inclusive). Stored on the asset so pickers filter by it. */
+  playerRange(data: TData): { min: number; max: number }
+  /** A payload taken from a game in progress or finished ("save this map"), or null if this state has none worth saving. */
+  extract?(state: TState): TData | null
+}
+
+/**
  * The contract between the framework (this package) and a game package.
  * The framework owns everything every game shares — the action log,
  * undo/redo, concede, admin mode, forced-move folding, redaction plumbing —
@@ -137,6 +161,14 @@ export interface GameDefinition<TData = unknown, TOptions = unknown, TAction ext
 
   /** Short human-readable label for a phase (GameState.phase), e.g. "Picking". */
   describePhase(phase: string | null): string
+
+  /**
+   * The kinds of asset this game can start from, keyed by a kind id
+   * (lowercase letters, digits, dashes — stored on every asset and room).
+   * Omit for a game with none.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  assetKinds?: Record<string, AssetKind<any, GameState<TData, TOptions>>>
 }
 
 /** A definition of any game — what the registry holds. */

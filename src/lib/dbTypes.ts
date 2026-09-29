@@ -4,6 +4,7 @@
 // game_state.state column holds a serialized engine GameState.
 
 import type { PlayMode, GameState as EngineGameState } from '@game-platform/sdk'
+import type { RoomAssets } from './roomAssets.ts'
 
 /**
  * Per-game, creation-time configuration — a single JSONB column
@@ -94,6 +95,35 @@ export interface GameRow {
    * publicRoomsView.ts). Owner-only to change.
    */
   visibility: 'public' | 'private'
+  /**
+   * The assets the room was set up with, by kind — a copied payload, or a
+   * random choice Start resolves (./roomAssets.ts, 0003_game_assets.sql).
+   * Like `settings`, lobby-only and a change bumps `config_version`. Not in
+   * the listing queries (GAME_LIST_COLUMNS), which is why it isn't a
+   * `settings` key. Absent on a row read without it; treat as `{}`.
+   */
+  assets?: RoomAssets
+}
+
+/**
+ * A reusable asset of some kind a game defines (GameDefinition.assetKinds) —
+ * a saved map, say. `data` is the game's own payload; the platform never
+ * reads it. See 0003_game_assets.sql for who may read and publish what.
+ */
+export interface GameAssetRow {
+  id: string
+  game_type: string
+  kind: string
+  name: string
+  /** 'private': the creator's own. 'public' (admins only): everyone's, and the pool random choices draw from. */
+  visibility: 'private' | 'public'
+  /** The game's AssetKind.playerRange of `data`. */
+  min_players: number
+  max_players: number
+  data: unknown
+  created_by: string
+  created_at: string
+  updated_at: string
 }
 
 export interface PlayerRow {

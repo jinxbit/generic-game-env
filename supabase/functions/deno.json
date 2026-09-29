@@ -3,6 +3,7 @@
   "lock": false,
   "imports": {
     "@game-platform/sdk": "../../packages/sdk/src/index.ts",
+    "@game-platform/bauernschlau/rules": "../../packages/bauernschlau/src/rules.ts",
     "@game-platform/incorporated/rules": "../../packages/incorporated/src/rules.ts",
     "@game-platform/kogge/rules": "../../packages/kogge/src/rules.ts",
     "@game-platform/rise-and-fall/rules": "../../packages/rise-and-fall/src/rules.ts",

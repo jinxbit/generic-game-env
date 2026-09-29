@@ -20,7 +20,8 @@ exercise every platform feature and is the test fixture, **Incorporated**
 (`packages/incorporated`, rules spec in its `RULES.md`), **Kogge**
 (`packages/kogge`, rules spec in its `RULES.md`), **Shark**
 (`packages/shark`, rules spec in its `RULES.md`), **Texas Hold'em**
-(`packages/texas-holdem`, rules spec in its `RULES.md`) and **Rise & Fall**
+(`packages/texas-holdem`, rules spec in its `RULES.md`), **Bauernschlau**
+(`packages/bauernschlau`, rules spec in its `RULES.md`) and **Rise & Fall**
 (`packages/rise-and-fall`, the platform's original game, moved here from its
 standalone app — its engine runs behind an adapter; see its `README.md`). A game can live in
 its own repo and be installed. One deployment hosts whichever games

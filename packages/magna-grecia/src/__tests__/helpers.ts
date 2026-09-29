@@ -1,11 +1,11 @@
 // Shared setup for the rules tests: a quiet, known position to build scenarios on.
 
 import { arrange, newGame } from '../testing'
-import type { GameState } from '../rules'
-import type { GameData } from '../types'
+import { cellOf, type GameState } from '../rules'
+import type { Dir, GameData } from '../types'
 
-/** The cell at `row`, `col` (0-based). */
-export const at = (row: number, col: number) => row * 13 + col
+/** The cell a board label like "G3" names. */
+export const at = cellOf
 
 /**
  * A 4-player genesis rearranged to a known start: no oracles unless the test
@@ -29,6 +29,6 @@ export function putCity(g: GameData, owner: string, id: number, extra: number[] 
 }
 
 /** Puts a road tile straight into the game. */
-export function putRoad(g: GameData, owner: string, cell: number, ends: [0 | 1 | 2 | 3, 0 | 1 | 2 | 3]): void {
+export function putRoad(g: GameData, owner: string, cell: number, ends: [Dir, Dir]): void {
   g.roads[cell] = { owner, ends: ends[0] < ends[1] ? ends : [ends[1], ends[0]] }
 }

@@ -7,8 +7,8 @@
 
 export type PlayerId = string
 
-/** A side of a cell: 0 north, 1 east, 2 south, 3 west. */
-export type Dir = 0 | 1 | 2 | 3
+/** A side of a (pointy-top) hex: 0 east, 1 south-east, 2 south-west, 3 west, 4 north-west, 5 north-east. */
+export type Dir = 0 | 1 | 2 | 3 | 4 | 5
 
 /** Creation-time options (`games.settings.gameOptions`), normalized by normalizeGameOptions. */
 export interface GameOptions {

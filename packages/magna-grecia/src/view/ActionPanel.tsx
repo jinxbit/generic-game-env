@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { SeatInfo } from '@game-platform/sdk/ui'
 import { allowanceLeft, type GameState } from '../rules.ts'
 import type { Dir, GameAction } from '../types.ts'
-import { BTN, BTN_ACTIVE, BTN_PRIMARY, INPUT, nameOf, roadPath, shapeName } from './helpers.ts'
+import { BTN, BTN_ACTIVE, BTN_PRIMARY, HEX_POINTS, INPUT, nameOf, roadPath, shapeName } from './helpers.ts'
 
 export type Mode = 'road' | 'city' | 'market' | 'sell'
 
@@ -20,9 +20,9 @@ function RoadShapes({ cell, shapes, disabled, onPick }: { cell: string; shapes: 
       <div className="flex flex-wrap gap-2">
         {shapes.map((ends) => (
           <button key={ends.join('')} type="button" aria-label={shapeName(ends)} title={shapeName(ends)} disabled={disabled} onClick={() => onPick(ends)} className={`${BTN} p-1`}>
-            <svg viewBox="0 0 40 40" className="h-10 w-10">
-              <rect width="40" height="40" fill="#3f3a33" />
-              <path d={roadPath(ends)} fill="none" stroke="#e5e5e5" strokeWidth="7" />
+            <svg viewBox="-21 -21 42 42" className="h-10 w-10">
+              <polygon points={HEX_POINTS} fill="#3f3a33" />
+              <path d={roadPath(ends)} fill="none" stroke="#e5e5e5" strokeWidth="6" />
             </svg>
           </button>
         ))}

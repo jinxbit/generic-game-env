@@ -9,9 +9,10 @@
 
 Source: the Magna Grecia rulebook (2–4 players, 15 pages, the BGG-reformatted
 English edition), as supplied with the request that added this game. Page
-numbers in brackets (`[p. 7]`) point back into it. The rulebook describes the
-board and the action cards only by example, so the **map and the card
-values are this implementation's own design** (§2, §4) [AMBIG-1, AMBIG-2].
+numbers in brackets (`[p. 7]`) point back into it. The map is the published
+board, as supplied later (the 2023 redraw by Stephan Suhar) [AMBIG-1]. The
+rulebook describes the action cards only by example, so the **card values
+are this implementation's own design** (§4) [AMBIG-2].
 
 ## 1. Components
 
@@ -23,15 +24,19 @@ values are this implementation's own design** (§2, §4) [AMBIG-1, AMBIG-2].
 | Oracles | 9 (7 with 2–3 players) | `oracles[]`: a cell and the city it attends to |
 | Action cards | 12, in 4 border colours | `CARDS` (`src/data.ts`); `card`, `deck`, `usedCards` |
 | Scoring track | one marker per player | `players[id].points` |
-| Board | 13 × 13 squares | `BOARD` (`src/data.ts`) |
+| Board | hex grid, rows A–P | `HEXES`, `VILLAGES` (`src/data.ts`) |
 
 ## 2. The board
 
-- **R-BOARD-01** The board is a grid of 13 columns × 13 rows. A cell is
-  `row * 13 + col`. Adjacency is orthogonal (north, east, south, west).
-- **R-BOARD-02** 23 cells are **village spaces**. 10 of them lie on the edge
-  of the board and have a **green border**; the other 13 are inland. No two
-  village spaces touch, even diagonally [AMBIG-1].
+- **R-BOARD-01** The board is a grid of hexes, pointy side up, in rows A–P.
+  Hexes are named as on the board: a row letter and a column number 1–35,
+  each row using every other column (`G3`, `H34`). A hex has six neighbours:
+  east and west in its row, and two each in the rows above and below. The
+  board's outline is irregular — row A, for one, has two separate runs — and
+  a cell is an index into `HEXES` (`src/data.ts`).
+- **R-BOARD-02** 42 hexes are **village spaces**. 10 of them, on the edge of
+  the board, have a **green border** (A5, A17, A33, B26, C21, G3, H34, P2,
+  P18, P32); the other 32 are inland. No two village spaces touch.
 - **R-BOARD-03** A village is neutral. A village space stops being a village
   once a city tile covers it — it is then part of that city.
 - **R-BOARD-04** Places are what roads connect: **villages** (uncovered
@@ -105,10 +110,11 @@ values are this implementation's own design** (§2, §4) [AMBIG-1, AMBIG-2].
 
 ### Roads
 
-- **R-ROAD-01** A road tile covers one empty cell (no village, oracle, city
-  or road) and joins two of its four sides: two opposite sides (the straight
-  face) or two neighbouring sides (the curved face). Both faces are always
-  available. Neither end may point off the board [AMBIG-4].
+- **R-ROAD-01** A road tile covers one empty hex (no village, oracle, city
+  or road) and joins two of its six sides: two opposite sides (the straight
+  face) or two sides one apart (the curved face) — nine placements in all.
+  There is no sharp turn between neighbouring sides [AMBIG-12]. Both faces
+  are always available. Neither end may point off the board [AMBIG-4].
 - **R-ROAD-02** Two road tiles are joined when each has an end pointing at
   the other. A **road** is a maximal chain of joined tiles. A road
   **connects** the places its two outer ends point at; a place counts once
@@ -206,7 +212,7 @@ values are this implementation's own design** (§2, §4) [AMBIG-1, AMBIG-2].
 
 | Id | Question | Behaviour |
 | --- | --- | --- |
-| AMBIG-1 | The rulebook has no map. | An original 13 × 13 map (`BOARD`): 10 green-bordered edge villages, 13 inland villages, no two villages touching. |
+| AMBIG-1 | The rulebook has no map. | The published board as supplied (the 2023 redraw): its hexes, 10 green-bordered starting villages and 32 inland villages, read off the image into `src/data.ts`. |
 | AMBIG-2 | Card values and orders aren't listed. | Three cards per border colour: (3, 2, 5), (4, 1, 5), (2, 2, 7); orders clockwise, counter-clockwise and across from the border colour. |
 | AMBIG-3 | A pre-shuffled face-up stack would be hidden information. | Each round's card is drawn when the round starts, with the same distribution. Nothing is hidden. |
 | AMBIG-4 | May a road end point off the board? | No. |
@@ -217,3 +223,4 @@ values are this implementation's own design** (§2, §4) [AMBIG-1, AMBIG-2].
 | AMBIG-9 | Selling a market worth 0. | Not allowed — it would only waste the market. |
 | AMBIG-10 | Several cities overtake an oracle's city at once. | Most important, then the mover's, then the first founded. |
 | AMBIG-11 | Ties at the end. | Shared win. |
+| AMBIG-12 | Which turns does the curved road face make on a hex? | A gentle curve between sides one apart; no sharp turn between neighbouring sides. |

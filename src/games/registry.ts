@@ -17,12 +17,13 @@ import { registerGame } from '@game-platform/sdk'
 import { gameDefinition as bauernschlau } from '@game-platform/bauernschlau/rules'
 import { gameDefinition as incorporated } from '@game-platform/incorporated/rules'
 import { gameDefinition as kogge } from '@game-platform/kogge/rules'
+import { gameDefinition as magic } from '@game-platform/magic/rules'
 import { gameDefinition as magnaGrecia } from '@game-platform/magna-grecia/rules'
 import { gameDefinition as riseAndFall } from '@game-platform/rise-and-fall/rules'
 import { gameDefinition as shark, gameDefinitionV1 as sharkV1 } from '@game-platform/shark/rules'
 import { gameDefinition as texasHoldem } from '@game-platform/texas-holdem/rules'
 import { gameDefinition as uniquePick } from '@game-platform/unique-pick/rules'
 
-export const REGISTERED_GAMES = [uniquePick, incorporated, kogge, shark, sharkV1, riseAndFall, texasHoldem, bauernschlau, magnaGrecia]
+export const REGISTERED_GAMES = [uniquePick, incorporated, kogge, shark, sharkV1, riseAndFall, texasHoldem, bauernschlau, magnaGrecia, magic]
 
 for (const definition of REGISTERED_GAMES) registerGame(definition)

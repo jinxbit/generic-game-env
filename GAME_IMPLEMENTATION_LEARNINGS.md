@@ -1,6 +1,6 @@
 # Implementing a game — learnings
 
-Notes from adding **Incorporated**, **Shark**, **Texas Hold'em**, **Bauernschlau**, **Rise & Fall** and **Magna Grecia** to this platform, meant to
+Notes from adding **Incorporated**, **Shark**, **Texas Hold'em**, **Bauernschlau**, **Rise & Fall**, **Magna Grecia** and **Magic: The Gathering** to this platform, meant to
 make the next game faster. Read `packages/unique-pick/README.md` first for
 the contract itself; this file is about how to get from a rulebook to a
 merged, green game package with the least rework.
@@ -79,6 +79,17 @@ merged, green game package with the least rework.
   Keep the board as data in the board's own coordinates (`src/data.ts`
   names hexes `G3` as the printed board does), so tests and the log read
   against the physical board.
+- **Make cards data, and interpret them.** Magic's pool
+  (`packages/magic/src/cards.ts`) describes each card with a small vocabulary
+  (effects, keywords, static and activated abilities) that one engine
+  interprets. Adding a card is then one entry. Leave out a card the engine
+  can't fully honour rather than ship it with an ability missing.
+- **Auto-pass only on public information.** A priority system that asks every
+  player at every step is unplayable; one that skips players who "can't do
+  anything" leaks what's in their hand. Magic passes automatically only for
+  a player whose hand is empty and who has nothing they could activate
+  (RULES.md AMBIG-4), and gives priority with an empty stack only in the few
+  windows where it matters (AMBIG-2).
 - **Draw randomness in a fixed order and a fixed count per branch** (Shark:
   colour die then zone die, always both). Replay feeds back exactly the
   recorded numbers; drawing a different number of values on replay is an

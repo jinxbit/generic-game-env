@@ -18,6 +18,7 @@
     "@game-platform/bauernschlau": "*",
     "@game-platform/incorporated": "*",
     "@game-platform/kogge": "*",
+    "@game-platform/magic": "*",
     "@game-platform/magna-grecia": "*",
     "@game-platform/rise-and-fall": "*",
     "@game-platform/sdk": "*",

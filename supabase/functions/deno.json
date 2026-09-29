@@ -8,6 +8,7 @@
     "@game-platform/kogge/rules": "../../packages/kogge/src/rules.ts",
     "@game-platform/rise-and-fall/rules": "../../packages/rise-and-fall/src/rules.ts",
     "@game-platform/shark/rules": "../../packages/shark/src/rules.ts",
+    "@game-platform/texas-holdem/rules": "../../packages/texas-holdem/src/rules.ts",
     "@game-platform/unique-pick/rules": "../../packages/unique-pick/src/rules.ts"
   }
 }

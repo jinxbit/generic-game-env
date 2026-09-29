@@ -14,12 +14,17 @@
 // rebuild after passes that recorded array back, so genesis stays a pure
 // function of the row, the roster and numbers every copy of the state carries.
 //
+// So do the assets the room was set up with (a saved map — `games.assets`,
+// ./roomAssets.ts): their payloads were copied onto the row when chosen, or
+// by Start for a random choice, before genesis was first built from it.
+//
 // Which game's rules build it comes from the row too: `game_type`, at the
 // `settings.rulesVersion` pinned when the room was created. The game must be
 // registered (src/games/registry.ts) in whatever process calls this.
 
 import { createNewGame, type GameState, type Uint32Source } from '@game-platform/sdk'
 import type { GameRow } from './dbTypes.ts'
+import { roomAssetPayloads } from './roomAssets.ts'
 
 /**
  * Exactly the `players` columns genesis depends on — nothing else in a
@@ -58,5 +63,6 @@ export function buildGenesisState(game: GameRow, players: readonly GenesisPlayer
     options: game.settings.gameOptions,
     lockRevealedInformationEnabled: game.settings.lockRevealedInformationEnabled,
     setupRandom,
+    assets: roomAssetPayloads(game.assets),
   })
 }

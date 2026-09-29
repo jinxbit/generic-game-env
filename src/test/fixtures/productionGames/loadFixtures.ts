@@ -194,6 +194,11 @@ function reconstructRoom(finalState: GameState, overrides: RoomOverrides): { gam
     settings,
     config_version: 0,
     visibility: overrides.visibility ?? 'private',
+    // The assets the game started from (a saved map), as the copied payloads
+    // the room would have held — the state carries them for exactly this.
+    assets: Object.fromEntries(
+      Object.entries(finalState.assets ?? {}).map(([kind, data]) => [kind, { mode: 'chosen' as const, assetId: null, name: 'From the recorded game', data }]),
+    ),
   }
 
   return { game, players }

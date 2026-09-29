@@ -77,6 +77,22 @@ owns `game`, and keeps these envelope fields accurate:
   each naming its own player; they're shown to everyone, so keep secrets out
   of them.
 - `describePhase(phase)` — label for listing screens and notifications.
+- `reviewStops(entries)` (optional) — where each "turn" starts, for history
+  review's turn-at-a-time stepping (`packages/sdk/src/reviewStops.ts`):
+  log positions from 0 (genesis) to `entries.length` (now). Read only each
+  entry's action type, player and round, since a redacted viewer's log has
+  `HIDDEN_ACTION` placeholders. Omit for one stop per round.
+- `assetKinds` (optional) — kinds of reusable **asset** a game can start
+  from, such as a saved map. The platform stores them in its asset library
+  (the `game_assets` table), lets a room pick one (or have one picked at
+  random at Start), and copies the chosen payload into the room; `setup`
+  receives it as `lobby.assets[kind]` and it stays on the state as
+  `GameState.assets`. Per kind: `label`, `normalize(raw)` (validate a stored
+  payload — it comes from a client-writable row, so accept anything),
+  `playerRange(data)` (which player counts it suits), and optionally
+  `extract(state)` ("save this game's map"). The view's `GameUi.assetKinds`
+  supplies a `Preview` and optionally an `Editor` for each kind. Rise & Fall's
+  saved maps (`packages/rise-and-fall/src/savedMap.ts`) are the example.
 
 Every game action must carry `playerId: string`; the framework reserves the
 action types `CONCEDE`, `UNDO_ACTION`, `REDO_ACTION`, `SET_ADMIN_MODE` and
@@ -86,6 +102,15 @@ The view (`GameUi`, from `@game-platform/sdk/ui`) gets `state`, the seated
 `players`, `myPlayerId` (null when read-only), `submitting`, and `onAction` to
 submit a move — the platform routes it to the right write path and shows any
 rejection.
+
+History review is the platform's: one mode for every game, stepping a turn
+(`reviewStops`) or a move at a time, opening right after the viewer's own last
+move, with the log panel highlighting the step and jumping on a click. While a
+step is shown, `state` is where it ended and the optional `review` prop is
+the step itself — `before` (where it started), its log `entries` and its
+`granularity` — so the view can explain what happened (highlight what moved,
+show what changed) instead of just where it ended. A view that ignores
+`review` still works. Don't build a second review mode into a game.
 
 ## Rules every game must follow
 

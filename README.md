@@ -62,7 +62,8 @@ What the platform gives a game for free:
   (`replayDelta.ts`) and the export format (`gameStateExport.ts`).
 - `src/pages/` + `src/components/` — the platform UI: home/lobby/create
   screens, the in-game shell (`GamePage.tsx`: menu, undo/redo, history
-  review, hotseat hand-off, admin mode, chat, log) around the game's own view,
+  review — a turn or a move at a time, with the game explaining each step —
+  hotseat hand-off, admin mode, chat, log) around the game's own view,
   profile and admin screens.
 - `supabase/migrations/` — SQL migrations, starting from one baseline
   (`0001_baseline.sql`). Applied automatically by
@@ -794,6 +795,16 @@ Vercel projects — with only that game registered.
 the page title, the PWA manifest, the home page and notification fallbacks.
 Each game's own name comes from its definition and appears on room cards, in
 the lobby and in notifications about that game.
+
+**Saved assets.** A game can declare kinds of reusable asset to start from —
+Rise & Fall's saved maps. Each game and kind has a library page
+(`/assets/<game>/<kind>`, linked from the room's asset picker) where anyone
+can keep private assets and build new ones with the game's editor; a game's
+menu offers "Save this map" once there's one to save. Only a site admin can
+make an asset public, and the public ones are the pool "a random map" is
+drawn from when a game starts. A room copies the asset it uses, so editing or
+deleting one later never changes a game already set up
+(`supabase/migrations/0003_game_assets.sql`, `src/lib/roomAssets.ts`).
 
 **Rules versions.** Every game records the `rulesVersion` it started with and
 always replays under it, so a rules change that would alter existing games

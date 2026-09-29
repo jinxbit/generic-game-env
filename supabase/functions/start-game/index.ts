@@ -19,13 +19,21 @@
 // rebuild — here or in any client — replays those numbers instead of needing
 // the seed.
 //
+// A room set to start from a random asset of some kind (games.assets — a
+// random saved map, say) gets it picked here, from the public assets that
+// fit the seated count, drawn from the same secret seed under its own key —
+// so the pick is fair, and nobody sees it before the game begins. It's
+// written to the room's row before genesis is built from that row, so every
+// later rebuild finds the same payload (src/lib/roomAssets.ts).
+//
 // Request body: `{ gameId: string }`. Idempotent past the point a
 // `game_state` row exists: a retry after a prior call inserted genesis but
 // failed before flipping `games.status` just (re)flips status.
-import { findGameDefinition, seededSource } from '@game-platform/sdk'
+import { findGameDefinition, getGameDefinition, seededSource } from '@game-platform/sdk'
 import { canStartGame } from '../../../src/lib/roomReadiness.ts'
 import { compressGameStateForStorage } from '../../../src/lib/gameStateCompression.ts'
 import type { GameRow, PlayerRow } from '../../../src/lib/dbTypes.ts'
+import { resolveRandomAssets, unresolvedRandomKinds, type AssetCandidate } from '../../../src/lib/roomAssets.ts'
 import { buildGenesisState, corsHeaders, getCallerUserId, jsonResponse, loadRandomSeed, serviceRoleClient } from '../_shared/gameEnforcement.ts'
 
 interface StartGameRequest {
@@ -104,7 +112,31 @@ async function handleStartGame(req: Request): Promise<Response> {
     }
 
     const randomSeed = await loadRandomSeed(supabase, gameId)
-    const genesis = buildGenesisState(gameRow, players, seededSource(randomSeed, 'setup'))
+    let startingRow = gameRow
+    const randomKinds = unresolvedRandomKinds(gameRow.assets)
+    if (randomKinds.length > 0) {
+      const candidates: Record<string, AssetCandidate[]> = {}
+      for (const kind of randomKinds) {
+        const { data, error } = await supabase
+          .from('game_assets')
+          .select('id, name, data')
+          .eq('game_type', gameRow.game_type)
+          .eq('kind', kind)
+          .eq('visibility', 'public')
+          .lte('min_players', players.length)
+          .gte('max_players', players.length)
+        if (error) throw error
+        candidates[kind] = (data ?? []) as AssetCandidate[]
+      }
+      const definition = getGameDefinition(gameRow.game_type, gameRow.settings.rulesVersion)
+      const assets = resolveRandomAssets(definition, gameRow.assets, candidates, players.length, seededSource(randomSeed, 'assets'))
+      if (assets !== gameRow.assets) {
+        const { error: assetsError } = await supabase.from('games').update({ assets }).eq('id', gameId)
+        if (assetsError) throw assetsError
+        startingRow = { ...gameRow, assets }
+      }
+    }
+    const genesis = buildGenesisState(startingRow, players, seededSource(randomSeed, 'setup'))
     const compressed = await compressGameStateForStorage(genesis)
     const { error: insertError } = await supabase
       .from('game_state')

@@ -15,6 +15,7 @@
     "seed:preview": "vitest run --config vitest.seed.config.ts"
   },
   "dependencies": {
+    "@game-platform/bauernschlau": "*",
     "@game-platform/incorporated": "*",
     "@game-platform/kogge": "*",
     "@game-platform/rise-and-fall": "*",

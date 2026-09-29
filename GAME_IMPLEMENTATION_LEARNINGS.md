@@ -1,6 +1,6 @@
 # Implementing a game — learnings
 
-Notes from adding **Incorporated**, **Shark** and **Rise & Fall** to this platform, meant to
+Notes from adding **Incorporated**, **Shark**, **Bauernschlau** and **Rise & Fall** to this platform, meant to
 make the next game faster. Read `packages/unique-pick/README.md` first for
 the contract itself; this file is about how to get from a rulebook to a
 merged, green game package with the least rework.
@@ -52,6 +52,12 @@ merged, green game package with the least rework.
   `autoSales`) so `describeAction` and the view can narrate it without
   re-deriving. Reset per-action fields at the start of each action, or a
   folded forced follow-up will narrate them twice.
+- **Split a secret draw from the choice it informs.** When a player must see
+  what they drew before deciding (Bauernschlau: look at the sheep, then pick
+  its field), make the draw its own action and the choice a second one. The
+  drawn thing sits in `GameData` for `redactGame` to mask, the actions and
+  narration never name it, and `isActionSecret` can stay `false`: the draw's
+  numbers are recorded on its entry, which a redacted viewer never receives.
 - **Draw randomness in a fixed order and a fixed count per branch** (Shark:
   colour die then zone die, always both). Replay feeds back exactly the
   recorded numbers; drawing a different number of values on replay is an
@@ -138,6 +144,10 @@ would have touched every module. What worked instead:
 - **Money formatting.** Don't use `toLocaleString` in rules narration: the
   Edge Runtime and browsers can format differently, and the narration is
   stored. Format by hand (`formatFT`).
+- **`onPlayerEliminated` isn't called for the last concession.** When a
+  concession leaves one player, the framework ends the game itself and never
+  calls the hook, so end-of-game fields the game computes (final scores) stay
+  unset. The view must cope with a completed game that has none.
 - **Error messages with pluralisation**: check each branch reads right —
   "hold only 2" vs "2 shares already cover the debt" are different
   failures; test both.

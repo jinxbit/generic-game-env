@@ -62,7 +62,8 @@ What the platform gives a game for free:
   (`replayDelta.ts`) and the export format (`gameStateExport.ts`).
 - `src/pages/` + `src/components/` — the platform UI: home/lobby/create
   screens, the in-game shell (`GamePage.tsx`: menu, undo/redo, history
-  review, hotseat hand-off, admin mode, chat, log) around the game's own view,
+  review — a turn or a move at a time, with the game explaining each step —
+  hotseat hand-off, admin mode, chat, log) around the game's own view,
   profile and admin screens.
 - `supabase/migrations/` — SQL migrations, starting from one baseline
   (`0001_baseline.sql`). Applied automatically by

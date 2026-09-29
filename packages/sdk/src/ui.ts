@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react'
-import type { GameActionBase } from './actions.ts'
+import type { GameActionBase, LoggedAction } from './actions.ts'
 import type { GameState } from './types.ts'
 
 /**
@@ -29,6 +29,27 @@ export interface GameViewProps<TData = unknown, TOptions = unknown, TAction exte
   submitting: boolean
   /** Submit one game action. The platform routes it to the right write path and shows any rejection. */
   onAction: (action: TAction) => void
+  /**
+   * Set while the viewer is reviewing history: `state` is then the state at
+   * the end of the reviewed step, and this is what the step did — so the
+   * view can explain it (highlight what moved, show what changed) rather
+   * than just show where it ended. The platform owns the stepping itself
+   * (./reviewStops.ts); a view that ignores this still works.
+   */
+  review?: ReviewStep<TData, TOptions>
+}
+
+/** One step of history review — see GameViewProps.review. */
+export interface ReviewStep<TData = unknown, TOptions = unknown> {
+  /** The state at the start of the step. */
+  before: GameState<TData, TOptions>
+  /**
+   * The log entries the step covers (the tail of `state.actionHistory`), in
+   * the viewer's form: a secret one is a HIDDEN_ACTION placeholder.
+   */
+  entries: LoggedAction[]
+  /** 'turn': the step is one of the game's turns (GameDefinition.reviewStops). 'move': one log entry. */
+  granularity: 'turn' | 'move'
 }
 
 /** The game's creation-time options form (create-game screen, lobby config editor). */

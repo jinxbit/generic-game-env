@@ -7,6 +7,7 @@ import { nextSeatIndex } from './seatIndex'
 import { remapGameStatePlayerIds } from './duplicateGameState'
 import { decodeGameStateExport } from './gameStateExport'
 import { cryptoRandomSource } from './randomSource'
+import { resolveRandomAssets, unresolvedRandomKinds, type AssetCandidate, type RoomAssets } from './roomAssets'
 import type {
   GameRow,
   GameSettings,
@@ -15,6 +16,7 @@ import type {
   PlayerRow,
   ProfilePreferences,
   PushSubscriptionRow,
+  GameAssetRow,
 } from './dbTypes'
 import type { MyGameEntry } from './myGamesView'
 import type { PublicRoomEntry } from './publicRoomsView'
@@ -180,6 +182,8 @@ export async function createGame(params: {
   lockRevealedInformationEnabled?: boolean
   /** Whether the room is listed on the Public Rooms screen. Defaults to 'private' when omitted; CreateGamePage.tsx's checkbox defaults to checked ('public'). */
   visibility?: GameRow['visibility']
+  /** The assets the room starts from (GameRow.assets) — payloads already copied in, or random choices Start resolves. None when omitted. */
+  assets?: RoomAssets
 }): Promise<{ game: GameRow; player: PlayerRow }> {
   const roomCode = generateRoomCode()
   const name = params.name.trim()
@@ -209,6 +213,7 @@ export async function createGame(params: {
       max_players: params.maxPlayers ?? Math.min(definition.maxPlayers, MAX_PLAYERS),
       settings,
       visibility: params.visibility ?? 'private',
+      ...(params.assets && Object.keys(params.assets).length > 0 ? { assets: params.assets } : {}),
     })
     .select()
     .single()
@@ -596,7 +601,7 @@ export async function addLocalPlayer(params: { game: GameRow; hostUserId: string
  * known up front and the source GameState/GameSettings can be rewritten
  * onto it (see duplicateGameState.ts) before anything is written.
  *
- * The copy keeps the source's settings verbatim — including
+ * The copy keeps the source's settings and assets verbatim — including
  * `ruleEnforcementEnabled` — so undo/redo in the copy rebuild the same
  * genesis the source's history was recorded against.
  */
@@ -628,6 +633,7 @@ export async function duplicateGameAsHotseat(params: {
       max_players: params.sourcePlayers.length,
       settings,
       visibility: 'private',
+      assets: params.sourceGame.assets ?? {},
     })
     .select()
     .single()
@@ -667,7 +673,7 @@ export async function duplicateGameAsHotseat(params: {
  * The new room's settings are seeded with defaults — enforcement and hidden
  * information both off, which hotseat requires anyway and which this plain
  * client insert needs to be allowed by RLS at all — except the game type,
- * rules version and options, recovered from the export's own `GameState`,
+ * rules version, options and assets, recovered from the export's own `GameState`,
  * which buildGenesisState (gameGenesis.ts) needs to rebuild the exact genesis the
  * export's actionHistory was recorded against.
  */
@@ -700,6 +706,9 @@ export async function importGameExportAsHotseat(params: { exportText: string; ho
       max_players: sourceState.players.length,
       settings,
       visibility: 'private',
+      assets: Object.fromEntries(
+        Object.entries(sourceState.assets ?? {}).map(([kind, data]) => [kind, { mode: 'chosen', assetId: null, name: 'From the imported game', data }]),
+      ),
     })
     .select()
     .single()
@@ -752,17 +761,133 @@ export async function setGameVisibility(gameId: string, visibility: GameRow['vis
  * while the room is still in the lobby (the `games_bump_config_version`
  * trigger rejects it otherwise). Bumps `config_version` server-side, which
  * is what makes every non-Owner seated player Not Ready again — player count
- * is configuration too; see roomReadiness.ts.
+ * is configuration too; see roomReadiness.ts. `assets` (GameRow.assets), when
+ * given, changes in the same write.
  */
 export async function updateGameSettings(
   gameId: string,
-  params: { settings: GameSettings; minPlayers: number; maxPlayers: number },
+  params: { settings: GameSettings; minPlayers: number; maxPlayers: number; assets?: RoomAssets },
 ): Promise<void> {
   const { error } = await supabase
     .from('games')
-    .update({ settings: params.settings, min_players: params.minPlayers, max_players: params.maxPlayers })
+    .update({
+      settings: params.settings,
+      min_players: params.minPlayers,
+      max_players: params.maxPlayers,
+      ...(params.assets !== undefined ? { assets: params.assets } : {}),
+    })
     .eq('id', gameId)
   if (error) throw error
+}
+
+/**
+ * The room owner changes which assets the room starts from (GameRow.assets).
+ * Same rules as updateGameSettings: owner-only, lobby-only, and it bumps
+ * `config_version` so everyone re-confirms Ready.
+ */
+export async function updateRoomAssets(gameId: string, assets: RoomAssets): Promise<void> {
+  const { error } = await supabase.from('games').update({ assets }).eq('id', gameId)
+  if (error) throw error
+}
+
+// ---------------------------------------------------------------------------
+// The asset library (game_assets — supabase/migrations/0003_game_assets.sql)
+
+/**
+ * Assets of one kind the caller may read — the public ones and their own
+ * (every one, for an admin) — newest first, optionally only those that fit
+ * `playerCount`.
+ */
+export async function listGameAssets(params: { gameType: string; kind: string; playerCount?: number }): Promise<GameAssetRow[]> {
+  let query = supabase.from('game_assets').select().eq('game_type', params.gameType).eq('kind', params.kind)
+  if (params.playerCount !== undefined) query = query.lte('min_players', params.playerCount).gte('max_players', params.playerCount)
+  const { data, error } = await query.order('created_at', { ascending: false })
+  if (error) throw error
+  return (data ?? []) as GameAssetRow[]
+}
+
+/**
+ * Saves a new asset. `data` must be one the game accepts: it's normalized
+ * here (AssetKind.normalize), and its player range comes from the game's own
+ * AssetKind.playerRange, so a stored asset always carries a range that
+ * matches its payload. 'public' needs an admin (RLS).
+ */
+export async function createGameAsset(params: {
+  gameType: string
+  kind: string
+  name: string
+  data: unknown
+  userId: string
+  visibility?: GameAssetRow['visibility']
+}): Promise<GameAssetRow> {
+  const { data, range } = checkedAssetPayload(params.gameType, params.kind, params.data)
+  const name = params.name.trim()
+  if (name.length === 0 || name.length > 80) throw new Error('Name must be between 1 and 80 characters')
+  const { data: row, error } = await supabase
+    .from('game_assets')
+    .insert({
+      game_type: params.gameType,
+      kind: params.kind,
+      name,
+      data,
+      visibility: params.visibility ?? 'private',
+      min_players: range.min,
+      max_players: range.max,
+      created_by: params.userId,
+    })
+    .select()
+    .single()
+  if (error) throw error
+  return row as GameAssetRow
+}
+
+/** Renames, re-publishes or replaces the payload of an asset you own (any, as an admin). */
+export async function updateGameAsset(asset: GameAssetRow, changes: { name?: string; visibility?: GameAssetRow['visibility']; data?: unknown }): Promise<GameAssetRow> {
+  const patch: Record<string, unknown> = {}
+  if (changes.name !== undefined) {
+    const name = changes.name.trim()
+    if (name.length === 0 || name.length > 80) throw new Error('Name must be between 1 and 80 characters')
+    patch.name = name
+  }
+  if (changes.visibility !== undefined) patch.visibility = changes.visibility
+  if (changes.data !== undefined) {
+    const { data, range } = checkedAssetPayload(asset.game_type, asset.kind, changes.data)
+    Object.assign(patch, { data, min_players: range.min, max_players: range.max })
+  }
+  const { data: row, error } = await supabase.from('game_assets').update(patch).eq('id', asset.id).select().single()
+  if (error) throw error
+  return row as GameAssetRow
+}
+
+export async function deleteGameAsset(assetId: string): Promise<void> {
+  const { error } = await supabase.from('game_assets').delete().eq('id', assetId)
+  if (error) throw error
+}
+
+function checkedAssetPayload(gameType: string, kind: string, raw: unknown): { data: unknown; range: { min: number; max: number } } {
+  const assetKind = getGameDefinition(gameType).assetKinds?.[kind]
+  if (!assetKind) throw new Error(`This game has no "${kind}" assets.`)
+  const data = assetKind.normalize(raw)
+  if (data === null || data === undefined) throw new Error(`That isn't a valid ${assetKind.label.toLowerCase()}.`)
+  return { data, range: assetKind.playerRange(data) }
+}
+
+/** The public assets a random choice of each kind may land on, for `playerCount` players — what Start resolves from (./roomAssets.ts). */
+export async function listRandomAssetCandidates(gameType: string, kinds: string[], playerCount: number): Promise<Record<string, AssetCandidate[]>> {
+  const byKind: Record<string, AssetCandidate[]> = {}
+  for (const kind of kinds) {
+    const { data, error } = await supabase
+      .from('game_assets')
+      .select('id, name, data')
+      .eq('game_type', gameType)
+      .eq('kind', kind)
+      .eq('visibility', 'public')
+      .lte('min_players', playerCount)
+      .gte('max_players', playerCount)
+    if (error) throw error
+    byKind[kind] = (data ?? []) as AssetCandidate[]
+  }
+  return byKind
 }
 
 /**
@@ -874,6 +999,22 @@ export async function insertGameState(gameId: string, state: EngineGameState): P
 }
 
 /**
+ * Picks the room's random asset choices from the public assets that fit
+ * `playerCount`, writes them onto the row (so every rebuild finds them) and
+ * returns the row as genesis should see it — the client-trusted half of what
+ * start-game does server-side (./roomAssets.ts).
+ */
+async function resolveRoomAssetsForStart(game: GameRow, playerCount: number): Promise<GameRow> {
+  const kinds = unresolvedRandomKinds(game.assets)
+  if (kinds.length === 0) return game
+  const candidates = await listRandomAssetCandidates(game.game_type, kinds, playerCount)
+  const assets = resolveRandomAssets(getGameDefinition(game.game_type, game.settings.rulesVersion), game.assets, candidates, playerCount, cryptoRandomSource)
+  if (assets === game.assets) return game
+  await updateRoomAssets(game.id, assets)
+  return { ...game, assets }
+}
+
+/**
  * LobbyPage's Start Game button.
  *
  * A `ruleEnforcementEnabled` game routes through the start-game Edge Function
@@ -899,6 +1040,11 @@ export async function insertGameState(gameId: string, state: EngineGameState): P
  * count to the `players` table — but that's a DB round-trip, not however
  * long a browser tab happened to sit open.
  *
+ * A random asset choice (GameRow.assets — a random saved map) is picked
+ * here, from the public assets that fit the seated count, and written to the
+ * row before genesis is built from it — resolveRoomAssetsForStart below; the
+ * start-game Edge Function does the same for an enforced game.
+ *
  * A no-op past the roster check once a `game_state` row already exists (a
  * retry after a prior call inserted genesis but failed before flipping
  * `games.status`) — same idempotency `insertGameState` itself defends, one
@@ -918,7 +1064,8 @@ export async function startGameFromLobby(game: GameRow): Promise<void> {
       throw new Error('This room changed since you loaded it — refresh and try again.')
     }
 
-    await insertGameState(game.id, buildGenesisState(game, players, cryptoRandomSource))
+    const started = await resolveRoomAssetsForStart(game, players.length)
+    await insertGameState(game.id, buildGenesisState(started, players, cryptoRandomSource))
   }
   // The `games` row's own status stays the coarse lobby/active/canceled
   // (see dbTypes.ts) — whether the game has finished lives only in the

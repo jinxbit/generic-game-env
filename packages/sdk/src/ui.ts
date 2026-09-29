@@ -36,6 +36,34 @@ export interface GameOptionsEditorProps<TOptions = unknown> {
   value: TOptions
   onChange: (value: TOptions) => void
   disabled?: boolean
+  /**
+   * Which of the game's asset kinds (GameDefinition.assetKinds) the room is
+   * set to start from — a specific asset ('chosen') or one picked at Start
+   * ('random'). The platform renders the asset pickers itself; this is so the
+   * editor can grey out whatever options an asset replaces.
+   */
+  assets?: Record<string, 'chosen' | 'random'>
+}
+
+/** Renders one asset's payload — a thumbnail in pickers and the asset library. */
+export interface AssetPreviewProps<TData = unknown> {
+  data: TData
+}
+
+/** Creates or edits one asset's payload (a map builder, say). */
+export interface AssetEditorProps<TData = unknown> {
+  /** The payload being edited, or null for a new one. */
+  value: TData | null
+  /** Called with the payload as it changes; the platform saves the latest valid one on request. */
+  onChange: (value: TData) => void
+  disabled?: boolean
+}
+
+/** The React half of an asset kind (GameDefinition.assetKinds). */
+export interface AssetKindUi<TData = unknown> {
+  Preview: ComponentType<AssetPreviewProps<TData>>
+  /** Omit when assets of this kind only come from games (AssetKind.extract). */
+  Editor?: ComponentType<AssetEditorProps<TData>>
 }
 
 /**
@@ -49,6 +77,9 @@ export interface GameUi<TData = unknown, TOptions = unknown, TAction extends Gam
   tagline: string
   View: ComponentType<GameViewProps<TData, TOptions, TAction>>
   OptionsEditor: ComponentType<GameOptionsEditorProps<TOptions>>
+  /** Views for the game's asset kinds, keyed like GameDefinition.assetKinds. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  assetKinds?: Record<string, AssetKindUi<any>>
 }
 
 /** A UI for any game — what the app's UI registry holds. */

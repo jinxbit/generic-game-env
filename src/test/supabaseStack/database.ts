@@ -6,7 +6,7 @@
 // `game_state_sync_meta` projection trigger, and `game_state.version`'s
 // compare-and-swap contract.
 //
-// Everything here is transcribed from supabase/migrations/0001_baseline.sql
+// Everything here is transcribed from supabase/migrations/ (0001_baseline.sql and the migrations after it)
 // rather than invented, and each rule below cites the section of that
 // migration (and the policy/trigger/function by name) it comes from. That's
 // the whole point: these tests exist to catch the class of bug that only
@@ -23,7 +23,7 @@ import type { StoredGameState } from '../../lib/gameStateCompression.ts'
 export type Row = Record<string, unknown>
 
 /** Only the tables the game write path touches, plus chat (0001_baseline.sql section 10) — anything else is a loud 404 from ./httpServer.ts. */
-export type TableName = 'profiles' | 'games' | 'players' | 'game_state' | 'game_state_meta' | 'app_config' | 'chat_messages' | 'chat_read_status' | 'game_secrets'
+export type TableName = 'profiles' | 'games' | 'players' | 'game_state' | 'game_state_meta' | 'app_config' | 'chat_messages' | 'chat_read_status' | 'game_secrets' | 'game_assets'
 
 /**
  * Who a request runs as. `service_role` bypasses RLS entirely (Supabase's
@@ -88,10 +88,11 @@ const PRIMARY_KEY: Record<TableName, string> = {
   chat_messages: 'id',
   chat_read_status: 'id',
   game_secrets: 'game_id',
+  game_assets: 'id',
 }
 
-/** Tables that carry a `set_updated_at` BEFORE UPDATE trigger (0001_baseline.sql section 1). */
-const SETS_UPDATED_AT = new Set<TableName>(['profiles', 'games', 'game_state'])
+/** Tables that carry a `set_updated_at` BEFORE UPDATE trigger (0001_baseline.sql section 1, and game_assets in 0003_game_assets.sql). */
+const SETS_UPDATED_AT = new Set<TableName>(['profiles', 'games', 'game_state', 'game_assets'])
 
 export type SqlCommand = 'select' | 'insert' | 'update' | 'delete'
 
@@ -121,6 +122,7 @@ export class Database {
     chat_messages: [],
     chat_read_status: [],
     game_secrets: [],
+    game_assets: [],
   }
 
   /** `generated always as identity` on chat_messages.id (0001_baseline.sql section 10). */
@@ -261,8 +263,27 @@ export class Database {
       // only the service role (the early return above) ever sees a row.
       case 'game_secrets':
         return false
+
+      // 0003_game_assets.sql: read public ones and your own (any, as an
+      // admin); create/update your own, and only an admin may make one
+      // public; delete your own, or any as an admin. The update policy's
+      // USING (own or admin) is checked against the old row and its WITH
+      // CHECK ((own and private) or admin) against the new one — both
+      // expressed here by the row they're given, since update() below asks
+      // about the old row and then the new.
+      case 'game_assets': {
+        const admin = this.isAdmin(uid)
+        const own = row.created_by === uid
+        if (command === 'select') return row.visibility === 'public' || own || admin
+        if (command === 'insert') return own && (row.visibility === 'private' || admin)
+        if (command === 'delete') return own || admin
+        return admin || (own && row.visibility === 'private') || (own && this.updatingOldRow)
+      }
     }
   }
+
+  /** Set while update() checks a row's USING expression (the old row), so game_assets' update policy can tell USING from WITH CHECK. */
+  private updatingOldRow = false
 
   /** Shared by `chat_messages`' "read game chat" policy and `chat_read_status`' insert policy — same audience, same rule. */
   private canReadChatChannel(userId: string, gameId: string | null): boolean {
@@ -307,9 +328,9 @@ export class Database {
    * The BEFORE UPDATE triggers on `games` (section 3), in the order Postgres
    * fires them (alphabetical by trigger name):
    *
-   * - `games_bump_config_version`: a change to settings or the player-count
-   *   bounds is only allowed while the room is in the lobby, and bumps
-   *   config_version.
+   * - `games_bump_config_version`: a change to settings, assets
+   *   (0003_game_assets.sql) or the player-count bounds is only allowed
+   *   while the room is in the lobby, and bumps config_version.
    * - `games_enforce_name_immutable`: neither the name nor `game_type`
    *   ever changes — `enforce_game_name_immutable()` checks `game_type`
    *   first, so a write changing both raises the game-type message.
@@ -324,6 +345,7 @@ export class Database {
   private beforeUpdateGames(actor: Actor, old: GameRow, next: Row): void {
     if (
       jsonbDistinct(old.settings, next.settings) ||
+      jsonbDistinct(old.assets ?? {}, next.assets ?? {}) ||
       old.min_players !== next.min_players ||
       old.max_players !== next.max_players
     ) {
@@ -470,6 +492,23 @@ export class Database {
           throw new DatabaseError(409, '23505', 'duplicate key value violates unique constraint "players_game_id_seat_index_key"')
         }
       }
+      // game_assets' CHECK constraints (0003_game_assets.sql).
+      if (table === 'game_assets') {
+        const slug = /^[a-z0-9][a-z0-9-]{0,63}$/
+        const name = row.name as string | undefined
+        const min = row.min_players as number | undefined
+        const max = row.max_players as number | undefined
+        const violated =
+          (typeof row.game_type !== 'string' || !slug.test(row.game_type) ? 'game_assets_game_type_format' : null) ??
+          (typeof row.kind !== 'string' || !slug.test(row.kind) ? 'game_assets_kind_format' : null) ??
+          (typeof name !== 'string' || name.length < 1 || name.length > 80 ? 'game_assets_name_length' : null) ??
+          (row.visibility !== 'private' && row.visibility !== 'public' ? 'game_assets_visibility_check' : null) ??
+          (typeof min !== 'number' || typeof max !== 'number' || min < 1 || max < min ? 'game_assets_player_range' : null) ??
+          (row.data === undefined || row.data === null ? 'data' : null) ??
+          (JSON.stringify(row.data).length > 262144 ? 'game_assets_data_size' : null)
+        if (violated === 'data') throw new DatabaseError(400, '23502', 'null value in column "data" of relation "game_assets" violates not-null constraint')
+        if (violated) throw new DatabaseError(400, '23514', `new row for relation "game_assets" violates check constraint "${violated}"`)
+      }
       // A row RLS rejects is `new row violates row-level security policy`, a
       // 42501 — not a silent no-op the way a filtered-out UPDATE is.
       if (!this.visible(actor, table, 'insert', row)) {
@@ -494,7 +533,10 @@ export class Database {
     const updated: Row[] = []
     for (const row of this.rows[table]) {
       if (!match(row)) continue
-      if (!this.visible(actor, table, 'update', row)) continue
+      this.updatingOldRow = true
+      const usable = this.visible(actor, table, 'update', row)
+      this.updatingOldRow = false
+      if (!usable) continue
       const next: Row = { ...structuredClone(row), ...structuredClone(patch) }
       if (table === 'games') this.beforeUpdateGames(actor, row as unknown as GameRow, next)
       if (table === 'players') this.beforeUpdatePlayers(row as unknown as PlayerRow, next)
@@ -537,9 +579,11 @@ export class Database {
     }
   }
 
-  /** `on delete cascade` from `auth.users` to `profiles` (0001_baseline.sql section 2). */
+  /** `on delete cascade` from `auth.users` to `profiles` (0001_baseline.sql section 2) and `game_assets` (0003_game_assets.sql). */
   deleteProfileFor(userId: string): void {
     this.rows.profiles = this.rows.profiles.filter((row) => row.user_id !== userId)
+    // game_assets.created_by references auth.users on delete cascade (0003_game_assets.sql).
+    this.rows.game_assets = this.rows.game_assets.filter((row) => row.created_by !== userId)
   }
 
   /** Column defaults, from each table's `create table` in 0001_baseline.sql. */
@@ -563,6 +607,7 @@ export class Database {
           min_players: 2,
           max_players: 4,
           settings: {},
+          assets: {},
         }
       case 'players':
         return { id: globalThis.crypto.randomUUID(), avatar_url: null, is_active: true, ready_for_version: 0, joined_at: now }
@@ -574,6 +619,10 @@ export class Database {
         return { id: globalThis.crypto.randomUUID(), last_read_id: 0, updated_at: now }
       case 'game_secrets':
         return { created_at: now }
+      // `created_by uuid not null default auth.uid()` isn't modeled — every
+      // caller in this repo passes it, and RLS requires it to be the caller.
+      case 'game_assets':
+        return { id: globalThis.crypto.randomUUID(), visibility: 'private', created_at: now, updated_at: now }
       default:
         return {}
     }

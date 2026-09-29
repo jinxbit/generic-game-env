@@ -344,12 +344,13 @@ export async function provisionLiveRoom(config: LiveProjectConfig, fixture: Prod
     const roomSettings = { ...remapped.settings, ...hiddenInformationOverride }
 
     // LobbyPage's persist-then-start step: whatever `buildGenesisState` needs
-    // from the row (the game's options, the hidden-information flag) is
+    // from the row (the game's options, the hidden-information flag, the
+    // assets it started from) is
     // pinned now, in this room's ids, so genesis is a deterministic function
     // of the row alone.
     const { data: pinnedGame, error: settingsError } = await ownerClient
       .from('games')
-      .update({ settings: roomSettings })
+      .update({ settings: roomSettings, assets: remapped.assets })
       .eq('id', gameId)
       .select('config_version')
       .single()
@@ -372,7 +373,7 @@ export async function provisionLiveRoom(config: LiveProjectConfig, fixture: Prod
       if (readyError) throw new Error(`Could not mark ${player.display_name} ready: ${readyError.message}`)
     }
 
-    const game: GameRow = { ...(gameRow as GameRow), settings: roomSettings }
+    const game: GameRow = { ...(gameRow as GameRow), settings: roomSettings, assets: remapped.assets }
 
     // This room is always ruleEnforcementEnabled (see the games.insert
     // above), so genesis is not a direct client write (0001_baseline.sql

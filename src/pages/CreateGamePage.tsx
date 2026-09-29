@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { PlayModeSelector } from '../components/PlayModeSelector'
+import { RoomAssetPicker } from '../components/RoomAssetPicker'
 import { listGames, type PlayMode } from '@game-platform/sdk'
 import { gameUiFor } from '../games/ui'
 import { useAuth } from '../hooks/useAuth'
@@ -10,6 +11,7 @@ import { createGame, MAX_PLAYERS } from '../lib/gameApi'
 import { hiddenInformationAvailable as computeHiddenInformationAvailable, lockRevealedInformationAvailable as computeLockRevealedInformationAvailable } from '../lib/hiddenInformationEligibility'
 import { randomRoomName } from '../lib/randomRoomName'
 import { toAppError, type AppError } from '../lib/errors'
+import { roomAssetModes, type RoomAssets } from '../lib/roomAssets'
 // Rule enforcement and hidden information are both on for every game
 // created through this page — there is no creator-facing opt-out. See
 // CLAUDE.md's "two write paths" section: the client-trusted path and
@@ -38,6 +40,7 @@ export function CreateGamePage() {
   const [gameOptions, setGameOptions] = useState<unknown>(gameDefinition.defaultOptions)
   const [minPlayersInput, setMinPlayersInput] = useState(String(gameDefinition.minPlayers))
   const [maxPlayersInput, setMaxPlayersInput] = useState(String(maxSeats))
+  const [assets, setAssets] = useState<RoomAssets>({})
 
   /** Switching games resets everything that belongs to the previous one. */
   function chooseGame(id: string) {
@@ -47,6 +50,7 @@ export function CreateGamePage() {
     setGameOptions(next.defaultOptions)
     setMinPlayersInput(String(next.minPlayers))
     setMaxPlayersInput(String(Math.min(next.maxPlayers, MAX_PLAYERS)))
+    setAssets({})
   }
   const [visibility, setVisibility] = useState<'public' | 'private'>('public')
   const [error, setError] = useState<AppError | null>(null)
@@ -107,6 +111,7 @@ export function CreateGamePage() {
         minPlayers,
         maxPlayers,
         visibility,
+        assets,
       })
       navigate(`/lobby/${game.room_code}`)
     } catch (err) {
@@ -182,7 +187,15 @@ export function CreateGamePage() {
         {gameUi && (
           <>
             <h3 className="text-sm font-medium text-neutral-400">{gameDefinition.title} options</h3>
-            <gameUi.OptionsEditor value={gameOptions} onChange={setGameOptions} />
+            <gameUi.OptionsEditor value={gameOptions} onChange={setGameOptions} assets={roomAssetModes(assets)} />
+            <RoomAssetPicker
+              definition={gameDefinition}
+              ui={gameUi}
+              value={assets}
+              onChange={setAssets}
+              minPlayers={playerCountValid ? minPlayers : gameDefinition.minPlayers}
+              maxPlayers={playerCountValid ? maxPlayers : maxSeats}
+            />
           </>
         )}
         <h3 className="text-sm font-medium text-neutral-400">Players</h3>

@@ -1,0 +1,13 @@
+{
+  "name": "Rise & Fall: Player B vs Player D vs Player E — a real three-player async game from the standalone app, on a saved map",
+  "expected": {
+    "winners": [
+      "Player B"
+    ],
+    "finalScores": {
+      "Player B": 217,
+      "Player D": 135,
+      "Player E": 68
+    }
+  }
+}

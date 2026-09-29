@@ -157,3 +157,32 @@ describe('Rise & Fall view', () => {
     expect(onChange.mock.lastCall![0].activeTaleIds).toHaveLength(1)
   }, SLOW)
 })
+
+describe('saved map views', () => {
+  it('previews a map and builds one tile by tile until it hands the finished map over', async () => {
+    const { SavedMapEditor, SavedMapPreview } = await import('../view/SavedMapViews.tsx')
+    const { extractSavedMap } = await import('../rules.ts')
+    let built = newGame({ players: 2 })
+    while (built.phase === 'placeTiles') built = play(built, simplestMove(built)!)
+    const map = extractSavedMap(built)!
+    const preview = render(<SavedMapPreview data={map} />)
+    expect(preview.getByText(/For 2 players/)).toBeInTheDocument()
+    preview.unmount()
+
+    const onChange = vi.fn()
+    const editor = render(<SavedMapEditor value={null} onChange={onChange} />)
+    fireEvent.click(editor.getByRole('button', { name: 'Start building' }))
+    expect(editor.getByRole('button', { name: 'Stop building' })).toBeInTheDocument()
+    editor.unmount()
+  })
+})
+
+describe('options editor with a saved map', () => {
+  it('replaces the map options with a note', () => {
+    const { rerender } = render(<GameOptionsEditor value={DEFAULT_GAME_OPTIONS} onChange={() => {}} assets={{ map: 'chosen' }} />)
+    expect(screen.getByText(/starts from a saved map, so the map options/)).toBeInTheDocument()
+    expect(screen.queryByText('Build alone')).toBeNull()
+    rerender(<GameOptionsEditor value={DEFAULT_GAME_OPTIONS} onChange={() => {}} assets={{ map: 'random' }} />)
+    expect(screen.getByText(/picked at random when the game starts/)).toBeInTheDocument()
+  })
+})

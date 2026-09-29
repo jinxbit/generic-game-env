@@ -15,6 +15,7 @@
 
 import type { GameState } from '@game-platform/sdk'
 import type { GameSettings } from '../../lib/dbTypes.ts'
+import type { RoomAssets } from '../../lib/roomAssets.ts'
 import type { ProductionGameFixture } from '../fixtures/productionGames/loadFixtures.ts'
 
 export interface RoomIdentity {
@@ -55,6 +56,8 @@ export interface RemappedFixture {
   expectedFinalState: GameState
   /** `games.settings` the new room must be given for `buildGenesisState` to reproduce this game's genesis. */
   settings: GameSettings
+  /** `games.assets` likewise — the payloads the game started from (src/lib/roomAssets.ts). */
+  assets: RoomAssets
   /** Expected final score per *new* player id, when the fixture's sidecar declared one. */
   expectedScoreByPlayerId?: Record<string, number>
   /** Expected winner(s) as new player ids, when the sidecar declared them. */
@@ -81,6 +84,7 @@ export function remapFixtureToRoom(fixture: ProductionGameFixture, identity: Roo
     history: remapValue(fixture.finalState.actionHistory, pairs),
     expectedFinalState: remapValue(fixture.finalState, pairs),
     settings: { ...remapValue(fixture.game.settings, pairs), ruleEnforcementEnabled: true },
+    assets: remapValue(fixture.game.assets ?? {}, pairs),
     expectedScoreByPlayerId: fixture.expected.finalScoreByPlayerId && remapValue(fixture.expected.finalScoreByPlayerId, pairs),
     expectedWinnerPlayerIds: fixture.expected.winnerPlayerIds && remapValue(fixture.expected.winnerPlayerIds, pairs),
     userIdForPlayer(playerId) {

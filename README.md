@@ -795,6 +795,16 @@ the page title, the PWA manifest, the home page and notification fallbacks.
 Each game's own name comes from its definition and appears on room cards, in
 the lobby and in notifications about that game.
 
+**Saved assets.** A game can declare kinds of reusable asset to start from —
+Rise & Fall's saved maps. Each game and kind has a library page
+(`/assets/<game>/<kind>`, linked from the room's asset picker) where anyone
+can keep private assets and build new ones with the game's editor; a game's
+menu offers "Save this map" once there's one to save. Only a site admin can
+make an asset public, and the public ones are the pool "a random map" is
+drawn from when a game starts. A room copies the asset it uses, so editing or
+deleting one later never changes a game already set up
+(`supabase/migrations/0003_game_assets.sql`, `src/lib/roomAssets.ts`).
+
 **Rules versions.** Every game records the `rulesVersion` it started with and
 always replays under it, so a rules change that would alter existing games
 ships as a new version registered alongside the old one (see the game package

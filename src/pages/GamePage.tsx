@@ -19,6 +19,7 @@ import { isViewLogState, viewLogReviewState, type ViewLogHistory } from '../lib/
 import {
   applyActionEnforced,
   cancelGame,
+  createGameAsset,
   deleteGame,
   deriveBaseFromView,
   duplicateGameAsHotseat,
@@ -655,6 +656,26 @@ export function GamePage() {
     }
   }
 
+  /**
+   * Saves what this game can offer as a reusable asset of `kind` — its map,
+   * say (GameDefinition.assetKinds' `extract`) — to the signed-in user's
+   * library, private until an admin publishes it.
+   */
+  async function handleSaveAsset(kind: string, label: string) {
+    if (!game || !gameState || !session) return
+    const data = findGameDefinition(game.game_type, game.settings.rulesVersion)?.assetKinds?.[kind]?.extract?.(gameState)
+    if (data === null || data === undefined) return
+    const name = window.prompt(`Name this ${label.toLowerCase()}`, `${game.name} ${label.toLowerCase()}`)
+    if (name === null) return
+    setStateExportError(null)
+    try {
+      await createGameAsset({ gameType: game.game_type, kind, name: name.slice(0, 80), data, userId: session.user.id })
+      window.alert(`Saved. Find it under "Manage saved ${label.toLowerCase()}s" when you create a room.`)
+    } catch (err) {
+      setStateExportError(toAppError(err, `Failed to save the ${label.toLowerCase()}`))
+    }
+  }
+
   /** Snapshots this game's current state into a brand-new hotseat room this account owns. The source room is untouched. */
   async function handleDuplicateAsHotseat() {
     if (!game || !gameState || !session) return
@@ -802,6 +823,25 @@ export function GamePage() {
                 >
                   Copy game export
                 </button>
+                {gameState &&
+                  session &&
+                  Object.entries(gameDefinition?.assetKinds ?? {}).map(([kind, assetKind]) =>
+                    assetKind.extract && assetKind.extract(gameState) !== null ? (
+                      <button
+                        key={kind}
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setMenuOpen(false)
+                          void handleSaveAsset(kind, assetKind.label)
+                        }}
+                        title={`Save this game's ${assetKind.label.toLowerCase()} to your library, to start other games from.`}
+                        className={menuItemClass}
+                      >
+                        Save this {assetKind.label.toLowerCase()}
+                      </button>
+                    ) : null,
+                  )}
                 <button
                   type="button"
                   role="menuitem"

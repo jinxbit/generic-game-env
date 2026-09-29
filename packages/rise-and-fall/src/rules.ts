@@ -35,12 +35,14 @@ import { moveCard } from './engine/cards.ts'
 import { describeCascade, describePrimaryAction, type DraftEvent } from './engine/gameLog.ts'
 import { calculateVPBreakdown } from './engine/victoryPoints.ts'
 import { resolveGameContent, type GameContent } from './gameContent.ts'
+import { savedMapKind, type SavedMap } from './savedMap.ts'
 import type { GameAction, GameData, GameOptions, MapMode } from './types.ts'
 
 export type * from './types.ts'
 export type { GameState, Phase } from './adapter.ts'
 export { engineGenesisOf, toEngine } from './adapter.ts'
 export { resolveGameContent, type GameContent } from './gameContent.ts'
+export { extractSavedMap, normalizeSavedMap, savedMapKind, type SavedMap } from './savedMap.ts'
 
 export const GAME_ID = 'rise-and-fall'
 export const MIN_PLAYERS = 2
@@ -128,10 +130,17 @@ function applyEngineAction(state: GameState, action: GameAction): ActionResult<G
 /** Draws "build alone"'s random builder and order, in a fixed order: builder, then order. */
 function resolveSeating(lobby: LobbyState<GameOptions>, random: Random): GameData['seating'] {
   const seats = [...lobby.turnOrder]
-  if (lobby.options.mapMode !== 'solo') return { turnOrder: seats, builderId: null }
+  // A saved map replaces the map options, "build alone" included — nobody builds.
+  if (lobby.options.mapMode !== 'solo' || savedMapFor(lobby)) return { turnOrder: seats, builderId: null }
   const builderId = lobby.options.soloBuilder === 'random' ? random.pick(seats) : seats[0]
   const turnOrder = lobby.options.soloBuilderUnitOrder === 'random' ? random.shuffle(seats) : [...seats.filter((id) => id !== builderId), builderId]
   return { turnOrder, builderId }
+}
+
+/** The room's saved map (./savedMap.ts), if it has one that fits the seated count — the framework has already normalized it. */
+function savedMapFor(lobby: LobbyState<GameOptions>): SavedMap | null {
+  const map = lobby.assets?.map as SavedMap | undefined
+  return map && map.playerCount === lobby.players.length ? map : null
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +269,7 @@ export const gameDefinition: GameDefinition<GameData, GameOptions, GameAction> =
       hiddenInformationEnabled: lobby.hiddenInformationEnabled,
       lockRevealedInformationEnabled: Boolean(lobby.lockRevealedInformationEnabled),
       seating,
+      savedMap: savedMapFor(lobby),
     })
     return toPlatform(engine, lobby, seating)
   },
@@ -286,6 +296,8 @@ export const gameDefinition: GameDefinition<GameData, GameOptions, GameAction> =
   describePhase(phase) {
     return phase ? (PHASE_LABELS[phase] ?? phase) : ''
   },
+
+  assetKinds: { map: savedMapKind },
 }
 
 export { phaseOf }

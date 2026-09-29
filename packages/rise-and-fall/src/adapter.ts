@@ -32,6 +32,7 @@ import { createEmptyBoard } from './engine/board.ts'
 import { currentTilePlacerId, currentUnitPlacerId } from './engine/boardSetup.ts'
 import { createNewGame, startGame, startGameWithPresetBoard } from './engine/createGame.ts'
 import type { PlayMode } from './engine/types.ts'
+import type { SavedMap } from './savedMap.ts'
 import type { EngineState, GameData, GameOptions, PlayerHoldings } from './types.ts'
 
 /** This game's platform GameState. */
@@ -161,13 +162,16 @@ export interface EngineGenesisInput {
   hiddenInformationEnabled: boolean
   lockRevealedInformationEnabled: boolean
   seating: GameData['seating']
+  /** A saved map the room starts from (GameState.assets.map, ./savedMap.ts) — replaces the map options when it fits the player count. */
+  savedMap?: SavedMap | null
 }
 
 /**
  * The engine's genesis — the state the standalone app's gameGenesis.ts built:
  * board setup under way, the starting Sea tiles seeded (or a template map
- * laid out), nobody's cards dealt yet. Deterministic: whatever setup drew at
- * random is already resolved into `seating`.
+ * laid out, or a saved map the room chose), nobody's cards dealt yet.
+ * Deterministic: whatever setup drew at random is already resolved into
+ * `seating`.
  */
 export function buildEngineGenesis(input: EngineGenesisInput): EngineState {
   const playerCount = input.players.length
@@ -186,6 +190,7 @@ export function buildEngineGenesis(input: EngineGenesisInput): EngineState {
   const sameOrder = turnOrder.length === lobby.turnOrder.length && turnOrder.every((id, i) => lobby.turnOrder[i] === id)
   const ordered = sameOrder ? lobby : { ...lobby, turnOrder: [...turnOrder], pendingPlayerIds: [...turnOrder] }
 
+  if (input.savedMap && input.savedMap.playerCount === playerCount) return startGameWithPresetBoard(ordered, input.savedMap.board)
   if (input.options.mapMode === 'template' && input.options.mapTemplateId) {
     const board = resolveMapTemplateBoard(input.options.mapTemplateId)
     if (board) return startGameWithPresetBoard(ordered, board)
@@ -203,5 +208,6 @@ export function engineGenesisOf(state: GameState): EngineState {
     hiddenInformationEnabled: state.hiddenInformationEnabled,
     lockRevealedInformationEnabled: Boolean(state.lockRevealedInformationEnabled),
     seating: state.game.seating,
+    savedMap: (state.assets?.map as SavedMap | undefined) ?? null,
   })
 }

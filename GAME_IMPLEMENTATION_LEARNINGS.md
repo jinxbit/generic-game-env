@@ -177,6 +177,10 @@ No migration is needed: the database stores `GameState` as opaque JSON.
   every rule.
 - Reuse the board module for UI affordances: Shark rings exactly the cells
   `placementsForRoll` returns and shows `previewPlacement` in each tooltip.
+- History review is the platform's. Give it your turns (`reviewStops`) and
+  explain a reviewed step from the `review` prop (`before`, `entries`)
+  instead of adding your own stepper — Rise & Fall's port had one, and two
+  review modes side by side confused players.
 - A view test that plays a whole game with `simplestMove`, rendering every
   N states, catches crashes on rare states cheaply.
 

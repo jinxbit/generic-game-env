@@ -1,7 +1,8 @@
 // Client-side replays of a game's log, for the view's features that need
-// more than the one state it is handed: the "Show history" turn review (halos,
-// arrows, card-choice recap, territory changes — ./TurnReviewBar.tsx and
-// RoundView.tsx) and the end-of-game charts (EndGameView.tsx).
+// more than the one state it is handed: the overlays explaining a step of the
+// platform's history review (halos, arrows, card-choice recap —
+// ./useStepExplanation.ts, RoundView.tsx) and the end-of-game charts
+// (EndGameView.tsx).
 //
 // Everything replays the engine itself (../engine/replay.ts and friends) from
 // the engine's genesis, rebuilt from the platform state (../adapter.ts's

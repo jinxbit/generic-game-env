@@ -33,6 +33,8 @@ import { listGameLengthBounds, listMapTemplates, listTales } from './content/res
 import { applyGameAction, nextForcedFollowUp } from './engine/applyAction.ts'
 import { moveCard } from './engine/cards.ts'
 import { describeCascade, describePrimaryAction, type DraftEvent } from './engine/gameLog.ts'
+import type { LoggedAction as EngineLoggedAction } from './engine/actions.ts'
+import { findTurnStops } from './engine/turnReview.ts'
 import { calculateVPBreakdown } from './engine/victoryPoints.ts'
 import { resolveGameContent, type GameContent } from './gameContent.ts'
 import { savedMapKind, type SavedMap } from './savedMap.ts'
@@ -298,6 +300,21 @@ export const gameDefinition: GameDefinition<GameData, GameOptions, GameAction> =
   },
 
   assetKinds: { map: savedMapKind },
+
+  // History review's turns: the standalone app's own turn stops
+  // (findTurnStops, ./engine/turnReview.ts) — a new stop each time the phase
+  // group changes, and within board setup and the actions phase each time the
+  // acting player does. A redacted viewer's HIDDEN_ACTION placeholder (a
+  // still-secret pick in a simultaneous phase) belongs to whatever group it
+  // sits in, the way the engine treats an undo.
+  reviewStops(entries) {
+    const asEngine = entries.map((entry) => ({
+      action: entry.action.type === 'HIDDEN_ACTION' ? { type: 'SET_ADMIN_MODE', playerId: entry.action.playerId ?? null, enabled: false } : entry.action,
+      turn: entry.turn,
+      timestamp: '',
+    })) as EngineLoggedAction[]
+    return findTurnStops(asEngine, 0)
+  },
 }
 
 export { phaseOf }

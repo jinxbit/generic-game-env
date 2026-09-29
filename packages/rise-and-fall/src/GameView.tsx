@@ -1,7 +1,7 @@
 // Rise & Fall's game view — the game area of the standalone app's game page,
 // minus everything the platform's shell now provides around it (the
-// narration log, chat, undo/redo, concede, admin mode, action-by-action
-// history review, the hotseat hand-off, game export).
+// narration log, chat, undo/redo, concede, admin mode, history review and
+// its stepping, the hotseat hand-off, game export).
 //
 // The components under ./view/ are the standalone app's, carried over nearly
 // verbatim: they read the engine's flat state, so this view renders
@@ -10,8 +10,12 @@
 // BoardSetupView, RoundView and EndGameView as before.
 //
 // What this view adds back from the old game page:
-// - the "Show history" turn-by-turn review and the live territory-control
-//   toggle (./view/GameToolbar.tsx, ./view/useTurnReview.ts);
+// - the old "Show history" review's overlays — halos and arrows on the units
+//   that acted, resource and score changes, the card-choice recap — drawn on
+//   whatever step the platform's history review is showing
+//   (GameViewProps.review, ./view/useStepExplanation.ts; the stepping, a turn
+//   at a time by this game's own turns, is the platform's);
+// - the territory-control overlay (./view/GameToolbar.tsx);
 // - the end-of-game charts, which replay the whole log (./view/history.ts);
 // - the display settings that used to live on the player's profile, now
 //   stored per browser (./view/preferences.ts).
@@ -22,7 +26,7 @@
 // belong to a player who has already acted.
 
 import type { GameViewProps } from '@game-platform/sdk/ui'
-import { useCallback, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { Coordinate } from './engine/types.ts'
 import { calculateScoreHistory } from './engine/scoreHistory.ts'
 import { calculateGoldSpendingByCategory, calculateUnitValueDetail } from './engine/unitValue.ts'
@@ -34,14 +38,15 @@ import { GameToolbar } from './view/GameToolbar.tsx'
 import { replayableHistory, safeEngineGenesis } from './view/history.ts'
 import { usePreferences } from './view/preferences.ts'
 import { RoundView } from './view/RoundView.tsx'
-import { useTurnReview } from './view/useTurnReview.ts'
+import { useStepExplanation, type TerritoryControlMode } from './view/useStepExplanation.ts'
 import { ViewSettings } from './view/ViewSettings.tsx'
 
-export function GameView({ state, players, myPlayerId, submitting, onAction }: GameViewProps<GameData, GameOptions, GameAction>) {
+export function GameView({ state, players, myPlayerId, submitting, onAction, review }: GameViewProps<GameData, GameOptions, GameAction>) {
   const engine = useMemo(() => toEngine(state), [state])
   const content = contentFor(state)
   const [preferences, setPreferences] = usePreferences()
   const [liveTerritoryControlOn, setLiveTerritoryControlOn] = useState(false)
+  const [territoryControlMode, setTerritoryControlMode] = useState<TerritoryControlMode>('changes')
 
   // Genesis depends only on these; keyed on their contents so a refetched but
   // unchanged state doesn't rebuild it (and invalidate every replay below).
@@ -58,9 +63,7 @@ export function GameView({ state, players, myPlayerId, submitting, onAction }: G
   const genesis = useMemo(() => safeEngineGenesis(state), [genesisKey])
   const history = useMemo(() => replayableHistory(state), [state])
 
-  const playerName = useCallback((playerId: string | null) => players.find((p) => p.id === playerId)?.display_name ?? 'Unknown', [players])
-  const turnReview = useTurnReview({ genesis, history, content, myPlayerId, playerName })
-  const review = turnReview.open ? turnReview.review : null
+  const explanation = useStepExplanation({ state, review, genesis, content })
 
   /** The end-of-game charts' series — each replays the whole game, so only once it's over. Null (charts hidden) if a replay fails. */
   const endGame = useMemo(() => {
@@ -83,13 +86,13 @@ export function GameView({ state, players, myPlayerId, submitting, onAction }: G
   }
 
   let body
-  if (review) {
+  if (explanation && engine.status !== 'completed') {
     body =
-      review.state.status === 'boardSetup' ? (
-        <BoardSetupView state={review.state} players={players} myPlayerId={null} boardGenerationContent={content.boardGenerationContent} onPlaceTile={() => {}} onPlaceUnit={() => {}} />
+      engine.status === 'boardSetup' ? (
+        <BoardSetupView state={engine} players={players} myPlayerId={null} boardGenerationContent={content.boardGenerationContent} onPlaceTile={() => {}} onPlaceUnit={() => {}} />
       ) : (
         <RoundView
-          state={review.state}
+          state={engine}
           players={players}
           myPlayerId={null}
           unitContent={content.unitContent}
@@ -97,15 +100,14 @@ export function GameView({ state, players, myPlayerId, submitting, onAction }: G
           taleContent={content.taleContent}
           unitPlateColors={preferences.unitPlateColors}
           unitReserveDisplayMode={preferences.unitReserveDisplayMode}
-          turnReview={review.turnHalos}
+          turnReview={explanation.turnHalos}
           showHistory
           showBankRow
-          showCardChoiceRecap={review.showCardChoiceRecap}
-          cardChoiceRecapPhase={review.cardChoiceRecapPhase}
-          cardChoiceRecap={review.cardChoiceRecap ?? undefined}
-          onExitHistory={turnReview.exit}
-          territoryControlMode={turnReview.territoryControlMode}
-          previousHistoryState={review.previousState}
+          showCardChoiceRecap={explanation.showCardChoiceRecap}
+          cardChoiceRecapPhase={explanation.cardChoiceRecapPhase}
+          cardChoiceRecap={explanation.cardChoiceRecap ?? undefined}
+          territoryControlMode={territoryControlMode}
+          previousHistoryState={explanation.previousState}
           onChooseCard={() => {}}
           onResolveUnit={() => {}}
           onResolveBulkAction={() => {}}
@@ -177,8 +179,9 @@ export function GameView({ state, players, myPlayerId, submitting, onAction }: G
   return (
     <div className="flex flex-col gap-4">
       <GameToolbar
-        turnReview={turnReview}
-        showReview={engine.status !== 'boardSetup'}
+        reviewing={explanation !== null && engine.status === 'active'}
+        territoryControlMode={territoryControlMode}
+        onTerritoryControlModeChange={setTerritoryControlMode}
         showTerritoryToggle={engine.status === 'active'}
         liveTerritoryControlOn={liveTerritoryControlOn}
         onToggleLiveTerritoryControl={() => setLiveTerritoryControlOn((on) => !on)}

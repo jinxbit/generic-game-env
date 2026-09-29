@@ -81,6 +81,15 @@ be saved as a map ("Save this map" in the game menu), and
 `MapBuilderPage`) and the preview the platform's pickers and library page
 show.
 
+### History review
+
+The standalone app's "Show history" is now the platform's history review
+(one mode for every game): the game supplies its turns (`reviewStops` in
+`src/rules.ts`, the engine's own `findTurnStops`) and draws its overlays —
+halos and arrows on the units that acted, resource and score changes, the
+card-choice recap, territory changes — on whichever step the platform hands
+the view (`GameViewProps.review`, `src/view/useStepExplanation.ts`).
+
 ### Hidden information
 
 Each simultaneous phase keeps one secret until everyone has acted: which

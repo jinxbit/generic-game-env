@@ -1,5 +1,6 @@
 import type { GameActionBase, LoggedAction } from './actions.ts'
 import type { Random } from './random.ts'
+import type { ReviewEntry } from './reviewStops.ts'
 import type { ActionResult, GameState, LobbyState } from './types.ts'
 
 /**
@@ -161,6 +162,16 @@ export interface GameDefinition<TData = unknown, TOptions = unknown, TAction ext
 
   /** Short human-readable label for a phase (GameState.phase), e.g. "Picking". */
   describePhase(phase: string | null): string
+
+  /**
+   * Where each "turn" starts, for history review's turn-at-a-time stepping
+   * (./reviewStops.ts): the log positions (0 = genesis, `entries.length` =
+   * now) at which a new turn begins — say, each time the acting player or
+   * the phase changes. Read only each entry's action type, player and round:
+   * a redacted viewer's log has HIDDEN_ACTION placeholders in it. Omit for
+   * one stop per round.
+   */
+  reviewStops?(entries: readonly ReviewEntry[]): number[]
 
   /**
    * The kinds of asset this game can start from, keyed by a kind id

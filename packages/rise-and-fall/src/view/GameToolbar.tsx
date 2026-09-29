@@ -1,4 +1,4 @@
-import type { TerritoryControlMode, TurnReviewControls } from './useTurnReview.ts'
+import type { TerritoryControlMode } from './useStepExplanation.ts'
 
 const TERRITORY_CONTROL_MODES: { mode: TerritoryControlMode; label: string; title: string }[] = [
   { mode: 'off', label: 'Territory: off', title: 'Territory control is hidden. Click to outline every region a player currently controls, like the victory screen.' },
@@ -44,109 +44,56 @@ function TerritoryTriangleIcon() {
 }
 
 /**
- * The game view's own controls above the board — what the standalone app
- * had in its game page header and review banner that the platform's shell
- * doesn't provide: "Show history" (the turn-by-turn review, ./useTurnReview.ts)
- * with its Prev/Next/slider and territory-mode switch, and the live
- * territory-control toggle (issue #656).
+ * The game view's own controls above the board: the territory-control
+ * overlay. Live, a toggle (issue #656); while the platform's history review
+ * is open, a three-way switch between off, every controlled region, and only
+ * the regions whose control changed in the reviewed step. Stepping through
+ * history itself is the platform's (its review bar), not the game's.
  */
 export function GameToolbar(props: {
-  turnReview: TurnReviewControls
-  /** Offer "Show history" (not during board setup, where there's little to review and the setup view has no review mode). */
-  showReview: boolean
+  /** Whether history review is showing a step (GameViewProps.review). */
+  reviewing: boolean
+  territoryControlMode: TerritoryControlMode
+  onTerritoryControlModeChange: (mode: TerritoryControlMode) => void
   /** Offer the live territory toggle (only mid-round: the victory screen always outlines territory). */
   showTerritoryToggle: boolean
   liveTerritoryControlOn: boolean
   onToggleLiveTerritoryControl: () => void
 }) {
-  const { turnReview, liveTerritoryControlOn, onToggleLiveTerritoryControl, showReview, showTerritoryToggle } = props
-  const review = turnReview.review
+  const { reviewing, territoryControlMode, onTerritoryControlModeChange, liveTerritoryControlOn, onToggleLiveTerritoryControl, showTerritoryToggle } = props
 
-  if (turnReview.open) {
-    const current = TERRITORY_CONTROL_MODES.find((m) => m.mode === turnReview.territoryControlMode) ?? TERRITORY_CONTROL_MODES[0]
+  if (reviewing) {
+    const current = TERRITORY_CONTROL_MODES.find((m) => m.mode === territoryControlMode) ?? TERRITORY_CONTROL_MODES[0]
     return (
-      <div className="flex flex-wrap items-center gap-3 rounded-md border border-amber-700/40 bg-amber-500/10 p-3 text-sm text-amber-200">
-        <span className="font-medium">Reviewing history</span>
+      <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={() => {
             const index = TERRITORY_CONTROL_MODES.indexOf(current)
-            turnReview.setTerritoryControlMode(TERRITORY_CONTROL_MODES[(index + 1) % TERRITORY_CONTROL_MODES.length].mode)
+            onTerritoryControlModeChange(TERRITORY_CONTROL_MODES[(index + 1) % TERRITORY_CONTROL_MODES.length].mode)
           }}
           title={current.title}
-          className={`rounded-md border px-2 py-0.5 hover:border-amber-400 ${current.mode === 'off' ? 'border-amber-700/60' : 'border-amber-500 bg-amber-500/10 text-amber-300'}`}
+          className={`rounded-md border px-2 py-0.5 text-sm hover:border-amber-400 ${current.mode === 'off' ? 'border-neutral-700' : 'border-amber-500 bg-amber-500/10 text-amber-300'}`}
         >
           {current.label}
-        </button>
-        {review ? (
-          <>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                disabled={!review.canPrev}
-                onClick={turnReview.prev}
-                title="Step back one turn."
-                className="rounded-md border border-amber-700/60 px-2 py-0.5 hover:border-amber-400 disabled:opacity-40"
-              >
-                ← Prev
-              </button>
-              <input
-                type="range"
-                min={0}
-                max={review.stopCount}
-                value={review.position}
-                onChange={(e) => turnReview.goTo(Number(e.target.value))}
-                aria-label="Turn"
-                className="w-40"
-              />
-              <button
-                type="button"
-                disabled={!review.canNext}
-                onClick={turnReview.next}
-                title="Step forward one turn."
-                className="rounded-md border border-amber-700/60 px-2 py-0.5 hover:border-amber-400 disabled:opacity-40"
-              >
-                Next →
-              </button>
-            </div>
-            <span>{review.label}</span>
-          </>
-        ) : (
-          <span>This game&apos;s history can&apos;t be replayed here.</span>
-        )}
-        <button type="button" onClick={turnReview.exit} className="ml-auto rounded-md border border-amber-700/60 px-3 py-1 font-medium hover:border-amber-400">
-          Back to live
         </button>
       </div>
     )
   }
 
-  const offerReview = showReview && turnReview.available
-  if (!offerReview && !showTerritoryToggle) return null
+  if (!showTerritoryToggle) return null
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {offerReview && (
-        <button
-          type="button"
-          onClick={turnReview.start}
-          title="Step through the game's history turn by turn, starting right after your own last turn so you can review what every opponent did since. This never touches the game itself."
-          className="rounded-md border border-neutral-700 px-3 py-1 text-sm hover:border-neutral-500"
-        >
-          Show history
-        </button>
-      )}
-      {showTerritoryToggle && (
-        <button
-          type="button"
-          onClick={onToggleLiveTerritoryControl}
-          title={liveTerritoryControlOn ? 'Territory control is shown. Click to hide it.' : 'Outline every region a player currently controls on the map, the same way the victory screen does.'}
-          aria-pressed={liveTerritoryControlOn}
-          aria-label={liveTerritoryControlOn ? 'Hide territory control' : 'Show territory control'}
-          className={`rounded-md border p-1.5 hover:border-neutral-500 ${liveTerritoryControlOn ? 'border-amber-500 bg-amber-500/10 text-amber-300' : 'border-neutral-700 text-neutral-400'}`}
-        >
-          <TerritoryTriangleIcon />
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={onToggleLiveTerritoryControl}
+        title={liveTerritoryControlOn ? 'Territory control is shown. Click to hide it.' : 'Outline every region a player currently controls on the map, the same way the victory screen does.'}
+        aria-pressed={liveTerritoryControlOn}
+        aria-label={liveTerritoryControlOn ? 'Hide territory control' : 'Show territory control'}
+        className={`rounded-md border p-1.5 hover:border-neutral-500 ${liveTerritoryControlOn ? 'border-amber-500 bg-amber-500/10 text-amber-300' : 'border-neutral-700 text-neutral-400'}`}
+      >
+        <TerritoryTriangleIcon />
+      </button>
     </div>
   )
 }

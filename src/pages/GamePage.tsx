@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ChatPanel } from '../components/ChatPanel'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { GameLogPanel } from '../components/GameLogPanel'
-import { applyAction, buildGameLog, findGameDefinition, redactGameLog, replayActions, currentActorId, applyRedoAction, applyUndoAction, buildGameLogFromViewerEntries, isUndoLockedByReveal, resolveHistory, type ViewerLogEntry, type Action, type ActionResult, type GameState as EngineGameState } from '@game-platform/sdk'
+import { applyAction, buildGameLog, findGameDefinition, redactGameLog, replayActions, currentActorId, applyRedoAction, applyUndoAction, buildGameLogFromViewerEntries, isUndoLockedByReveal, resolveHistory, moveReviewStops, nextStop, previousStop, sinceLastTurnStop, turnReviewStops, type ViewerLogEntry, type Action, type ActionResult, type GameState as EngineGameState } from '@game-platform/sdk'
 import { gameUiFor } from '../games/ui'
 import { useAuth } from '../hooks/useAuth'
 import { useIsAdmin } from '../hooks/useIsAdmin'
@@ -205,8 +205,16 @@ export function GamePage() {
    * the live `game_state` row. `null` means "showing the live game";
    * otherwise an index into `gameState.actionHistory` (0 = genesis, N = the
    * state right after the Nth logged entry), replayed purely client-side.
+   *
+   * The one review mode for every game (@game-platform/sdk's reviewStops.ts):
+   * it steps a turn at a time — the game's own turns
+   * (GameDefinition.reviewStops), or rounds — or a move at a time, and hands
+   * the game's view each step (GameViewProps.review) so the game can explain
+   * what happened in it.
    */
   const [reviewIndex, setReviewIndex] = useState<number | null>(null)
+  const [reviewGranularity, setReviewGranularity] = useState<'turn' | 'move'>('turn')
+  const logPanelRef = useRef<HTMLDivElement>(null)
   /**
    * Hotseat pass-and-play: which seated player the shared device is currently
    * "handed to" — distinct from auth identity, since every hotseat seat
@@ -450,31 +458,53 @@ export function GamePage() {
     }
   }, [viewLog, reviewIndex, game, gameState, viewLogHistory])
 
-  /** The state to render — live, or replayed (or, for a view-log game, patched forward) up to `reviewIndex`. */
-  const reviewState = useMemo(() => {
-    if (reviewIndex === null || !gameState) return null
-    if (viewLog) return viewLogHistory && viewLogHistory.entries.length >= reviewIndex ? viewLogReviewState(viewLogHistory, gameState, reviewIndex) : null
-    if (!genesis) return null
-    try {
-      return replayActions(genesis, gameState.actionHistory.slice(0, reviewIndex))
-    } catch {
-      return null
-    }
-  }, [reviewIndex, genesis, gameState, viewLog, viewLogHistory])
+  /** The state after the first `index` log entries — replayed, or for a view-log game patched forward from this viewer's genesis view. */
+  const reviewStateAt = useCallback(
+    (index: number): EngineGameState | null => {
+      if (!gameState) return null
+      if (viewLog) return viewLogHistory && viewLogHistory.entries.length >= index ? viewLogReviewState(viewLogHistory, gameState, index) : null
+      if (!genesis) return null
+      try {
+        return replayActions(genesis, gameState.actionHistory.slice(0, index))
+      } catch {
+        return null
+      }
+    },
+    [genesis, gameState, viewLog, viewLogHistory],
+  )
+
+  /** Where review can stop: every move, or the game's turns (@game-platform/sdk's reviewStops.ts). */
+  const reviewStops = useMemo(() => {
+    const entries = gameState?.actionHistory ?? []
+    if (reviewGranularity === 'move') return moveReviewStops(entries)
+    return turnReviewStops(game ? findGameDefinition(game.game_type, game.settings.rulesVersion) : null, entries)
+  }, [gameState, game, reviewGranularity])
+  /** Where the reviewed step begins — the stop before `reviewIndex`. */
+  const reviewStepStart = reviewIndex === null ? null : previousStop(reviewStops, reviewIndex)
+
+  /** The state to render — live, or the reviewed point. */
+  const reviewState = useMemo(() => (reviewIndex === null ? null : reviewStateAt(reviewIndex)), [reviewIndex, reviewStateAt])
+  /** The state at the start of the reviewed step, for the game to explain the step against. */
+  const reviewBefore = useMemo(() => (reviewStepStart === null ? null : reviewStateAt(reviewStepStart)), [reviewStepStart, reviewStateAt])
   const displayState = isReviewingHistory ? reviewState : gameState
 
-  /** The narration log for whatever's on screen (@game-platform/sdk's gameLog.ts), masked for this viewer (redactGameLog). */
+  /**
+   * The narration log (@game-platform/sdk's gameLog.ts), masked for this
+   * viewer (redactGameLog) — always the whole live log, even while reviewing:
+   * the log panel marks the reviewed step and what hasn't happened yet at that
+   * point, and its lines jump the review to their move.
+   */
   const visibleGameLog = useMemo(() => {
     // A view-log game's entries carry their narration, already worded for
     // this viewer by the server.
-    if (viewLog && displayState) return buildGameLogFromViewerEntries(displayState.actionHistory as unknown as ViewerLogEntry[])
-    if (!genesis || !displayState) return []
+    if (viewLog && gameState) return buildGameLogFromViewerEntries(gameState.actionHistory as unknown as ViewerLogEntry[])
+    if (!genesis || !gameState) return []
     try {
-      return redactGameLog(buildGameLog(genesis, displayState.actionHistory), displayState, me?.id ?? null)
+      return redactGameLog(buildGameLog(genesis, gameState.actionHistory), gameState, me?.id ?? null)
     } catch {
       return []
     }
-  }, [genesis, displayState, me?.id, viewLog])
+  }, [genesis, gameState, me?.id, viewLog])
 
   /** The most recently updated other game that's waiting on one of this user's seats. */
   const nextGameNeedingInput = useMemo(() => {
@@ -748,15 +778,46 @@ export function GamePage() {
   const gameDefinition = findGameDefinition(game.game_type, game.settings.rulesVersion)
   const gameUi = gameUiFor(game.game_type)
   const turnLabel = gameDefinition?.turnLabel ?? 'Turn'
-  const reviewedEntry = reviewIndex !== null && reviewIndex > 0 ? (gameState?.actionHistory[reviewIndex - 1] ?? null) : null
+  const reviewPosition = reviewIndex === null ? 0 : Math.max(0, reviewStops.findIndex((stop) => stop >= reviewIndex))
+  const sinceLastTurn = sinceLastTurnStop(reviewStops, gameState?.actionHistory ?? [], me?.id ?? null)
+  const reviewStepEntries = reviewIndex !== null && reviewStepStart !== null ? (gameState?.actionHistory.slice(reviewStepStart, reviewIndex) ?? []) : []
+  /** "Round 3 · Actions · Bob" — the step's round and phase, and who acted in it. */
+  const reviewLabel = (() => {
+    if (reviewIndex === null) return ''
+    if (reviewIndex === 0) return 'Start of the game'
+    const entryCount = gameState?.actionHistory.length ?? 0
+    const nothingSince = me !== null && sinceLastTurn === entryCount && reviewIndex === entryCount
+    const last = gameState?.actionHistory[reviewIndex - 1]
+    const actors = [...new Set(reviewStepEntries.map((entry) => ('playerId' in entry.action ? entry.action.playerId : null)).filter((id): id is string => !!id))]
+    const names = actors.map((id) => players.find((p) => p.id === id)?.display_name ?? 'Someone')
+    const phase = reviewBefore?.phase ? gameDefinition?.describePhase(reviewBefore.phase) : null
+    const label = [last ? `${turnLabel} ${last.turn}` : null, phase || null, names.length > 0 ? names.join(', ') : null].filter(Boolean).join(' · ')
+    return nothingSince ? `${label} — nothing has happened since your last turn` : label
+  })()
+
+  function openReview() {
+    setReviewGranularity('turn')
+    const stops = turnReviewStops(gameDefinition, gameState?.actionHistory ?? [])
+    setReviewIndex(sinceLastTurnStop(stops, gameState?.actionHistory ?? [], me?.id ?? null))
+  }
+
+  function setGranularity(granularity: 'turn' | 'move') {
+    setReviewGranularity(granularity)
+    if (granularity === 'turn' && reviewIndex !== null) {
+      // Snap onto the turn that contains the reviewed move.
+      const stops = turnReviewStops(gameDefinition, gameState?.actionHistory ?? [])
+      setReviewIndex(stops.find((stop) => stop >= reviewIndex) ?? reviewIndex)
+    }
+  }
 
   return (
     <div
       className="mx-auto flex w-full max-w-4xl flex-col gap-6 p-8"
       onClick={(event) => {
-        // Any click outside the review banner exits history review.
+        // Any click outside the review banner (or the log, whose lines jump to their move) exits history review.
         if (!isReviewingHistory) return
         if (reviewBannerRef.current?.contains(event.target as Node)) return
+        if (logPanelRef.current?.contains(event.target as Node)) return
         setReviewIndex(null)
       }}
     >
@@ -1044,8 +1105,8 @@ export function GamePage() {
           <button
             type="button"
             disabled={!gameState || reviewMaxIndex === 0}
-            onClick={() => setReviewIndex(isReviewingHistory ? null : reviewMaxIndex)}
-            title="Step through the game's history action by action. Unlike Undo, this never touches the live game."
+            onClick={() => (isReviewingHistory ? setReviewIndex(null) : openReview())}
+            title="Step through the game's history, a turn or a move at a time, starting right after your own last turn. Unlike Undo, this never touches the live game."
             className={`rounded-md border px-3 py-1 text-sm hover:border-neutral-500 disabled:opacity-50 ${
               isReviewingHistory ? 'border-amber-500 text-amber-400' : 'border-neutral-700'
             }`}
@@ -1063,23 +1124,62 @@ export function GamePage() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              disabled={reviewIndex === 0}
-              onClick={() => setReviewIndex((i) => Math.max(0, (i ?? 0) - 1))}
+              disabled={reviewIndex === sinceLastTurn}
+              onClick={() => setReviewIndex(sinceLastTurn)}
+              title="Jump to right after your own last move — what everyone else did since."
+              className="rounded-md border border-amber-700/60 px-2 py-0.5 hover:border-amber-400 disabled:opacity-40"
+            >
+              Since your last turn
+            </button>
+            <button
+              type="button"
+              disabled={reviewIndex === null || previousStop(reviewStops, reviewIndex) === null}
+              onClick={() => setReviewIndex((i) => (i === null ? i : (previousStop(reviewStops, i) ?? i)))}
               className="rounded-md border border-amber-700/60 px-2 py-0.5 hover:border-amber-400 disabled:opacity-40"
             >
               ← Prev
             </button>
-            <input type="range" min={0} max={reviewMaxIndex} value={reviewIndex ?? 0} onChange={(e) => setReviewIndex(Number(e.target.value))} className="w-40" />
+            <input
+              type="range"
+              min={0}
+              max={reviewStops.length - 1}
+              value={reviewPosition}
+              onChange={(e) => setReviewIndex(reviewStops[Number(e.target.value)] ?? 0)}
+              aria-label={reviewGranularity === 'turn' ? 'Turn' : 'Move'}
+              className="w-40"
+            />
             <button
               type="button"
-              disabled={reviewIndex === reviewMaxIndex}
-              onClick={() => setReviewIndex((i) => Math.min(reviewMaxIndex, (i ?? 0) + 1))}
+              disabled={reviewIndex === null || nextStop(reviewStops, reviewIndex) === null}
+              onClick={() => setReviewIndex((i) => (i === null ? i : (nextStop(reviewStops, i) ?? i)))}
               className="rounded-md border border-amber-700/60 px-2 py-0.5 hover:border-amber-400 disabled:opacity-40"
             >
               Next →
             </button>
           </div>
-          <span>{reviewedEntry ? `${turnLabel} ${reviewedEntry.turn} — action ${reviewIndex} of ${reviewMaxIndex}` : 'Start of game (before any actions)'}</span>
+          <span>
+            {reviewLabel}
+            {reviewIndex !== null && reviewIndex > 0 && (
+              <span className="text-amber-300/70">
+                {' '}
+                ({reviewPosition} of {reviewStops.length - 1})
+              </span>
+            )}
+          </span>
+          <div role="group" aria-label="Step size" className="flex overflow-hidden rounded-md border border-amber-700/60 text-xs">
+            {(['turn', 'move'] as const).map((granularity) => (
+              <button
+                key={granularity}
+                type="button"
+                aria-pressed={reviewGranularity === granularity}
+                onClick={() => setGranularity(granularity)}
+                title={granularity === 'turn' ? 'Step a whole turn at a time.' : 'Step one logged move at a time.'}
+                className={`px-2 py-0.5 ${reviewGranularity === granularity ? 'bg-amber-500/20 text-amber-100' : 'hover:bg-amber-500/10'}`}
+              >
+                {granularity === 'turn' ? 'Turns' : 'Moves'}
+              </button>
+            ))}
+          </div>
           <button type="button" onClick={() => setReviewIndex(null)} className="ml-auto rounded-md border border-amber-700/60 px-3 py-1 font-medium hover:border-amber-400">
             Back to live
           </button>
@@ -1178,6 +1278,11 @@ export function GamePage() {
             myPlayerId={isReviewingHistory || game.status === 'canceled' ? null : (me?.id ?? null)}
             submitting={submitting}
             onAction={(action) => void submitAction(action)}
+            review={
+              isReviewingHistory && reviewBefore && reviewStepEntries.length > 0
+                ? { before: reviewBefore, entries: reviewStepEntries, granularity: reviewGranularity }
+                : undefined
+            }
           />
         ) : (
           <p className="rounded-md border border-neutral-800 p-4 text-sm text-neutral-400">
@@ -1186,7 +1291,21 @@ export function GamePage() {
         ))
       )}
 
-      <GameLogPanel events={visibleGameLog} players={players} />
+      <div ref={logPanelRef}>
+        <GameLogPanel
+          events={visibleGameLog}
+          players={players}
+          review={isReviewingHistory && reviewIndex !== null ? { from: reviewStepStart ?? reviewIndex, to: reviewIndex } : undefined}
+          onSelectEntry={
+            gameState && gameState.actionHistory.length > 0
+              ? (entryIndex) => {
+                  setReviewGranularity('move')
+                  setReviewIndex(entryIndex + 1)
+                }
+              : undefined
+          }
+        />
+      </div>
     </div>
   )
 }

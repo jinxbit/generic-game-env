@@ -21,6 +21,7 @@
     "@game-platform/sdk": "*",
     "@game-platform/shark": "*",
     "@game-platform/unique-pick": "*",
+    "@game-platform/vernissage": "*",
     "@supabase/supabase-js": "^2.112.2",
     "@vercel/analytics": "^2.0.1",
     "html-to-image": "^1.11.13",

@@ -1,0 +1,16 @@
+{
+  "name": "@game-platform/vernissage",
+  "version": "0.1.0",
+  "description": "Vernissage — steer five artists' fame with fate counters, objections and Trials of Strength, and cash in on the works you hold.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    "./rules": "./src/rules.ts",
+    "./view": "./src/view.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "peerDependencies": {
+    "@game-platform/sdk": "*",
+    "react": "^19"
+  }
+}

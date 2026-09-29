@@ -1,6 +1,6 @@
 # Implementing a game — learnings
 
-Notes from adding **Incorporated**, **Shark** and **Rise & Fall** to this platform, meant to
+Notes from adding **Incorporated**, **Shark**, **Vernissage** and **Rise & Fall** to this platform, meant to
 make the next game faster. Read `packages/unique-pick/README.md` first for
 the contract itself; this file is about how to get from a rulebook to a
 merged, green game package with the least rework.
@@ -138,6 +138,11 @@ would have touched every module. What worked instead:
 - **Money formatting.** Don't use `toLocaleString` in rules narration: the
   Edge Runtime and browsers can format differently, and the narration is
   stored. Format by hand (`formatFT`).
+- **Forced moves can leak a hand.** Auto-answering for a player who has
+  no might card (Vernissage) would tell everyone their hand holds none, and
+  `pendingPlayerIds` is public too. Ask everyone who *could* have a choice
+  (every player when an artist goes IN), and skip a step only on information
+  that is already public (an empty hand's size).
 - **Error messages with pluralisation**: check each branch reads right —
   "hold only 2" vs "2 shares already cover the debt" are different
   failures; test both.

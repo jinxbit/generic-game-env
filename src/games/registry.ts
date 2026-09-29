@@ -19,7 +19,8 @@ import { gameDefinition as kogge } from '@game-platform/kogge/rules'
 import { gameDefinition as riseAndFall } from '@game-platform/rise-and-fall/rules'
 import { gameDefinition as shark, gameDefinitionV1 as sharkV1 } from '@game-platform/shark/rules'
 import { gameDefinition as uniquePick } from '@game-platform/unique-pick/rules'
+import { gameDefinition as vernissage } from '@game-platform/vernissage/rules'
 
-export const REGISTERED_GAMES = [uniquePick, incorporated, kogge, shark, sharkV1, riseAndFall]
+export const REGISTERED_GAMES = [uniquePick, incorporated, kogge, shark, sharkV1, riseAndFall, vernissage]
 
 for (const definition of REGISTERED_GAMES) registerGame(definition)

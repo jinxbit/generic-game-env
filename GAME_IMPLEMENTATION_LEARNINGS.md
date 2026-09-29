@@ -1,6 +1,6 @@
 # Implementing a game — learnings
 
-Notes from adding **Incorporated**, **Shark** and **Rise & Fall** to this platform, meant to
+Notes from adding **Incorporated**, **Shark**, **Texas Hold'em** and **Rise & Fall** to this platform, meant to
 make the next game faster. Read `packages/unique-pick/README.md` first for
 the contract itself; this file is about how to get from a rulebook to a
 merged, green game package with the least rework.
@@ -17,6 +17,7 @@ merged, green game package with the least rework.
 2. **Copy a package, don't start blank.** `packages/shark` is the smallest
    complete example with dice, a board and a step machine;
    `packages/incorporated` shows prompts, hidden information and variants;
+   `packages/texas-holdem` shows secret hands dealt from a deck;
    `packages/unique-pick` shows simultaneous secret moves.
 3. **Split pure board logic from turn logic.** A `board.ts` of pure functions
    (geometry, groups, scoring, "is this move legal and what would it do")
@@ -52,6 +53,14 @@ merged, green game package with the least rework.
   `autoSales`) so `describeAction` and the view can narrate it without
   re-deriving. Reset per-action fields at the start of each action, or a
   folded forced follow-up will narrate them twice.
+- **Deal hidden cards when they're revealed, not from a stored deck.**
+  Texas Hold'em draws each card at the moment it's dealt, from the cards not
+  yet dealt, instead of shuffling once and storing the order. Nothing undealt
+  sits in the state, so there's nothing extra for `redactGame` to mask. And
+  every move that reveals a card also draws random numbers, which is what
+  the platform's "lock revealed information" undo setting keys on. With a
+  pre-shuffled deck, the call that turns the flop would draw nothing and
+  would stay undoable.
 - **Draw randomness in a fixed order and a fixed count per branch** (Shark:
   colour die then zone die, always both). Replay feeds back exactly the
   recorded numbers; drawing a different number of values on replay is an
@@ -135,6 +144,11 @@ would have touched every module. What worked instead:
   `placementId: undefined` broke clients' patching until `diffState` learned
   to treat such keys as absent (`packages/sdk/src/statePatch.ts`). Prefer
   omitting a key or using `null`; the stack test is what catches this.
+- **A concession can end the game without your hook.** When a CONCEDE
+  leaves one player, the framework completes the game itself and never
+  calls `onPlayerEliminated`. `GameData` then keeps whatever step it was in
+  (mid-hand, mid-turn). The view must key "game over" off `state.status`,
+  not the game's own step, and fuzz invariants must allow it.
 - **Money formatting.** Don't use `toLocaleString` in rules narration: the
   Edge Runtime and browsers can format differently, and the narration is
   stored. Format by hand (`formatFT`).

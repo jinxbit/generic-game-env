@@ -1,6 +1,6 @@
 # Implementing a game — learnings
 
-Notes from adding **Incorporated**, **Shark** and **Rise & Fall** to this platform, meant to
+Notes from adding **Incorporated**, **Shark**, **Rise & Fall** and **Magna Grecia** to this platform, meant to
 make the next game faster. Read `packages/unique-pick/README.md` first for
 the contract itself; this file is about how to get from a rulebook to a
 merged, green game package with the least rework.
@@ -52,6 +52,16 @@ merged, green game package with the least rework.
   `autoSales`) so `describeAction` and the view can narrate it without
   re-deriving. Reset per-action fields at the start of each action, or a
   folded forced follow-up will narrate them twice.
+- **A face-up stack needn't be hidden information.** If only the top card of
+  a shuffled stack is ever visible, draw each card when it's turned up
+  (with the same distribution the physical shuffle gives) instead of
+  shuffling the stack at setup. Nothing then sits in the state that anyone
+  must be kept from seeing (Magna Grecia's action cards, RULES.md AMBIG-3).
+- **When the rulebook has no map or card list, design one and say so.**
+  Magna Grecia's rulebook shows the board only in examples; the package
+  ships an original map as data (`src/data.ts`, drawn as ASCII so it reads
+  at a glance) and a test pins its design constraints (village counts, no
+  two villages touching) rather than exact cells.
 - **Draw randomness in a fixed order and a fixed count per branch** (Shark:
   colour die then zone die, always both). Replay feeds back exactly the
   recorded numbers; drawing a different number of values on replay is an
@@ -125,7 +135,10 @@ would have touched every module. What worked instead:
   to eliminate. Assert the precondition inside the test (e.g. the price
   before the move, the eliminated count) so a wrong fixture fails loudly.
 - **A fuzz bot that never reaches the interesting paths.** Uniformly random
-  legal moves rarely produced eliminations or forced sales in Shark. Bias the
+  legal moves rarely produced eliminations or forced sales in Shark, and
+  random road tiles in Magna Grecia wandered off without connecting anything,
+  so no oracle ever changed hands until the bot steered roads towards the
+  nearest place. Bias the
   bot toward the rare branches (prefer eliminating placements, sell less so
   players hold shares when prices fall), and add a final test asserting that,
   across all fuzz games, each rare path (forced sale, write-off, elimination)

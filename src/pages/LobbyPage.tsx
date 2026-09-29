@@ -5,6 +5,7 @@ import { useDisplayName } from '../hooks/useDisplayName'
 import { useIsAdmin } from '../hooks/useIsAdmin'
 import { ChatPanel } from '../components/ChatPanel'
 import { ErrorBanner } from '../components/ErrorBanner'
+import { RoomAssetPicker } from '../components/RoomAssetPicker'
 import { findGameDefinition } from '@game-platform/sdk'
 import { gameUiFor } from '../games/ui'
 import { gameTitleFor } from '../lib/gameCardView'
@@ -27,6 +28,7 @@ import {
 } from '../lib/gameApi'
 import { allPlayersReady, canStartGame, isPlayerReady } from '../lib/roomReadiness'
 import { toAppError, type AppError } from '../lib/errors'
+import { describeRoomAssets, roomAssetModes, type RoomAssets } from '../lib/roomAssets'
 import type { GameRow, GameSettings, PlayerRow } from '../lib/dbTypes'
 
 export function LobbyPage() {
@@ -69,6 +71,7 @@ export function LobbyPage() {
 
   const [configOpen, setConfigOpen] = useState(false)
   const [draftSettings, setDraftSettings] = useState<GameSettings | null>(null)
+  const [draftAssets, setDraftAssets] = useState<RoomAssets>({})
   const [draftMinPlayersInput, setDraftMinPlayersInput] = useState('2')
   const [draftMaxPlayersInput, setDraftMaxPlayersInput] = useState('4')
 
@@ -194,6 +197,7 @@ export function LobbyPage() {
   function openConfigEditor() {
     if (!game) return
     setDraftSettings(game.settings)
+    setDraftAssets(game.assets ?? {})
     setDraftMinPlayersInput(String(game.min_players))
     setDraftMaxPlayersInput(String(game.max_players))
     setConfigOpen(true)
@@ -329,7 +333,7 @@ export function LobbyPage() {
     setError(null)
     setBusy(true)
     try {
-      await updateGameSettings(game.id, { settings: draftSettings, minPlayers: draftMinPlayers, maxPlayers: draftMaxPlayers })
+      await updateGameSettings(game.id, { settings: draftSettings, minPlayers: draftMinPlayers, maxPlayers: draftMaxPlayers, assets: draftAssets })
       closeConfigEditor()
       await load()
     } catch (err) {
@@ -421,6 +425,7 @@ export function LobbyPage() {
           <p className="text-neutral-400">
             {gameTitleFor(game)} · {game.play_mode} · {players.length}/{game.max_players} players
             {gameDefinition && <> · {gameDefinition.describeOptions(gameDefinition.normalizeOptions(game.settings.gameOptions))}</>}
+            {gameDefinition && describeRoomAssets(gameDefinition, game.assets) && <> · {describeRoomAssets(gameDefinition, game.assets)}</>}
           </p>
           <p className="text-sm text-neutral-500">
             {game.visibility === 'public' ? 'Public — listed on the Public rooms screen' : 'Private — only reachable via this room’s link/code'}
@@ -501,7 +506,18 @@ export function LobbyPage() {
               <gameUi.OptionsEditor
                 value={gameDefinition.normalizeOptions(draftSettings.gameOptions)}
                 onChange={(gameOptions) => setDraftSettings({ ...draftSettings, gameOptions })}
+                assets={roomAssetModes(draftAssets)}
               />
+              <div className="mt-3">
+                <RoomAssetPicker
+                  definition={gameDefinition}
+                  ui={gameUi}
+                  value={draftAssets}
+                  onChange={setDraftAssets}
+                  minPlayers={draftMinPlayers}
+                  maxPlayers={draftMaxPlayers}
+                />
+              </div>
             </div>
           )}
 

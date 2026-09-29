@@ -1,6 +1,6 @@
 # Implementing a game — learnings
 
-Notes from adding **Incorporated**, **Shark**, **Rise & Fall** and **Magna Grecia** to this platform, meant to
+Notes from adding **Incorporated**, **Shark**, **Texas Hold'em**, **Bauernschlau**, **Rise & Fall** and **Magna Grecia** to this platform, meant to
 make the next game faster. Read `packages/unique-pick/README.md` first for
 the contract itself; this file is about how to get from a rulebook to a
 merged, green game package with the least rework.
@@ -17,6 +17,7 @@ merged, green game package with the least rework.
 2. **Copy a package, don't start blank.** `packages/shark` is the smallest
    complete example with dice, a board and a step machine;
    `packages/incorporated` shows prompts, hidden information and variants;
+   `packages/texas-holdem` shows secret hands dealt from a deck;
    `packages/unique-pick` shows simultaneous secret moves.
 3. **Split pure board logic from turn logic.** A `board.ts` of pure functions
    (geometry, groups, scoring, "is this move legal and what would it do")
@@ -52,9 +53,23 @@ merged, green game package with the least rework.
   `autoSales`) so `describeAction` and the view can narrate it without
   re-deriving. Reset per-action fields at the start of each action, or a
   folded forced follow-up will narrate them twice.
-- **A face-up stack needn't be hidden information.** If only the top card of
-  a shuffled stack is ever visible, draw each card when it's turned up
-  (with the same distribution the physical shuffle gives) instead of
+- **Deal hidden cards when they're revealed, not from a stored deck.**
+  Texas Hold'em draws each card at the moment it's dealt, from the cards not
+  yet dealt, instead of shuffling once and storing the order. Nothing undealt
+  sits in the state, so there's nothing extra for `redactGame` to mask. And
+  every move that reveals a card also draws random numbers, which is what
+  the platform's "lock revealed information" undo setting keys on. With a
+  pre-shuffled deck, the call that turns the flop would draw nothing and
+  would stay undoable.
+- **Split a secret draw from the choice it informs.** When a player must see
+  what they drew before deciding (Bauernschlau: look at the sheep, then pick
+  its field), make the draw its own action and the choice a second one. The
+  drawn thing sits in `GameData` for `redactGame` to mask, the actions and
+  narration never name it, and `isActionSecret` can stay `false`: the draw's
+  numbers are recorded on its entry, which a redacted viewer never receives.
+- **A face-up stack needn't be hidden information either.** If only the top
+  card of a shuffled stack is ever visible, draw each card when it's turned
+  up (with the same distribution the physical shuffle gives) instead of
   shuffling the stack at setup. Nothing then sits in the state that anyone
   must be kept from seeing (Magna Grecia's action cards, RULES.md AMBIG-3).
 - **When the rulebook has no map or card list, design one and say so.**
@@ -148,9 +163,18 @@ would have touched every module. What worked instead:
   `placementId: undefined` broke clients' patching until `diffState` learned
   to treat such keys as absent (`packages/sdk/src/statePatch.ts`). Prefer
   omitting a key or using `null`; the stack test is what catches this.
+- **A concession can end the game without your hook.** When a CONCEDE
+  leaves one player, the framework completes the game itself and never
+  calls `onPlayerEliminated`. `GameData` then keeps whatever step it was in
+  (mid-hand, mid-turn). The view must key "game over" off `state.status`,
+  not the game's own step, and fuzz invariants must allow it.
 - **Money formatting.** Don't use `toLocaleString` in rules narration: the
   Edge Runtime and browsers can format differently, and the narration is
   stored. Format by hand (`formatFT`).
+- **`onPlayerEliminated` isn't called for the last concession.** When a
+  concession leaves one player, the framework ends the game itself and never
+  calls the hook, so end-of-game fields the game computes (final scores) stay
+  unset. The view must cope with a completed game that has none.
 - **Error messages with pluralisation**: check each branch reads right —
   "hold only 2" vs "2 shares already cover the debt" are different
   failures; test both.
@@ -190,6 +214,10 @@ No migration is needed: the database stores `GameState` as opaque JSON.
   every rule.
 - Reuse the board module for UI affordances: Shark rings exactly the cells
   `placementsForRoll` returns and shows `previewPlacement` in each tooltip.
+- History review is the platform's. Give it your turns (`reviewStops`) and
+  explain a reviewed step from the `review` prop (`before`, `entries`)
+  instead of adding your own stepper — Rise & Fall's port had one, and two
+  review modes side by side confused players.
 - A view test that plays a whole game with `simplestMove`, rendering every
   N states, catches crashes on rare states cheaply.
 

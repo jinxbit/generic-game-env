@@ -19,7 +19,9 @@ example game, **Unique Pick** (`packages/unique-pick`), which exists to
 exercise every platform feature and is the test fixture, **Incorporated**
 (`packages/incorporated`, rules spec in its `RULES.md`), **Kogge**
 (`packages/kogge`, rules spec in its `RULES.md`), **Shark**
-(`packages/shark`, rules spec in its `RULES.md`), **Magna Grecia**
+(`packages/shark`, rules spec in its `RULES.md`), **Texas Hold'em**
+(`packages/texas-holdem`, rules spec in its `RULES.md`), **Bauernschlau**
+(`packages/bauernschlau`, rules spec in its `RULES.md`), **Magna Grecia**
 (`packages/magna-grecia`, rules spec in its `RULES.md`) and **Rise & Fall**
 (`packages/rise-and-fall`, the platform's original game, moved here from its
 standalone app — its engine runs behind an adapter; see its `README.md`). A game can live in
@@ -251,20 +253,28 @@ a write for this: the reverted #648 attempt doubled latency that way.
   why the topology is this way round, and §4 for the environments.
 - Migrations are numbered `NNNN_name.sql` and applied in lexicographic order.
   The history was squashed into `0001_baseline.sql` when this platform was
-  extracted from its first game; later ones follow it (`0002_game_secrets.sql`).
+  extracted from its first game; later ones follow it (`0002_game_secrets.sql`,
+  `0003_game_assets.sql`).
   Add new migrations after them, and never edit one
   once a project has applied it. `audit-and-fix-migrations.yml` verifies each
   migration's actual effect against a real schema dump — read its header
   comment before touching it.
 - Tables: `games`, `players`, `game_state`, `game_state_meta`, `profiles`,
   `push_subscriptions`, `app_config`, `chat_messages`, `chat_read_status`,
-  and `game_secrets` (0002 — server-only: RLS on, no policies; the random
-  seed of each rule-enforced game).
+  `game_secrets` (0002 — server-only: RLS on, no policies; the random
+  seed of each rule-enforced game) and `game_assets` (0003 — reusable things
+  a game can start from, like a saved map; payload opaque to the platform,
+  public ones admin-curated).
+  A room's chosen assets are **copied** into `games.assets` (a column, not a
+  `settings` key, so listings never carry them), and a random choice is
+  picked at Start and written back before genesis — genesis stays a function
+  of the row (`src/lib/roomAssets.ts`).
   Per-game config lives in the `games.settings` jsonb column rather than new
   columns — add pregame toggles there (`GameSettings` in `dbTypes.ts`), and
   game-specific options under `settings.gameOptions` (opaque to the platform;
-  the game's `normalizeOptions` makes sense of them). `games.game_type` is the
-  one game-related column: which registered game the room plays, immutable.
+  the game's `normalizeOptions` makes sense of them). `games.game_type` —
+  which registered game the room plays, immutable — and `games.assets` are the
+  only game-related columns.
   Adding a game needs no migration.
 - A local stack (`supabase start` / `db push` / `functions serve`,
   `supabase/config.toml`) needs Docker. The `@claude` GitHub Action runner

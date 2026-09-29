@@ -127,6 +127,16 @@ export interface GameState<TData = unknown, TOptions = unknown> {
    * game. Absent is equivalent to false.
    */
   lockRevealedInformationEnabled?: boolean
+  /**
+   * The assets the room was set up with (a saved map, say), by kind — each
+   * payload already through the game's AssetKind.normalize
+   * (./gameDefinition.ts). Copied here at genesis from the room's own row
+   * (games.assets) so a running game and its export stay self-contained,
+   * the same as `options`; `setup` reads them off its LobbyState. Absent
+   * when the room used none, so a game without assets keeps exactly the
+   * genesis it always had.
+   */
+  assets?: Record<string, unknown>
   /** The game-specific state — owned entirely by the game package. */
   game: TData
   /**

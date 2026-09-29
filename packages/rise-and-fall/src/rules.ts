@@ -33,14 +33,18 @@ import { listGameLengthBounds, listMapTemplates, listTales } from './content/res
 import { applyGameAction, nextForcedFollowUp } from './engine/applyAction.ts'
 import { moveCard } from './engine/cards.ts'
 import { describeCascade, describePrimaryAction, type DraftEvent } from './engine/gameLog.ts'
+import type { LoggedAction as EngineLoggedAction } from './engine/actions.ts'
+import { findTurnStops } from './engine/turnReview.ts'
 import { calculateVPBreakdown } from './engine/victoryPoints.ts'
 import { resolveGameContent, type GameContent } from './gameContent.ts'
+import { savedMapKind, type SavedMap } from './savedMap.ts'
 import type { GameAction, GameData, GameOptions, MapMode } from './types.ts'
 
 export type * from './types.ts'
 export type { GameState, Phase } from './adapter.ts'
 export { engineGenesisOf, toEngine } from './adapter.ts'
 export { resolveGameContent, type GameContent } from './gameContent.ts'
+export { extractSavedMap, normalizeSavedMap, savedMapKind, type SavedMap } from './savedMap.ts'
 
 export const GAME_ID = 'rise-and-fall'
 export const MIN_PLAYERS = 2
@@ -128,10 +132,17 @@ function applyEngineAction(state: GameState, action: GameAction): ActionResult<G
 /** Draws "build alone"'s random builder and order, in a fixed order: builder, then order. */
 function resolveSeating(lobby: LobbyState<GameOptions>, random: Random): GameData['seating'] {
   const seats = [...lobby.turnOrder]
-  if (lobby.options.mapMode !== 'solo') return { turnOrder: seats, builderId: null }
+  // A saved map replaces the map options, "build alone" included — nobody builds.
+  if (lobby.options.mapMode !== 'solo' || savedMapFor(lobby)) return { turnOrder: seats, builderId: null }
   const builderId = lobby.options.soloBuilder === 'random' ? random.pick(seats) : seats[0]
   const turnOrder = lobby.options.soloBuilderUnitOrder === 'random' ? random.shuffle(seats) : [...seats.filter((id) => id !== builderId), builderId]
   return { turnOrder, builderId }
+}
+
+/** The room's saved map (./savedMap.ts), if it has one that fits the seated count — the framework has already normalized it. */
+function savedMapFor(lobby: LobbyState<GameOptions>): SavedMap | null {
+  const map = lobby.assets?.map as SavedMap | undefined
+  return map && map.playerCount === lobby.players.length ? map : null
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +271,7 @@ export const gameDefinition: GameDefinition<GameData, GameOptions, GameAction> =
       hiddenInformationEnabled: lobby.hiddenInformationEnabled,
       lockRevealedInformationEnabled: Boolean(lobby.lockRevealedInformationEnabled),
       seating,
+      savedMap: savedMapFor(lobby),
     })
     return toPlatform(engine, lobby, seating)
   },
@@ -285,6 +297,23 @@ export const gameDefinition: GameDefinition<GameData, GameOptions, GameAction> =
 
   describePhase(phase) {
     return phase ? (PHASE_LABELS[phase] ?? phase) : ''
+  },
+
+  assetKinds: { map: savedMapKind },
+
+  // History review's turns: the standalone app's own turn stops
+  // (findTurnStops, ./engine/turnReview.ts) — a new stop each time the phase
+  // group changes, and within board setup and the actions phase each time the
+  // acting player does. A redacted viewer's HIDDEN_ACTION placeholder (a
+  // still-secret pick in a simultaneous phase) belongs to whatever group it
+  // sits in, the way the engine treats an undo.
+  reviewStops(entries) {
+    const asEngine = entries.map((entry) => ({
+      action: entry.action.type === 'HIDDEN_ACTION' ? { type: 'SET_ADMIN_MODE', playerId: entry.action.playerId ?? null, enabled: false } : entry.action,
+      turn: entry.turn,
+      timestamp: '',
+    })) as EngineLoggedAction[]
+    return findTurnStops(asEngine, 0)
   },
 }
 

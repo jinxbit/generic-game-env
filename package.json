@@ -15,12 +15,14 @@
     "seed:preview": "vitest run --config vitest.seed.config.ts"
   },
   "dependencies": {
+    "@game-platform/bauernschlau": "*",
     "@game-platform/incorporated": "*",
     "@game-platform/kogge": "*",
     "@game-platform/magna-grecia": "*",
     "@game-platform/rise-and-fall": "*",
     "@game-platform/sdk": "*",
     "@game-platform/shark": "*",
+    "@game-platform/texas-holdem": "*",
     "@game-platform/unique-pick": "*",
     "@supabase/supabase-js": "^2.112.2",
     "@vercel/analytics": "^2.0.1",

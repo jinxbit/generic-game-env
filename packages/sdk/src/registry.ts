@@ -22,6 +22,9 @@ export function registerGame(definition: AnyGameDefinition): void {
   // Same format the `games.game_type` column's check constraint enforces.
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(definition.id)) throw new Error(`Game id "${definition.id}" must be lowercase letters, digits and dashes (max 64).`)
   if (!Number.isInteger(definition.rulesVersion) || definition.rulesVersion < 1) throw new Error(`Game "${definition.id}" rulesVersion must be a positive integer.`)
+  for (const kind of Object.keys(definition.assetKinds ?? {})) {
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(kind)) throw new Error(`Game "${definition.id}" asset kind "${kind}" must be lowercase letters, digits and dashes (max 64).`)
+  }
   const versions = definitions.get(definition.id) ?? []
   const existing = versions.find((d) => d.rulesVersion === definition.rulesVersion)
   if (existing === definition) return

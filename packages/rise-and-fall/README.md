@@ -67,6 +67,29 @@ game's only randomness, drawn in `setup` and recorded as `setupRandom`;
 `GameData.seating` keeps what they resolved to, so the view can rebuild the
 engine's genesis (`engineGenesisOf`) without them.
 
+### Saved maps
+
+The game's one asset kind (`GameDefinition.assetKinds`, `src/savedMap.ts`) is
+a **map**: a finished terrain layout for one player count — what the
+standalone app kept in its `map_pool` table, now in the platform's generic
+asset library (`game_assets`). A room can start from a chosen saved map, or
+from a public one picked at random at Start; either way the game skips tile
+placement and the map options (building alone included) don't apply. A map
+for a different player count is ignored. Any game past tile placement can
+be saved as a map ("Save this map" in the game menu), and
+`src/view/SavedMapViews.tsx` is the map builder (the old app's
+`MapBuilderPage`) and the preview the platform's pickers and library page
+show.
+
+### History review
+
+The standalone app's "Show history" is now the platform's history review
+(one mode for every game): the game supplies its turns (`reviewStops` in
+`src/rules.ts`, the engine's own `findTurnStops`) and draws its overlays —
+halos and arrows on the units that acted, resource and score changes, the
+card-choice recap, territory changes — on whichever step the platform hands
+the view (`GameViewProps.review`, `src/view/useStepExplanation.ts`).
+
 ### Hidden information
 
 Each simultaneous phase keeps one secret until everyone has acted: which
@@ -79,9 +102,9 @@ narration of a hidden pick reads "chose a card".
 
 ## Not carried over from the standalone app
 
-- **The map pool** (admin-saved boards in a `map_pool` table, the map
-  builder and admin maps pages, "random saved map" mode). The platform has no
-  such table; pre-made maps are the content's `mapTemplates.json`.
+- **The map pool's own table and pages.** Saved maps are the platform's
+  generic game assets now (see "Saved maps" above) — the same features, a
+  different home. Maps in the old app's `map_pool` aren't imported.
 - **Per-account preferences** stored on the profile (unit plate colours, the
   unit-reserve display, confirm-before-revealing-cards) — see the view for
   what it keeps locally.
@@ -100,6 +123,8 @@ narration of a hidden pick reads "chose a card".
 - `src/__tests__/productionGames.test.ts` — real games from the original app,
   replayed through the platform and compared with the original engine, plus
   their declared final scores and winners.
+- `src/__tests__/savedMap.test.ts` — what a saved map is, saving one from a
+  game, and starting from one.
 - `src/__tests__/rules.test.ts` — options, setup modes, the envelope, concede
   at every stage, hidden information, narration.
 - `src/__tests__/fuzz.test.ts` — random games with unit actions, declines,

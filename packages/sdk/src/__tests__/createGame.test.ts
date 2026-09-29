@@ -1,6 +1,7 @@
 import { DEFAULT_GAME_OPTIONS } from '@game-platform/unique-pick/rules'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createNewGame } from '../createGame'
+import { registerGame } from '../registry'
 import { game, newGame } from './helpers'
 
 const seeds = [
@@ -83,5 +84,38 @@ describe('createNewGame', () => {
   it('is deterministic', () => {
     const params = { gameId: 'g1', gameType: 'unique-pick', playMode: 'live' as const, players: seeds }
     expect(createNewGame(params)).toEqual(createNewGame(params))
+  })
+})
+
+describe('createNewGame with assets', () => {
+  // The example game with one asset kind: a "board" is any positive number, for 2–3 players.
+  const withAssets = {
+    ...game,
+    id: 'unique-pick-assets',
+    assetKinds: {
+      board: {
+        label: 'Board',
+        normalize: (raw: unknown) => (typeof raw === 'number' && raw > 0 ? raw : null),
+        playerRange: () => ({ min: 2, max: 3 }),
+      },
+    },
+  }
+  registerGame(withAssets)
+
+  it('hands setup each payload the game accepts, normalized, and keeps them on the state', () => {
+    const setup = vi.spyOn(withAssets, 'setup')
+    const state = createNewGame({ gameId: 'g1', gameType: withAssets.id, playMode: 'async', players: seeds, assets: { board: 7, unknownKind: 1 } })
+    expect(setup.mock.calls[0][0].assets).toEqual({ board: 7 })
+    expect(state.assets).toEqual({ board: 7 })
+  })
+
+  it('drops a payload the game rejects, and leaves the key off entirely when nothing survives', () => {
+    const state = createNewGame({ gameId: 'g1', gameType: withAssets.id, playMode: 'async', players: seeds, assets: { board: -1 } })
+    expect('assets' in state).toBe(false)
+    expect('assets' in createNewGame({ gameId: 'g1', gameType: 'unique-pick', playMode: 'async', players: seeds, assets: { board: 7 } })).toBe(false)
+  })
+
+  it('rejects an asset kind id that is not a slug at registration', () => {
+    expect(() => registerGame({ ...withAssets, id: 'bad-kind-game', assetKinds: { 'Not A Slug': withAssets.assetKinds.board } })).toThrow(/asset kind/)
   })
 })

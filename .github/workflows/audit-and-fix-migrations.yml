@@ -7,7 +7,7 @@ name: Audit and Fix Supabase Migrations
 # answered PGRST205 "Could not find the table ... in the schema cache".)
 #
 # The migration set is a baseline, 0001_baseline.sql, plus later migrations
-# (0002_game_secrets.sql). This workflow
+# (0002_game_secrets.sql, 0003_game_assets.sql). This workflow
 # dumps the live public schema and greps for one solid marker per key object
 # the baseline creates (a table, a uniquely-named constraint/index/trigger/
 # function, a column, or a policy name), one row per section of the
@@ -146,6 +146,9 @@ jobs:
           chat|table public.chat_read_status|"public"."chat_read_status"|present|0001
           chat|chat_sender_display_names function|"chat_sender_display_names"|present|0001
           game secrets|table public.game_secrets (0002)|"public"."game_secrets"|present|0002
+          game assets|table public.game_assets (0003)|"public"."game_assets"|present|0003
+          game assets|game_assets read policy (0003)|read public game assets and your own|present|0003
+          game assets|games.assets column (0003)|"assets" "jsonb"|present|0003
           pre-squash leftover|table public.map_pool absent|"public"."map_pool"|absent|-
           pre-squash leftover|table public.observers absent|"public"."observers"|absent|-
           pre-squash leftover|game_state_meta.round_phase column absent (renamed phase)|"round_phase"|absent|-

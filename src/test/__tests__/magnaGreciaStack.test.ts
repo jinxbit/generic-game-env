@@ -115,7 +115,8 @@ describe('Magna Grecia through the Edge Functions', () => {
   it('refuses a move made for another seat', async () => {
     await startRoom(stack)
     const truth = await trueState(stack)
-    const other = PLAYERS.find((p) => p.id !== truth.pendingPlayerIds[0])!
+    // Not the seat to move, and not the room owner (seat-0), who may act for anyone.
+    const other = PLAYERS.find((p) => p.id !== truth.pendingPlayerIds[0] && userOf(p.id) !== USERS[0])!
     const result = await stack.applyAction(userOf(other.id), GAME_ID, { type: 'END_TURN', playerId: truth.pendingPlayerIds[0] })
     expect(result.ok).toBe(false)
   })

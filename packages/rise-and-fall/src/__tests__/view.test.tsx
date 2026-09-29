@@ -3,14 +3,14 @@
 // screen — for a seated player, a read-only viewer and a redacted viewer,
 // and the few controls the view adds submit the right actions.
 
-import { applyAction, redactStateForPlayer, type GameState as PlatformState } from '@game-platform/sdk'
+import { applyAction, redactStateForPlayer, replayActions, type GameState as PlatformState } from '@game-platform/sdk'
 import type { SeatInfo } from '@game-platform/sdk/ui'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { GameState } from '../adapter.ts'
 import { GameOptionsEditor } from '../GameOptionsEditor.tsx'
 import { GameView } from '../GameView.tsx'
-import { DEFAULT_GAME_OPTIONS } from '../rules.ts'
+import { DEFAULT_GAME_OPTIONS, gameDefinition } from '../rules.ts'
 import { newGame, play, simplestMove } from '../testing.ts'
 
 const COLORS = ['#e11d48', '#2563eb', '#16a34a', '#ca8a04']
@@ -100,23 +100,49 @@ describe('Rise & Fall view', () => {
     expect(redacted.actionHistory.at(-1)?.action.type).toBe('HIDDEN_ACTION')
     renderView(redacted, viewer)
     expect(screen.getByText('Your turn — choose a card to play.')).toBeInTheDocument()
-    // The turn review replays only up to the first hidden entry.
-    fireEvent.click(screen.getByRole('button', { name: 'Show history' }))
-    expect(screen.getByText('Reviewing history')).toBeInTheDocument()
-    expect(screen.queryByText(/can’t be replayed|can't be replayed/)).toBeNull()
   }, SLOW)
 
-  it('steps through history turn by turn and returns to live play', () => {
-    const state = playUntil(newGame(), (s) => s.phase === 'selectCards' && s.turn >= 2)
-    renderView(state, state.pendingPlayerIds[0])
-    fireEvent.click(screen.getByRole('button', { name: 'Show history' }))
-    expect(screen.getByText('Reviewing history')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '← Prev' }))
-    fireEvent.click(screen.getByRole('button', { name: '← Prev' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Next →' }))
-    expect(screen.queryByText(/can’t be replayed|can't be replayed/)).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Back to live' }))
-    expect(screen.queryByText('Reviewing history')).toBeNull()
+  it('explains a reviewed step: the game’s turns, halos on what acted, and each player’s change', () => {
+    const genesis = newGame()
+    const live = playUntil(genesis, (s) => s.phase === 'selectCards' && s.turn >= 2)
+    const stops = gameDefinition.reviewStops!(live.actionHistory)
+    // A new stop whenever the phase group or, in board setup and the actions phase, the acting player changes.
+    expect(stops[0]).toBe(0)
+    expect(stops.at(-1)).toBe(live.actionHistory.length)
+    expect(new Set(stops).size).toBe(stops.length)
+
+    // The last actions-phase turn before now, as the platform would hand it over.
+    const end = [...stops].reverse().find((stop, i, all) => i + 1 < all.length && live.actionHistory[stop - 1]?.action.type === 'PASS_ACTIONS')!
+    const start = stops[stops.indexOf(end) - 1]
+    const at = (index: number) => replayActions(genesis as PlatformState, live.actionHistory.slice(0, index)) as GameState
+    const review = { before: at(start), entries: live.actionHistory.slice(start, end), granularity: 'turn' as const }
+    render(<GameView state={at(end)} players={seats(live)} myPlayerId={null} submitting={false} onAction={vi.fn()} review={review} />)
+    // Review mode: the territory switch replaces the live toggle, nothing is actionable.
+    expect(screen.getByRole('button', { name: /Territory:/ })).toBeInTheDocument()
+    expect(screen.queryByText(/Your turn/)).toBeNull()
+  }, SLOW)
+
+  it('explains a step for a redacted viewer without replaying past a secret move', () => {
+    const genesis = newGame({ hiddenInformationEnabled: true })
+    const start = playUntil(genesis, inPhase('selectCards'))
+    const state = play(start, simplestMove(start)!)
+    const viewer = state.pendingPlayerIds[0]
+    const redacted = redactStateForPlayer(state as PlatformState, viewer) as unknown as GameState
+    const before = redactStateForPlayer(start as PlatformState, viewer) as unknown as GameState
+    expect(redacted.actionHistory.at(-1)?.action.type).toBe('HIDDEN_ACTION')
+    const stops = gameDefinition.reviewStops!(redacted.actionHistory)
+    expect(stops.at(-1)).toBe(redacted.actionHistory.length)
+    render(
+      <GameView
+        state={redacted}
+        players={seats(state)}
+        myPlayerId={null}
+        submitting={false}
+        onAction={vi.fn()}
+        review={{ before, entries: redacted.actionHistory.slice(-1), granularity: 'move' }}
+      />,
+    )
+    expect(screen.getByRole('button', { name: /Territory:/ })).toBeInTheDocument()
   }, SLOW)
 
   it('renders the end-of-game screen with its charts', () => {
@@ -156,4 +182,33 @@ describe('Rise & Fall view', () => {
     fireEvent.click(firstTale)
     expect(onChange.mock.lastCall![0].activeTaleIds).toHaveLength(1)
   }, SLOW)
+})
+
+describe('saved map views', () => {
+  it('previews a map and builds one tile by tile until it hands the finished map over', async () => {
+    const { SavedMapEditor, SavedMapPreview } = await import('../view/SavedMapViews.tsx')
+    const { extractSavedMap } = await import('../rules.ts')
+    let built = newGame({ players: 2 })
+    while (built.phase === 'placeTiles') built = play(built, simplestMove(built)!)
+    const map = extractSavedMap(built)!
+    const preview = render(<SavedMapPreview data={map} />)
+    expect(preview.getByText(/For 2 players/)).toBeInTheDocument()
+    preview.unmount()
+
+    const onChange = vi.fn()
+    const editor = render(<SavedMapEditor value={null} onChange={onChange} />)
+    fireEvent.click(editor.getByRole('button', { name: 'Start building' }))
+    expect(editor.getByRole('button', { name: 'Stop building' })).toBeInTheDocument()
+    editor.unmount()
+  })
+})
+
+describe('options editor with a saved map', () => {
+  it('replaces the map options with a note', () => {
+    const { rerender } = render(<GameOptionsEditor value={DEFAULT_GAME_OPTIONS} onChange={() => {}} assets={{ map: 'chosen' }} />)
+    expect(screen.getByText(/starts from a saved map, so the map options/)).toBeInTheDocument()
+    expect(screen.queryByText('Build alone')).toBeNull()
+    rerender(<GameOptionsEditor value={DEFAULT_GAME_OPTIONS} onChange={() => {}} assets={{ map: 'random' }} />)
+    expect(screen.getByText(/picked at random when the game starts/)).toBeInTheDocument()
+  })
 })

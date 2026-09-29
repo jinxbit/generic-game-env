@@ -23,8 +23,8 @@ describe('Magna Grecia view', () => {
     const { onAction, unmount } = show(state, 'p1')
     expect(screen.getByText('Your turn')).toBeInTheDocument()
     expect(screen.getByRole('radio', { name: /Place city tiles/ })).toHaveAttribute('aria-checked', 'true')
-    fireEvent.click(screen.getByRole('button', { name: /^H1 · green-bordered village.*found a city \(1 point\)/ }))
-    expect(onAction).toHaveBeenCalledWith({ type: 'PLACE_CITY', playerId: 'p1', cell: at(0, 7) })
+    fireEvent.click(screen.getByRole('button', { name: /^A5 · green-bordered village.*found a city \(1 point\)/ }))
+    expect(onAction).toHaveBeenCalledWith({ type: 'PLACE_CITY', playerId: 'p1', cell: at('A5') })
     unmount()
     show(state, 'p2')
     expect(screen.getByText(/Waiting for Player 1 to build/)).toBeInTheDocument()
@@ -32,13 +32,13 @@ describe('Magna Grecia view', () => {
   })
 
   it('asks which way a road runs, offering only the legal shapes', () => {
-    const state = fresh((g) => putCity(g, 'p1', at(0, 7)))
+    const state = fresh((g) => putCity(g, 'p1', at('A5')))
     const { onAction } = show(state, 'p1')
     fireEvent.click(screen.getByRole('radio', { name: /Build roads/ }))
-    fireEvent.click(screen.getByRole('button', { name: /^H2 · road: 3 shapes/ }))
-    expect(screen.getByText('Choose the road for H2:')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'north–south (straight)' }))
-    expect(onAction).toHaveBeenCalledWith({ type: 'PLACE_ROAD', playerId: 'p1', cell: at(1, 7), ends: [0, 2] })
+    fireEvent.click(screen.getByRole('button', { name: /^B6 · road: 3 shapes/ }))
+    expect(screen.getByText('Choose the road for B6:')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'south-east–north-west (straight)' }))
+    expect(onAction).toHaveBeenCalledWith({ type: 'PLACE_ROAD', playerId: 'p1', cell: at('B6'), ends: [1, 4] })
   })
 
   it('resupplies and ends the turn', () => {

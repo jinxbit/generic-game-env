@@ -11,70 +11,79 @@
 //
 // Server-reachable (imported by rules.ts): keep the `.ts` extensions.
 
-import { CELLS, COLS, ROWS, VILLAGE_AT } from './data.ts'
+import { cellAt, CELLS, HEXES, VILLAGE_AT } from './data.ts'
 import type { City, Dir, GameData, Market, MoveEvent, Oracle, PlayerId } from './types.ts'
 
 /** The board part of GameData — what every function here reads. */
 export type BoardData = Pick<GameData, 'cityTiles' | 'roads' | 'cities' | 'markets' | 'oracles'>
 
-export const DIRS: readonly Dir[] = [0, 1, 2, 3]
-export const DIR_NAMES = ['north', 'east', 'south', 'west'] as const
+export const DIRS: readonly Dir[] = [0, 1, 2, 3, 4, 5]
+export const DIR_NAMES = ['east', 'south-east', 'south-west', 'west', 'north-west', 'north-east'] as const
 
-/** R-ROAD-01: the six ways a tile can join two sides — straight (opposite sides) or curved. */
+/** Row and doubled-column step towards each side (see ./data.ts). */
+const STEPS: readonly [number, number][] = [
+  [0, 2],
+  [1, 1],
+  [1, -1],
+  [0, -2],
+  [-1, -1],
+  [-1, 1],
+]
+
+/**
+ * R-ROAD-01: the nine ways a tile can join two sides — straight across
+ * (opposite sides) or a gentle curve (sides two apart). A hex tile has no
+ * sharp turn between neighbouring sides (AMBIG-12).
+ */
 export const ROAD_SHAPES: readonly [Dir, Dir][] = [
+  [0, 3],
+  [1, 4],
+  [2, 5],
   [0, 2],
   [1, 3],
-  [0, 1],
-  [1, 2],
-  [2, 3],
-  [0, 3],
+  [2, 4],
+  [3, 5],
+  [0, 4],
+  [1, 5],
 ]
 
 export function opposite(d: Dir): Dir {
-  return ((d + 2) % 4) as Dir
-}
-
-export function rowOf(cell: number): number {
-  return Math.floor(cell / COLS)
-}
-
-export function colOf(cell: number): number {
-  return cell % COLS
-}
-
-/** "C7" — column letter, row number from 1. */
-export function cellLabel(cell: number): string {
-  return `${String.fromCharCode(65 + colOf(cell))}${rowOf(cell) + 1}`
+  return ((d + 3) % 6) as Dir
 }
 
 export function isCell(cell: unknown): cell is number {
   return typeof cell === 'number' && Number.isInteger(cell) && cell >= 0 && cell < CELLS
 }
 
-/** The cell beyond side `d` of `cell`, or null off the board (R-BOARD-01). */
+/** The hex beyond side `d` of `cell`, or null off the board (R-BOARD-01). */
 export function stepFrom(cell: number, d: Dir): number | null {
-  const row = rowOf(cell)
-  const col = colOf(cell)
-  if (d === 0) return row > 0 ? cell - COLS : null
-  if (d === 1) return col < COLS - 1 ? cell + 1 : null
-  if (d === 2) return row < ROWS - 1 ? cell + COLS : null
-  return col > 0 ? cell - 1 : null
+  const { row, col } = HEXES[cell]
+  const [dr, dc] = STEPS[d]
+  return cellAt(row + dr, col + dc)
 }
 
 export function neighbours(cell: number): number[] {
   return DIRS.map((d) => stepFrom(cell, d)).filter((n): n is number => n !== null)
 }
 
-/** Normalizes a pair of sides to ascending order, or null if it isn't two distinct sides. */
+/** Hexes between two cells (0 for the same cell). */
+export function hexDistance(a: number, b: number): number {
+  const dr = Math.abs(HEXES[a].row - HEXES[b].row)
+  const dc = Math.abs(HEXES[a].col - HEXES[b].col)
+  return Math.max(dr, (dr + dc) / 2)
+}
+
+/** Normalizes a road tile's pair of sides to ascending order, or null if it isn't one of ROAD_SHAPES. */
 export function normalizeEnds(ends: unknown): [Dir, Dir] | null {
   if (!Array.isArray(ends) || ends.length !== 2) return null
   const [a, b] = ends
-  if (!DIRS.includes(a) || !DIRS.includes(b) || a === b) return null
-  return a < b ? [a, b] : [b, a]
+  if (!DIRS.includes(a) || !DIRS.includes(b)) return null
+  const pair: [Dir, Dir] = a < b ? [a, b] : [b, a]
+  return ROAD_SHAPES.some(([x, y]) => x === pair[0] && y === pair[1]) ? pair : null
 }
 
 export function isStraight(ends: readonly [Dir, Dir]): boolean {
-  return ends[1] - ends[0] === 2
+  return ends[1] - ends[0] === 3
 }
 
 export function oracleAt(board: BoardData, cell: number): Oracle | undefined {

@@ -23,7 +23,6 @@
 import type { ActionDescription, ActionResult, GameDefinition, GameState as PlatformGameState, LobbyState, Random } from '@game-platform/sdk'
 import {
   analyse,
-  cellLabel,
   isCell,
   isStraight,
   marketValue,
@@ -37,6 +36,7 @@ import {
 } from './board.ts'
 import {
   cardById,
+  cellLabel,
   CARDS,
   CELLS,
   enhanced,

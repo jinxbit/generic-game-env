@@ -10,7 +10,9 @@ import {
   allowanceLeft,
   analyse,
   cityKey,
+  CELLS,
   connectionCount,
+  hexDistance,
   legalCityCells,
   legalMarkets,
   legalRoads,
@@ -26,25 +28,25 @@ import {
   type GameState,
 } from '../rules'
 import { newGame, simplestMove, testRandom } from '../testing'
-import type { GameAction } from '../types'
+import type { Dir, GameAction } from '../types'
 
 function candidates(s: GameState, r: Random): GameAction[] {
   const g = s.game
   const me = r.next() < 0.03 ? r.pick(g.seatOrder) : g.turnPlayerId!
   const a = analyse(g)
   const out: GameAction[] = []
-  if (r.next() < 0.1) out.push({ type: 'PLACE_CITY', playerId: me, cell: r.int(-1, 170) })
-  if (r.next() < 0.1) out.push({ type: 'PLACE_ROAD', playerId: me, cell: r.int(0, 168), ends: [r.int(0, 3), r.int(0, 3)] as never })
+  if (r.next() < 0.1) out.push({ type: 'PLACE_CITY', playerId: me, cell: r.int(-1, CELLS) })
+  if (r.next() < 0.1) out.push({ type: 'PLACE_ROAD', playerId: me, cell: r.int(0, CELLS - 1), ends: [r.int(0, 5), r.int(0, 5)] as never })
   const cities = legalCityCells(g, a)
   const roads = legalRoads(g)
   // Steer roads: prefer a tile that completes a connection, else one whose open end heads for the nearest place.
-  const placeCells = Array.from({ length: 169 }, (_, c) => c).filter((c) => placeAt(g, a, c) !== null)
-  const linked = (cell: number, d: 0 | 1 | 2 | 3) => {
+  const placeCells = Array.from({ length: CELLS }, (_, c) => c).filter((c) => placeAt(g, a, c) !== null)
+  const linked = (cell: number, d: Dir) => {
     const n = stepFrom(cell, d)
     return n !== null && (placeAt(g, a, n) !== null || (g.roads[n]?.owner === me && g.roads[n]!.ends.includes(opposite(d))))
   }
-  const distance = (cell: number) => Math.min(...placeCells.map((c) => Math.abs(Math.floor(c / 13) - Math.floor(cell / 13)) + Math.abs((c % 13) - (cell % 13))))
-  const score = ({ cell, ends }: { cell: number; ends: [0 | 1 | 2 | 3, 0 | 1 | 2 | 3] }) => {
+  const distance = (cell: number) => Math.min(...placeCells.map((c) => hexDistance(c, cell)))
+  const score = ({ cell, ends }: { cell: number; ends: [Dir, Dir] }) => {
     const open = ends.filter((d) => !linked(cell, d))
     if (open.length === 0) return 100
     return -Math.min(...open.map((d) => distance(stepFrom(cell, d)!)))

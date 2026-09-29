@@ -72,11 +72,13 @@ merged, green game package with the least rework.
   up (with the same distribution the physical shuffle gives) instead of
   shuffling the stack at setup. Nothing then sits in the state that anyone
   must be kept from seeing (Magna Grecia's action cards, RULES.md AMBIG-3).
-- **When the rulebook has no map or card list, design one and say so.**
-  Magna Grecia's rulebook shows the board only in examples; the package
-  ships an original map as data (`src/data.ts`, drawn as ASCII so it reads
-  at a glance) and a test pins its design constraints (village counts, no
-  two villages touching) rather than exact cells.
+- **Ask for the board before inventing one.** Magna Grecia's rulebook shows
+  the board only in examples, so it first shipped an invented square map.
+  The real board, supplied afterwards, was a hex grid — which changed
+  neighbours, road shapes and the whole view, not just village positions.
+  Keep the board as data in the board's own coordinates (`src/data.ts`
+  names hexes `G3` as the printed board does), so tests and the log read
+  against the physical board.
 - **Draw randomness in a fixed order and a fixed count per branch** (Shark:
   colour die then zone die, always both). Replay feeds back exactly the
   recorded numbers; drawing a different number of values on replay is an

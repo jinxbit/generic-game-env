@@ -22,10 +22,12 @@ The package follows the layout of the example game
 
 ## How the engine works
 
-- **Static data** (`src/data.ts`): the 13 × 13 map, drawn as ASCII, with 10
-  green-bordered edge villages and 13 inland ones; the 12 action cards; the
-  step tracks that give each action's enhanced value. The rulebook shows
-  neither map nor card values, so both are original (RULES.md AMBIG-1/2).
+- **Static data** (`src/data.ts`): the published hex board (rows A–P,
+  columns 1–35 in the board's own doubled numbering, so cells read `G3`),
+  with its 10 green-bordered starting villages and 32 inland ones; the 12
+  action cards; the step tracks that give each action's enhanced value. The
+  rulebook shows no card values, so the cards are original (RULES.md
+  AMBIG-2).
 - **The tiles are the truth.** `src/board.ts` keeps nothing incremental:
   `analyse` rebuilds cities (groups of a player's tiles, named by the village
   they were founded on) and roads (chains of joined tiles) from the tiles,
@@ -56,7 +58,8 @@ Every open point is listed in RULES.md §11 with the behaviour chosen. The ones
 most likely to matter at the table:
 
 - A road tile's end must point at what it builds from (AMBIG-5), and may not
-  point off the board (AMBIG-4).
+  point off the board (AMBIG-4). On the hexes a tile runs straight or bends
+  gently; there is no sharp turn (AMBIG-12).
 - Founding off a village is only the two-tile bridge (AMBIG-6), and a tile
   may not join two of your own cities (AMBIG-7).
 - A market worth 0 can't be sold (AMBIG-9).

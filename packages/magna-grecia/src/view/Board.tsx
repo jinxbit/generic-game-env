@@ -1,22 +1,34 @@
 import type { SeatInfo } from '@game-platform/sdk/ui'
-import { cellLabel, cityById, CELLS, colOf, COLS, isGreenVillage, isMarketActive, marketPlace, marketValue, oracleAt, rowOf, VILLAGE_AT, type Analysis } from '../rules.ts'
+import { cellLabel, cityById, HEXES, isGreenVillage, isMarketActive, MAX_COL, marketPlace, marketValue, oracleAt, ROWS, VILLAGE_AT, type Analysis } from '../rules.ts'
 import type { GameData } from '../types.ts'
-import { nameOf, roadPath, seatColourOf } from './helpers.ts'
+import { HEX_POINTS, HEX_R, nameOf, roadPath, seatColourOf } from './helpers.ts'
 
 const LAND = '#3f3a33'
 const GRID = '#57504a'
 const MARKET_SPOTS: [number, number][] = [
+  [-8, -8],
+  [8, -8],
+  [-8, 8],
   [8, 8],
-  [32, 8],
-  [8, 32],
-  [32, 32],
 ]
+
+/** Where a hex's centre is drawn: doubled columns sit half a hex apart, rows three quarters of a hex. */
+const X_STEP = (HEX_R * Math.sqrt(3)) / 2
+const Y_STEP = HEX_R * 1.5
+const PAD = 2
+const WIDTH = (MAX_COL + 1) * X_STEP + 2 * PAD
+const HEIGHT = (ROWS - 1) * Y_STEP + 2 * HEX_R + 2 * PAD
+
+function centre(cell: number): [number, number] {
+  const { row, col } = HEXES[cell]
+  return [PAD + col * X_STEP, PAD + HEX_R + row * Y_STEP]
+}
 
 /** An arrow pointing from `from` towards `to`, for an oracle's attention. */
 function arrowTowards(from: number, to: number): string {
-  const dr = rowOf(to) - rowOf(from)
-  const dc = colOf(to) - colOf(from)
-  const angle = Math.atan2(dr, dc)
+  const [fx, fy] = centre(from)
+  const [tx, ty] = centre(to)
+  const angle = Math.atan2(ty - fy, tx - fx)
   const arrows = ['→', '↘', '↓', '↙', '←', '↖', '↑', '↗']
   return arrows[(Math.round(angle / (Math.PI / 4)) + 8) % 8]
 }
@@ -44,9 +56,10 @@ function describeCell(game: GameData, analysis: Analysis, players: SeatInfo[], c
 }
 
 /**
- * The 13 × 13 map. Each cell draws what's on it — village, oracle, city tile,
- * road — and the markets standing on it (a city's on its village spaces). Cells in
- * `highlight` are ringed and clickable; the map scales to its container.
+ * The hex map, drawn as one scalable SVG. Each hex draws what's on it —
+ * village, oracle, city tile, road — and the markets standing on it (a
+ * city's on its village spaces). Hexes in `highlight` are ringed and act as
+ * buttons.
  */
 export function Board({
   game,
@@ -66,70 +79,71 @@ export function Board({
   onCell: (cell: number) => void
 }) {
   return (
-    <div className="w-full max-w-[36rem]">
-      <div className="grid rounded-md border border-neutral-700" style={{ gridTemplateColumns: `repeat(${COLS}, minmax(0, 1fr))` }}>
-        {Array.from({ length: CELLS }, (_, cell) => {
+    <div className="w-full max-w-[48rem] overflow-hidden rounded-md border border-neutral-700 bg-[#1e3a44]">
+      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="block h-auto w-full" role="group" aria-label="Map of Magna Grecia">
+        {HEXES.map((_, cell) => {
           const hint = highlight?.get(cell)
+          const clickable = hint !== undefined && !disabled
           const title = describeCell(game, analysis, players, cell) + (hint ? ` · ${hint}` : '')
           const road = game.roads[cell]
           const owner = game.cityTiles[cell]
           const oracle = oracleAt(game, cell)
           const village = VILLAGE_AT.has(cell) && !oracle
           const markets = game.markets.filter((m) => m.cell === cell)
+          const [x, y] = centre(cell)
           return (
-            <button
+            <g
               key={cell}
-              type="button"
-              title={title}
-              aria-label={title}
-              disabled={hint === undefined || disabled}
-              onClick={() => onCell(cell)}
-              className={`relative aspect-square ${hint !== undefined ? 'cursor-pointer' : 'cursor-default'}`}
+              transform={`translate(${x} ${y})`}
+              role={clickable ? 'button' : undefined}
+              aria-label={clickable ? title : undefined}
+              tabIndex={clickable ? 0 : undefined}
+              onClick={clickable ? () => onCell(cell) : undefined}
+              onKeyDown={clickable ? (e) => (e.key === 'Enter' || e.key === ' ') && onCell(cell) : undefined}
+              className={clickable ? 'cursor-pointer' : undefined}
             >
-              <svg viewBox="0 0 40 40" className="absolute inset-0 h-full w-full">
-                <rect x="0" y="0" width="40" height="40" fill={LAND} stroke={GRID} strokeWidth="0.5" />
-                {owner && <rect x="1.5" y="1.5" width="37" height="37" rx="3" fill={seatColourOf(players, owner)} stroke="#00000066" strokeWidth="1.5" />}
-                {village && (
-                  <g>
-                    {isGreenVillage(cell) && <rect x="3" y="3" width="34" height="34" rx="5" fill="none" stroke="#22c55e" strokeWidth="2.5" />}
-                    <path d="M 12 22 L 20 13 L 28 22 L 28 29 L 12 29 Z" fill={owner ? '#ffffffcc' : '#e7e5e4'} stroke="#1c1917" strokeWidth="1" />
-                  </g>
-                )}
-                {oracle && (
-                  <g>
-                    <circle cx="20" cy="20" r="13" fill="#4c1d95" stroke="#c4b5fd" strokeWidth="1.5" />
-                    <path d="M 12 17 L 20 11 L 28 17 Z M 13 18 H 27 V 20 H 13 Z M 14 21 H 16 V 27 H 14 Z M 19 21 H 21 V 27 H 19 Z M 24 21 H 26 V 27 H 24 Z M 12 28 H 28 V 30 H 12 Z" fill="#ede9fe" />
-                    {oracle.attention !== null && (
-                      <>
-                        <circle cx="33" cy="7" r="5" fill={seatColourOf(players, cityById(game, oracle.attention)!.owner)} stroke="#000" strokeWidth="1" />
-                        <text x="33" y="10" textAnchor="middle" fontSize="8" fill="#000">
-                          {arrowTowards(cell, oracle.attention)}
-                        </text>
-                      </>
-                    )}
-                  </g>
-                )}
-                {road && <path d={roadPath(road.ends)} fill="none" stroke={seatColourOf(players, road.owner)} strokeWidth="7" strokeLinecap="butt" />}
-                {road && <path d={roadPath(road.ends)} fill="none" stroke="#00000055" strokeWidth="1.5" strokeDasharray="3 3" />}
-                {markets.map((m, i) => (
-                  <circle
-                    key={m.owner}
-                    cx={MARKET_SPOTS[i % 4][0]}
-                    cy={MARKET_SPOTS[i % 4][1]}
-                    r="4.5"
-                    fill={m.sold ? 'none' : seatColourOf(players, m.owner)}
-                    stroke={m.sold ? seatColourOf(players, m.owner) : '#000'}
-                    strokeWidth={m.sold ? 2 : 1}
-                    opacity={m.sold || isMarketActive(game, analysis, m) ? 1 : 0.4}
-                  />
-                ))}
-                {hint !== undefined && <rect x="1" y="1" width="38" height="38" fill="#6366f133" stroke="#818cf8" strokeWidth="2" />}
-                {selected === cell && <rect x="1" y="1" width="38" height="38" fill="none" stroke="#fff" strokeWidth="3" />}
-              </svg>
-            </button>
+              <title>{title}</title>
+              <polygon points={HEX_POINTS} fill={owner ? seatColourOf(players, owner) : LAND} stroke={GRID} strokeWidth="0.8" />
+              {village && (
+                <g>
+                  {isGreenVillage(cell) && <polygon points={HEX_POINTS} transform="scale(0.82)" fill="none" stroke="#22c55e" strokeWidth="2.5" />}
+                  <path d="M -7 1 L 0 -7 L 7 1 L 7 7 L -7 7 Z" fill={owner ? '#ffffffcc' : '#d6b98c'} stroke="#1c1917" strokeWidth="0.8" />
+                </g>
+              )}
+              {oracle && (
+                <g>
+                  <circle r="12" fill="#4c1d95" stroke="#c4b5fd" strokeWidth="1.2" />
+                  <path d="M -7 -3 L 0 -8 L 7 -3 Z M -6 -2 H 6 V 0 H -6 Z M -5 1 H -3 V 6 H -5 Z M -1 1 H 1 V 6 H -1 Z M 3 1 H 5 V 6 H 3 Z M -7 7 H 7 V 8.5 H -7 Z" fill="#ede9fe" />
+                  {oracle.attention !== null && (
+                    <>
+                      <circle cx="10" cy="-10" r="5" fill={seatColourOf(players, cityById(game, oracle.attention)!.owner)} stroke="#000" strokeWidth="0.8" />
+                      <text x="10" y="-7.5" textAnchor="middle" fontSize="7" fill="#000">
+                        {arrowTowards(cell, oracle.attention)}
+                      </text>
+                    </>
+                  )}
+                </g>
+              )}
+              {road && <path d={roadPath(road.ends)} fill="none" stroke={seatColourOf(players, road.owner)} strokeWidth="6" />}
+              {road && <path d={roadPath(road.ends)} fill="none" stroke="#00000055" strokeWidth="1.2" strokeDasharray="2.5 2.5" />}
+              {markets.map((m, i) => (
+                <circle
+                  key={m.owner}
+                  cx={MARKET_SPOTS[i % 4][0]}
+                  cy={MARKET_SPOTS[i % 4][1]}
+                  r="3.8"
+                  fill={m.sold ? 'none' : seatColourOf(players, m.owner)}
+                  stroke={m.sold ? seatColourOf(players, m.owner) : '#000'}
+                  strokeWidth={m.sold ? 1.8 : 0.8}
+                  opacity={m.sold || isMarketActive(game, analysis, m) ? 1 : 0.4}
+                />
+              ))}
+              {hint !== undefined && <polygon points={HEX_POINTS} transform="scale(0.92)" fill="#6366f133" stroke="#818cf8" strokeWidth="2" />}
+              {selected === cell && <polygon points={HEX_POINTS} transform="scale(0.92)" fill="none" stroke="#fff" strokeWidth="2.5" />}
+            </g>
           )
         })}
-      </div>
+      </svg>
     </div>
   )
 }

@@ -18,8 +18,10 @@ Games are packages: the rules framework is `packages/sdk`
 example game, **Unique Pick** (`packages/unique-pick`), which exists to
 exercise every platform feature and is the test fixture, **Incorporated**
 (`packages/incorporated`, rules spec in its `RULES.md`), **Kogge**
-(`packages/kogge`, rules spec in its `RULES.md`) and **Shark**
-(`packages/shark`, rules spec in its `RULES.md`). A game can live in
+(`packages/kogge`, rules spec in its `RULES.md`), **Shark**
+(`packages/shark`, rules spec in its `RULES.md`) and **Rise & Fall**
+(`packages/rise-and-fall`, the platform's original game, moved here from its
+standalone app — its engine runs behind an adapter; see its `README.md`). A game can live in
 its own repo and be installed. One deployment hosts whichever games
 `src/games/registry.ts` registers. Read `packages/unique-pick/README.md`
 before building or changing a game, and `GAME_IMPLEMENTATION_LEARNINGS.md`

@@ -1,0 +1,1597 @@
+import { beforeEach, describe, expect, it } from 'vitest'
+import { applyAction, applyActionWithSteps } from '../applyAction'
+import { createEmptyBoard, getTile, setTile } from '../board'
+import type { BoardGenerationContent } from '../boardGenerationContent'
+import { EMPTY_BOARD_GENERATION_CONTENT } from '../boardGenerationContent'
+import { UNIT_KINDS, cardIdFor, moveCard, syncCardZonesWithBoard } from '../cards'
+import { createNewGame, startGame } from '../createGame'
+import { replayActions } from '../replay'
+import { beginSelectCardsPhase } from '../round'
+import type { Coordinate, GameState, Unit } from '../types'
+import { EMPTY_UNIT_CONTENT } from '../unitContent'
+import type { UnitContent } from '../unitContent'
+
+let placeholderUnitCounter = 0
+function nextPlaceholderUnitId(): string {
+  placeholderUnitCounter += 1
+  return `test_unit_${placeholderUnitCounter}`
+}
+
+/**
+ * A quick, self-contained way to get an active game for testing round
+ * mechanics (CHOOSE_CARD, RESOLVE_UNIT_ACTION, etc.) — places units
+ * directly rather than driving through the real board-setup flow (tested
+ * on its own in boardSetup.test.ts). This is NOT what startGame() does
+ * anymore — see the 'createNewGame / startGame' describe block below for
+ * that — it's purely a test fixture for the describe('applyAction', ...)
+ * block underneath, which cares about round mechanics, not board setup.
+ */
+function makeActiveGame(): GameState {
+  const lobby = createNewGame({
+    gameId: 'game_1',
+    playMode: 'hotseat',
+    board: createEmptyBoard('hex'),
+    players: [
+      { id: 'p1', authUserId: 'auth_1', displayName: 'Alice', color: 'red' },
+      { id: 'p2', authUserId: 'auth_2', displayName: 'Bob', color: 'blue' },
+    ],
+  })
+
+  const startingPositions: Record<string, Coordinate> = { p1: { q: 0, r: 0 }, p2: { q: 5, r: 0 } }
+  let board = lobby.board
+  const units: Unit[] = []
+  for (const player of lobby.players) {
+    const coord = startingPositions[player.id]
+    board = setTile(board, coord, 'plain')
+    units.push(
+      {
+        id: nextPlaceholderUnitId(),
+        ownerId: player.id,
+        kind: 'settlement',
+        coord,
+        movement: { isMobile: false, terrains: [], canCrossCliffs: false },
+        traits: ['settlement'],
+      },
+      {
+        id: nextPlaceholderUnitId(),
+        ownerId: player.id,
+        kind: 'mobile-unit',
+        coord,
+        movement: { isMobile: true, terrains: ['plain'], canCrossCliffs: false, moveDistance: 1 },
+        traits: ['mobile'],
+      },
+      {
+        id: nextPlaceholderUnitId(),
+        ownerId: player.id,
+        kind: 'ship',
+        coord,
+        movement: { isMobile: true, terrains: ['water'], canCrossCliffs: false, moveDistance: 1 },
+        traits: ['ship'],
+      },
+    )
+  }
+
+  const active: GameState = { ...lobby, board, units, status: 'active' }
+  return beginSelectCardsPhase(syncCardZonesWithBoard(active))
+}
+
+describe('createNewGame / startGame', () => {
+  it('starts in lobby status with no units', () => {
+    const lobby = createNewGame({
+      gameId: 'game_1',
+      playMode: 'live',
+      board: createEmptyBoard('hex'),
+      players: [{ id: 'p1', authUserId: 'auth_1', displayName: 'Alice', color: 'red' }],
+    })
+    expect(lobby.status).toBe('lobby')
+    expect(lobby.units).toHaveLength(0)
+  })
+
+  it('delegates to the real board-setup procedure (beginBoardSetup)', () => {
+    const lobby = createNewGame({
+      gameId: 'game_1',
+      playMode: 'hotseat',
+      board: createEmptyBoard('hex'),
+      players: [
+        { id: 'p1', authUserId: 'auth_1', displayName: 'Alice', color: 'red' },
+        { id: 'p2', authUserId: 'auth_2', displayName: 'Bob', color: 'blue' },
+      ],
+    })
+    const content: BoardGenerationContent = { startingWaterShapeCells: [{ q: 0, r: 0 }, { q: 1, r: 0 }], tiers: [] }
+
+    const state = startGame(lobby, content)
+
+    expect(state.status).toBe('boardSetup')
+    // 2 players -> one interlocked pair of the shape seeded onto the board.
+    expect(Object.keys(state.board.tiles)).toHaveLength(4)
+  })
+
+  it('throws when starting a game that is not in the lobby', () => {
+    const lobby = createNewGame({
+      gameId: 'game_1',
+      playMode: 'hotseat',
+      board: createEmptyBoard('hex'),
+      players: [{ id: 'p1', authUserId: 'auth_1', displayName: 'Alice', color: 'red' }],
+    })
+    const active: GameState = { ...lobby, status: 'active' }
+    expect(() => startGame(active, EMPTY_BOARD_GENERATION_CONTENT)).toThrow()
+  })
+
+  // activeTaleIds/gameLength are pure passthrough data (see GameState's own
+  // doc comments) — the engine never interprets either, so createNewGame
+  // just carries whatever the caller passes, defaulting to "off"/"unset"
+  // for callers (mostly other tests) that don't care.
+  it('carries activeTaleIds/gameLength through when given', () => {
+    const lobby = createNewGame({
+      gameId: 'game_1',
+      playMode: 'hotseat',
+      board: createEmptyBoard('hex'),
+      players: [{ id: 'p1', authUserId: 'auth_1', displayName: 'Alice', color: 'red' }],
+      activeTaleIds: ['the-ports', 'the-banks'],
+      gameLength: 5,
+    })
+    expect(lobby.activeTaleIds).toEqual(['the-ports', 'the-banks'])
+    expect(lobby.gameLength).toBe(5)
+  })
+
+  it('defaults activeTaleIds/gameLength to "off"/"unset" when omitted', () => {
+    const lobby = createNewGame({
+      gameId: 'game_1',
+      playMode: 'hotseat',
+      board: createEmptyBoard('hex'),
+      players: [{ id: 'p1', authUserId: 'auth_1', displayName: 'Alice', color: 'red' }],
+    })
+    expect(lobby.activeTaleIds).toEqual([])
+    expect(lobby.gameLength).toBe(Infinity)
+  })
+})
+
+describe('applyAction', () => {
+  let state: GameState
+
+  beforeEach(() => {
+    state = makeActiveGame()
+  })
+
+  it('rejects CHOOSE_CARD for a card not in hand', () => {
+    const result = applyAction(state, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: cardIdFor('p1', 'city') })
+    expect(result.ok).toBe(false)
+  })
+
+  it('rejects a player choosing a card twice in the same round', () => {
+    const shipCardId = cardIdFor('p1', 'ship')
+    const first = applyAction(state, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: shipCardId })
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+
+    const second = applyAction(first.state, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: shipCardId })
+    expect(second.ok).toBe(false)
+  })
+
+  it('moves to the actions phase once every player has chosen a card', () => {
+    // p2's hand is a single card too — p1's own CHOOSE_CARD already folds
+    // p2's forced pick into this SAME applyAction() call
+    // (RULE_ENFORCEMENT_PLAN.md §4.2/§4.3), reaching the actions phase in
+    // one call rather than two.
+    const p1Choice = applyAction(state, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: cardIdFor('p1', 'ship') })
+    expect(p1Choice.ok).toBe(true)
+    if (!p1Choice.ok) return
+    expect(p1Choice.state.roundPhase).toBe('actions')
+    expect(p1Choice.state.activePlayerId).toBe('p1')
+    expect(p1Choice.state.pendingPlayerIds).toEqual(['p1', 'p2'])
+  })
+
+  it('rejects RESOLVE_UNIT_ACTION outside the actions phase', () => {
+    const result = applyAction(state, { type: 'RESOLVE_UNIT_ACTION', playerId: 'p1', unitActions: [] })
+    expect(result.ok).toBe(false)
+  })
+
+  it('rejects RESOLVE_UNIT_ACTION out of turn order', () => {
+    // p2's hand is a single card — p1's own CHOOSE_CARD already folds p2's
+    // forced pick into the same applyAction() call (RULE_ENFORCEMENT_PLAN.md
+    // §4.2/§4.3), so no separate submission for p2 is needed (or possible).
+    const p1Choice = applyAction(state, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: cardIdFor('p1', 'ship') })
+    if (!p1Choice.ok) throw new Error('setup failed')
+
+    const result = applyAction(p1Choice.state, { type: 'RESOLVE_UNIT_ACTION', playerId: 'p2', unitActions: [] })
+    expect(result.ok).toBe(false)
+  })
+
+  it('rejects PURCHASE_CARD outside the purchase phase', () => {
+    const result = applyAction(state, { type: 'PURCHASE_CARD', playerId: 'p1', cardId: cardIdFor('p1', 'city') })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error).toContain('purchase phase')
+    }
+  })
+
+  it('does not mutate the input state', () => {
+    const snapshot = JSON.stringify(state)
+    applyAction(state, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: cardIdFor('p1', 'ship') })
+    expect(JSON.stringify(state)).toBe(snapshot)
+  })
+
+  it('rejects actions when the game is not active', () => {
+    const lobbyState: GameState = { ...state, status: 'lobby' }
+    const result = applyAction(lobbyState, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: cardIdFor('p1', 'ship') })
+    expect(result.ok).toBe(false)
+  })
+})
+
+describe('RETRACT_CHOICE (RULE_ENFORCEMENT_PLAN.md §4.4)', () => {
+  let state: GameState
+
+  beforeEach(() => {
+    state = makeActiveGame()
+  })
+
+  it('rejects retracting before a card has been chosen this round', () => {
+    const result = applyAction(state, { type: 'RETRACT_CHOICE', playerId: 'p1' })
+    expect(result.ok).toBe(false)
+  })
+
+  // p1's hand normally has a single card ('ship'), same as p2's — but a
+  // single-card hand means RETRACT_CHOICE's own result would immediately be
+  // re-forced right back (nothing else to switch to, per §4.2/§4.3's "no
+  // real decision" rule), which is exactly what these tests below want to
+  // isolate FROM. So p1 (only) gets a second card added directly to their
+  // hand here — a real choice again, so the retraction actually sticks —
+  // while the "p1 chose, p2 still pending" intermediate state itself is
+  // still constructed directly rather than via two applyAction() calls,
+  // since p2's own single-card hand would otherwise fold into p1's own
+  // CHOOSE_CARD (RULE_ENFORCEMENT_PLAN.md §4.2/§4.3).
+  function makeStateWithP1RealChoice(): GameState {
+    const p1 = state.players.find((p) => p.id === 'p1')!
+    return {
+      ...state,
+      players: state.players.map((p) => (p.id === 'p1' ? { ...p1, handCardIds: [...p1.handCardIds, cardIdFor('p1', 'city')] } : p)),
+      chosenCardIdByPlayerId: { ...state.chosenCardIdByPlayerId, p1: cardIdFor('p1', 'ship') },
+      pendingPlayerIds: ['p2'],
+    }
+  }
+
+  it('clears the pick and puts the player back in pendingPlayerIds', () => {
+    const retracted = applyAction(makeStateWithP1RealChoice(), { type: 'RETRACT_CHOICE', playerId: 'p1' })
+    expect(retracted.ok).toBe(true)
+    if (!retracted.ok) return
+    expect(retracted.state.chosenCardIdByPlayerId.p1).toBeNull()
+    // p2 is also back in pendingPlayerIds the instant p1 retracts (RETRACT_
+    // CHOICE puts p1 at the end, right after p2, who was already pending) —
+    // but p2's hand is still a single card, so that same RETRACT_CHOICE
+    // dispatch immediately folds p2's forced pick back in too
+    // (RULE_ENFORCEMENT_PLAN.md §4.2/§4.3), leaving only p1 (the one with a
+    // real choice again) still pending.
+    expect(retracted.state.pendingPlayerIds).toEqual(['p1'])
+    expect(retracted.state.roundPhase).toBe('selectCards')
+  })
+
+  it('rejects retracting the same pick twice in a row', () => {
+    const retracted = applyAction(makeStateWithP1RealChoice(), { type: 'RETRACT_CHOICE', playerId: 'p1' })
+    if (!retracted.ok) throw new Error('setup failed')
+
+    const secondRetract = applyAction(retracted.state, { type: 'RETRACT_CHOICE', playerId: 'p1' })
+    expect(secondRetract.ok).toBe(false)
+  })
+
+  it('leaves another still-pending player untouched, including their own not-yet-resolved pick', () => {
+    const bothPending: GameState = {
+      ...makeStateWithP1RealChoice(),
+      chosenCardIdByPlayerId: { ...state.chosenCardIdByPlayerId, p1: cardIdFor('p1', 'ship'), p2: cardIdFor('p2', 'ship') },
+      pendingPlayerIds: ['p1', 'p2'],
+    }
+
+    const retracted = applyAction(bothPending, { type: 'RETRACT_CHOICE', playerId: 'p1' })
+    expect(retracted.ok).toBe(true)
+    if (!retracted.ok) return
+    expect(retracted.state.chosenCardIdByPlayerId.p2).toBe(cardIdFor('p2', 'ship'))
+  })
+
+  it('allows choosing again after retracting — redo is just CHOOSE_CARD, no separate endpoint', () => {
+    const retracted = applyAction(makeStateWithP1RealChoice(), { type: 'RETRACT_CHOICE', playerId: 'p1' })
+    if (!retracted.ok) throw new Error('setup failed')
+
+    // p2's hand is still a single card, so re-choosing for p1 (the only
+    // other pending player) folds p2's forced pick right back in too
+    // (RULE_ENFORCEMENT_PLAN.md §4.2/§4.3), same as an ordinary first-time
+    // CHOOSE_CARD would.
+    const rechosen = applyAction(retracted.state, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: cardIdFor('p1', 'ship') })
+    expect(rechosen.ok).toBe(true)
+    if (!rechosen.ok) return
+    expect(rechosen.state.chosenCardIdByPlayerId.p1).toBe(cardIdFor('p1', 'ship'))
+    expect(rechosen.state.roundPhase).toBe('actions')
+  })
+
+  it('rejects retracting outside the select-cards/actions phases (decline/purchase)', () => {
+    // p2's hand is a single card — p1's own CHOOSE_CARD already folds p2's
+    // forced pick into the same applyAction() call (RULE_ENFORCEMENT_PLAN.md
+    // §4.2/§4.3), reaching the actions phase in one call.
+    const p1Chosen = applyAction(state, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: cardIdFor('p1', 'ship') })
+    if (!p1Chosen.ok) throw new Error('setup failed')
+    expect(p1Chosen.state.roundPhase).toBe('actions')
+
+    const declineState: GameState = { ...p1Chosen.state, roundPhase: 'decline' }
+    expect(applyAction(declineState, { type: 'RETRACT_CHOICE', playerId: 'p1' }).ok).toBe(false)
+    const purchaseState: GameState = { ...p1Chosen.state, roundPhase: 'purchase' }
+    expect(applyAction(purchaseState, { type: 'RETRACT_CHOICE', playerId: 'p1' }).ok).toBe(false)
+  })
+
+  it('rejects retracting for a player eliminated after choosing (e.g. by conceding) — otherwise they get stuck back in pendingPlayerIds with no one left to act for them', () => {
+    const chosen = applyAction(state, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: cardIdFor('p1', 'ship') })
+    if (!chosen.ok) throw new Error('setup failed')
+    const players = chosen.state.players.map((p) => (p.id === 'p1' ? { ...p, eliminated: true } : p))
+    const eliminatedState: GameState = { ...chosen.state, players }
+
+    const result = applyAction(eliminatedState, { type: 'RETRACT_CHOICE', playerId: 'p1' })
+    expect(result.ok).toBe(false)
+  })
+})
+
+describe('RETRACT_CHOICE after the round resolves via someone else\'s pick (issue #547)', () => {
+  let state: GameState
+
+  beforeEach(() => {
+    state = makeActiveGame()
+  })
+
+  /**
+   * Mirrors the issue's reported order: p1 picks first (a real decision,
+   * same reason `makeStateWithP1RealChoice` above needs p1's extra card —
+   * otherwise retracting would just get immediately re-forced right back),
+   * then p2 — still on their default single-card hand — picks last and, by
+   * being the one who empties `pendingPlayerIds`, resolves the phase and
+   * reveals both picks. A real `applyAction` CHOOSE_CARD call for p2 (not a
+   * hand-built state) so `roundPhase`/`pendingPlayerIds`/
+   * `resolvedUnitIdsThisTurn`/`unitsCreatedThisTurn` all land exactly where
+   * `beginActionsPhase` (../round.ts) actually puts them.
+   */
+  function makeResolvedStateWithP1Pending(): GameState {
+    const p1 = state.players.find((p) => p.id === 'p1')!
+    const p1PickedState: GameState = {
+      ...state,
+      players: state.players.map((p) => (p.id === 'p1' ? { ...p1, handCardIds: [...p1.handCardIds, cardIdFor('p1', 'city')] } : p)),
+      chosenCardIdByPlayerId: { ...state.chosenCardIdByPlayerId, p1: cardIdFor('p1', 'ship') },
+      pendingPlayerIds: ['p2'],
+    }
+    const p2Choice = applyAction(p1PickedState, { type: 'CHOOSE_CARD', playerId: 'p2', cardId: cardIdFor('p2', 'ship') })
+    if (!p2Choice.ok) throw new Error('setup failed')
+    return p2Choice.state
+  }
+
+  it("reopens select-cards for just the caller, leaving the other player's already-revealed pick untouched", () => {
+    const resolved = makeResolvedStateWithP1Pending()
+    expect(resolved.roundPhase).toBe('actions')
+    expect(resolved.chosenCardIdByPlayerId.p2).toBe(cardIdFor('p2', 'ship'))
+
+    const retracted = applyAction(resolved, { type: 'RETRACT_CHOICE', playerId: 'p1' })
+    expect(retracted.ok).toBe(true)
+    if (!retracted.ok) return
+    expect(retracted.state.roundPhase).toBe('selectCards')
+    expect(retracted.state.chosenCardIdByPlayerId.p1).toBeNull()
+    // p2's already-revealed pick is untouched — the whole point of issue #547.
+    expect(retracted.state.chosenCardIdByPlayerId.p2).toBe(cardIdFor('p2', 'ship'))
+    expect(retracted.state.pendingPlayerIds).toEqual(['p1'])
+  })
+
+  it('allows choosing a different card afterwards, resolving the round again without a second reveal from p2', () => {
+    const resolved = makeResolvedStateWithP1Pending()
+    const retracted = applyAction(resolved, { type: 'RETRACT_CHOICE', playerId: 'p1' })
+    if (!retracted.ok) throw new Error('setup failed')
+
+    const rechosen = applyAction(retracted.state, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: cardIdFor('p1', 'city') })
+    expect(rechosen.ok).toBe(true)
+    if (!rechosen.ok) return
+    expect(rechosen.state.roundPhase).toBe('actions')
+    expect(rechosen.state.chosenCardIdByPlayerId.p1).toBe(cardIdFor('p1', 'city'))
+    expect(rechosen.state.chosenCardIdByPlayerId.p2).toBe(cardIdFor('p2', 'ship'))
+  })
+
+  it('rejects once GameSettings.lockRevealedInformationEnabled is on', () => {
+    const resolved: GameState = { ...makeResolvedStateWithP1Pending(), lockRevealedInformationEnabled: true }
+    const result = applyAction(resolved, { type: 'RETRACT_CHOICE', playerId: 'p1' })
+    expect(result.ok).toBe(false)
+  })
+
+  it('rejects once anything has happened in the actions phase — e.g. p1 already passed', () => {
+    const resolved = makeResolvedStateWithP1Pending()
+    const passed = applyAction(resolved, { type: 'PASS_ACTIONS', playerId: 'p1' })
+    if (!passed.ok) throw new Error('setup failed')
+
+    const result = applyAction(passed.state, { type: 'RETRACT_CHOICE', playerId: 'p2' })
+    expect(result.ok).toBe(false)
+  })
+
+  it('rejects for a player eliminated after the round resolved', () => {
+    const resolved = makeResolvedStateWithP1Pending()
+    const players = resolved.players.map((p) => (p.id === 'p1' ? { ...p, eliminated: true } : p))
+    const eliminatedState: GameState = { ...resolved, players }
+
+    const result = applyAction(eliminatedState, { type: 'RETRACT_CHOICE', playerId: 'p1' })
+    expect(result.ok).toBe(false)
+  })
+})
+
+/**
+ * Every card kind in hand for both players (unlike makeActiveGame above,
+ * whose units only back a 'ship' card) — needed to reach the decline phase
+ * with more than one real, distinctly-sourced card available per player:
+ * one in `discard` (whatever they play this round) and several still in
+ * `hand` (declinable straight from there), which is exactly the
+ * distinction RETRACT_DECLINE's source-zone tracking exists to preserve.
+ */
+function makeActiveGameWithFullHands(): GameState {
+  const lobby = createNewGame({
+    gameId: 'game_1',
+    playMode: 'hotseat',
+    board: createEmptyBoard('hex'),
+    players: [
+      { id: 'p1', authUserId: 'auth_1', displayName: 'Alice', color: 'red' },
+      { id: 'p2', authUserId: 'auth_2', displayName: 'Bob', color: 'blue' },
+    ],
+  })
+
+  const players = lobby.players.map((player) => {
+    let next = player
+    for (const cardId of player.supplyCardIds) {
+      next = moveCard(next, cardId, 'hand')
+    }
+    return next
+  })
+
+  const units: Unit[] = lobby.players.flatMap((player, playerIndex) =>
+    UNIT_KINDS.map((kind, kindIndex) => ({
+      id: `${player.id}_seed_${kind}`,
+      ownerId: player.id,
+      kind,
+      coord: { q: 100 + kindIndex, r: 100 + playerIndex },
+      movement: { isMobile: false, terrains: [], canCrossCliffs: false },
+      traits: [],
+    })),
+  )
+
+  return { ...lobby, status: 'active', players, units }
+}
+
+/** Drives `state` through select-cards and actions to reach the decline phase, with `achievementsClaimedThisRound` owed cards per player. p1 plays 'city' (which ends up in discard) and p2 plays 'ship'. */
+function reachDeclinePhase(state: GameState, achievementsClaimedThisRound = 1): GameState {
+  const withClaims: GameState = { ...state, achievementsClaimedThisRound }
+  let result = applyAction(withClaims, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: cardIdFor('p1', 'city') })
+  if (!result.ok) throw new Error('setup failed')
+  result = applyAction(result.state, { type: 'CHOOSE_CARD', playerId: 'p2', cardId: cardIdFor('p2', 'ship') })
+  if (!result.ok) throw new Error('setup failed')
+  result = applyAction(result.state, { type: 'PASS_ACTIONS', playerId: 'p1' })
+  if (!result.ok) throw new Error('setup failed')
+  result = applyAction(result.state, { type: 'PASS_ACTIONS', playerId: 'p2' })
+  if (!result.ok) throw new Error('setup failed')
+  if (result.state.roundPhase !== 'decline') throw new Error('setup did not reach the decline phase')
+  return result.state
+}
+
+describe('RETRACT_DECLINE (RULE_ENFORCEMENT_PLAN.md §10)', () => {
+  it('rejects retracting a card never moved to decline this phase', () => {
+    const state = reachDeclinePhase(makeActiveGameWithFullHands())
+    const result = applyAction(state, { type: 'RETRACT_DECLINE', playerId: 'p1', cardId: cardIdFor('p1', 'temple') })
+    expect(result.ok).toBe(false)
+  })
+
+  it('rejects retracting outside the decline phase', () => {
+    const state: GameState = { ...reachDeclinePhase(makeActiveGameWithFullHands()), roundPhase: 'purchase' }
+    const result = applyAction(state, { type: 'RETRACT_DECLINE', playerId: 'p1', cardId: cardIdFor('p1', 'temple') })
+    expect(result.ok).toBe(false)
+  })
+
+  it('returns a hand-sourced card to hand and re-adds the player to pendingPlayerIds', () => {
+    const declineState = reachDeclinePhase(makeActiveGameWithFullHands())
+    const templeId = cardIdFor('p1', 'temple')
+    const declined = applyAction(declineState, { type: 'MOVE_TO_DECLINE', playerId: 'p1', cardId: templeId })
+    if (!declined.ok) throw new Error('setup failed')
+    expect(declined.state.pendingPlayerIds).not.toContain('p1')
+
+    const retracted = applyAction(declined.state, { type: 'RETRACT_DECLINE', playerId: 'p1', cardId: templeId })
+    expect(retracted.ok).toBe(true)
+    if (!retracted.ok) return
+    const p1 = retracted.state.players.find((p) => p.id === 'p1')!
+    expect(p1.handCardIds).toContain(templeId)
+    expect(p1.declineCardIds).not.toContain(templeId)
+    expect(retracted.state.pendingPlayerIds).toContain('p1')
+  })
+
+  it("returns this round's played card to discard, not hand", () => {
+    const declineState = reachDeclinePhase(makeActiveGameWithFullHands())
+    const cityId = cardIdFor('p1', 'city')
+    const p1Before = declineState.players.find((p) => p.id === 'p1')!
+    expect(p1Before.discardCardIds).toContain(cityId)
+
+    const declined = applyAction(declineState, { type: 'MOVE_TO_DECLINE', playerId: 'p1', cardId: cityId })
+    if (!declined.ok) throw new Error('setup failed')
+
+    const retracted = applyAction(declined.state, { type: 'RETRACT_DECLINE', playerId: 'p1', cardId: cityId })
+    expect(retracted.ok).toBe(true)
+    if (!retracted.ok) return
+    const p1 = retracted.state.players.find((p) => p.id === 'p1')!
+    expect(p1.discardCardIds).toContain(cityId)
+    expect(p1.handCardIds).not.toContain(cityId)
+  })
+
+  it('does not require catching up on every owed card first — one of two owed cards is retractable while the other is still pending', () => {
+    const declineState = reachDeclinePhase(makeActiveGameWithFullHands(), 2)
+    const templeId = cardIdFor('p1', 'temple')
+    const declined = applyAction(declineState, { type: 'MOVE_TO_DECLINE', playerId: 'p1', cardId: templeId })
+    if (!declined.ok) throw new Error('setup failed')
+    // p1 owed 2, declined 1 -> still owes 1 more.
+    expect(declined.state.pendingPlayerIds.filter((id) => id === 'p1')).toHaveLength(1)
+
+    const retracted = applyAction(declined.state, { type: 'RETRACT_DECLINE', playerId: 'p1', cardId: templeId })
+    expect(retracted.ok).toBe(true)
+    if (!retracted.ok) return
+    expect(retracted.state.players.find((p) => p.id === 'p1')!.handCardIds).toContain(templeId)
+    expect(retracted.state.pendingPlayerIds.filter((id) => id === 'p1')).toHaveLength(2)
+  })
+
+  it("rejects retracting a card sitting in decline from an earlier, already-resolved round (not this phase's own addition)", () => {
+    let state = reachDeclinePhase(makeActiveGameWithFullHands())
+    const nomadId = cardIdFor('p1', 'nomad')
+    const declined = applyAction(state, { type: 'MOVE_TO_DECLINE', playerId: 'p1', cardId: nomadId })
+    if (!declined.ok) throw new Error('setup failed')
+    // Simulate that decline having resolved into a later phase, where
+    // declineSourceZoneByCardId has since been reset (a fresh decline phase
+    // started) but the card is still sitting in declineCardIds, unbought-back.
+    state = { ...declined.state, declineSourceZoneByCardId: {} }
+
+    const result = applyAction(state, { type: 'RETRACT_DECLINE', playerId: 'p1', cardId: nomadId })
+    expect(result.ok).toBe(false)
+  })
+
+  it('allows re-declining after retracting', () => {
+    const declineState = reachDeclinePhase(makeActiveGameWithFullHands())
+    const templeId = cardIdFor('p1', 'temple')
+    const declined = applyAction(declineState, { type: 'MOVE_TO_DECLINE', playerId: 'p1', cardId: templeId })
+    if (!declined.ok) throw new Error('setup failed')
+    const retracted = applyAction(declined.state, { type: 'RETRACT_DECLINE', playerId: 'p1', cardId: templeId })
+    if (!retracted.ok) throw new Error('setup failed')
+
+    const redeclined = applyAction(retracted.state, { type: 'MOVE_TO_DECLINE', playerId: 'p1', cardId: templeId })
+    expect(redeclined.ok).toBe(true)
+    if (!redeclined.ok) return
+    expect(redeclined.state.players.find((p) => p.id === 'p1')!.declineCardIds).toContain(templeId)
+  })
+
+  it("leaves the other player's own still-secret decline addition untouched", () => {
+    // Both owe 2 so the phase is still open (roundPhase stays 'decline')
+    // after each has declined only one — otherwise p1 and p2 each declining
+    // their one owed card would resolve the phase before the retraction
+    // below gets a chance to run.
+    const declineState = reachDeclinePhase(makeActiveGameWithFullHands(), 2)
+    const templeId = cardIdFor('p1', 'temple')
+    const p2ShipId = cardIdFor('p2', 'ship')
+    let result = applyAction(declineState, { type: 'MOVE_TO_DECLINE', playerId: 'p1', cardId: templeId })
+    if (!result.ok) throw new Error('setup failed')
+    result = applyAction(result.state, { type: 'MOVE_TO_DECLINE', playerId: 'p2', cardId: p2ShipId })
+    if (!result.ok) throw new Error('setup failed')
+
+    const retracted = applyAction(result.state, { type: 'RETRACT_DECLINE', playerId: 'p1', cardId: templeId })
+    expect(retracted.ok).toBe(true)
+    if (!retracted.ok) return
+    const p2 = retracted.state.players.find((p) => p.id === 'p2')!
+    expect(p2.declineCardIds).toContain(p2ShipId)
+  })
+
+  it('rejects retracting for a player eliminated after declining (e.g. by conceding) — otherwise they get stuck back in pendingPlayerIds with no one left to act for them', () => {
+    const declineState = reachDeclinePhase(makeActiveGameWithFullHands())
+    const templeId = cardIdFor('p1', 'temple')
+    const declined = applyAction(declineState, { type: 'MOVE_TO_DECLINE', playerId: 'p1', cardId: templeId })
+    if (!declined.ok) throw new Error('setup failed')
+    const players = declined.state.players.map((p) => (p.id === 'p1' ? { ...p, eliminated: true } : p))
+    const eliminatedState: GameState = { ...declined.state, players }
+
+    const result = applyAction(eliminatedState, { type: 'RETRACT_DECLINE', playerId: 'p1', cardId: templeId })
+    expect(result.ok).toBe(false)
+  })
+
+  describe('retracting all at once (no cardId, issue #505)', () => {
+    it("retracts every one of the caller's own additions from this phase in a single call, each back to its own source zone", () => {
+      const declineState = reachDeclinePhase(makeActiveGameWithFullHands(), 2)
+      const templeId = cardIdFor('p1', 'temple')
+      const cityId = cardIdFor('p1', 'city') // this round's played card, sitting in discard
+      let result = applyAction(declineState, { type: 'MOVE_TO_DECLINE', playerId: 'p1', cardId: templeId })
+      if (!result.ok) throw new Error('setup failed')
+      result = applyAction(result.state, { type: 'MOVE_TO_DECLINE', playerId: 'p1', cardId: cityId })
+      if (!result.ok) throw new Error('setup failed')
+      expect(result.state.pendingPlayerIds.filter((id) => id === 'p1')).toHaveLength(0)
+
+      const retracted = applyAction(result.state, { type: 'RETRACT_DECLINE', playerId: 'p1' })
+      expect(retracted.ok).toBe(true)
+      if (!retracted.ok) return
+      const p1 = retracted.state.players.find((p) => p.id === 'p1')!
+      expect(p1.declineCardIds).not.toContain(templeId)
+      expect(p1.declineCardIds).not.toContain(cityId)
+      expect(p1.handCardIds).toContain(templeId)
+      expect(p1.discardCardIds).toContain(cityId)
+      // Both owed cards are back to being pending, as if neither had been declined yet.
+      expect(retracted.state.pendingPlayerIds.filter((id) => id === 'p1')).toHaveLength(2)
+    })
+
+    it('is legal even though another player has acted since, as long as the phase is still open', () => {
+      // Both owe 2 so the phase stays open after p1 declines both and p2 declines one.
+      const declineState = reachDeclinePhase(makeActiveGameWithFullHands(), 2)
+      const templeId = cardIdFor('p1', 'temple')
+      const nomadId = cardIdFor('p1', 'nomad')
+      const p2ShipId = cardIdFor('p2', 'ship')
+      let result = applyAction(declineState, { type: 'MOVE_TO_DECLINE', playerId: 'p1', cardId: templeId })
+      if (!result.ok) throw new Error('setup failed')
+      result = applyAction(result.state, { type: 'MOVE_TO_DECLINE', playerId: 'p1', cardId: nomadId })
+      if (!result.ok) throw new Error('setup failed')
+      // p2 acts in between p1's declines and p1's retraction.
+      result = applyAction(result.state, { type: 'MOVE_TO_DECLINE', playerId: 'p2', cardId: p2ShipId })
+      if (!result.ok) throw new Error('setup failed')
+
+      const retracted = applyAction(result.state, { type: 'RETRACT_DECLINE', playerId: 'p1' })
+      expect(retracted.ok).toBe(true)
+      if (!retracted.ok) return
+      const p1 = retracted.state.players.find((p) => p.id === 'p1')!
+      expect(p1.declineCardIds).toEqual([])
+      // p2's own still-secret addition is untouched.
+      const p2 = retracted.state.players.find((p) => p.id === 'p2')!
+      expect(p2.declineCardIds).toContain(p2ShipId)
+    })
+
+    it('rejects when the caller has nothing of their own to retract this phase', () => {
+      const declineState = reachDeclinePhase(makeActiveGameWithFullHands())
+      const result = applyAction(declineState, { type: 'RETRACT_DECLINE', playerId: 'p1' })
+      expect(result.ok).toBe(false)
+    })
+
+    it('retracts only cards still standing from the current phase, not an already-public prior round addition', () => {
+      let state = reachDeclinePhase(makeActiveGameWithFullHands())
+      const nomadId = cardIdFor('p1', 'nomad')
+      const declined = applyAction(state, { type: 'MOVE_TO_DECLINE', playerId: 'p1', cardId: nomadId })
+      if (!declined.ok) throw new Error('setup failed')
+      // Simulate that decline having resolved into a later phase (declineSourceZoneByCardId reset).
+      state = { ...declined.state, declineSourceZoneByCardId: {} }
+
+      const result = applyAction(state, { type: 'RETRACT_DECLINE', playerId: 'p1' })
+      expect(result.ok).toBe(false)
+    })
+  })
+})
+
+describe('applyAction — resyncs unit movement from unitContent before dispatching', () => {
+  // Regression: a reported game had a Merchant whose movement.canCrossCliffs
+  // was stamped false at creation time, from before a content rules fix
+  // (canCrossCliffs: true) landed — the fix alone never reached that
+  // already-placed unit, since Unit.movement is a one-time copy, not a
+  // live lookup. Every action now refreshes every unit's movement from the
+  // current unitContent first, so an already-placed unit picks up a
+  // content-driven rules fix on the very next action, not just new ones.
+  it("refreshes an already-placed unit's stale movement profile from current content", () => {
+    const state = makeActiveGame()
+    const staleUnits = state.units.map((u) => (u.kind === 'ship' ? { ...u, movement: { ...u.movement, canCrossCliffs: false } } : u))
+    const staleState: GameState = { ...state, units: staleUnits }
+    const freshContent: UnitContent = {
+      ...EMPTY_UNIT_CONTENT,
+      movementByKind: { ship: { isMobile: true, terrains: ['water'], canCrossCliffs: true, moveDistance: 1 } },
+    }
+
+    const result = applyAction(staleState, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: cardIdFor('p1', 'ship') }, freshContent)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const ships = result.state.units.filter((u) => u.kind === 'ship')
+    expect(ships.length).toBeGreaterThan(0)
+    expect(ships.every((u) => u.movement.canCrossCliffs)).toBe(true)
+  })
+
+  it('leaves units untouched when unitContent has no movement entry for their kind', () => {
+    const state = makeActiveGame()
+
+    const result = applyAction(state, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: cardIdFor('p1', 'ship') }, EMPTY_UNIT_CONTENT)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.units).toEqual(state.units)
+  })
+})
+
+describe('applyResolveUnitAction — different units of the same kind may choose different actions', () => {
+  const testUnitContent: UnitContent = {
+    actionsByKind: {
+      city: [
+        { id: 'generate-income', name: 'Generate Income', description: '', effect: { actionType: 'income', goldByTerrain: { forest: 3 } } },
+        {
+          id: 'create-nomad',
+          name: 'Create Nomad',
+          description: '',
+          effect: { actionType: 'create', targetUnit: 'nomad', targetHex: { location: 'adj' }, cost: {} },
+        },
+      ],
+    },
+    movementByKind: { nomad: { isMobile: true, terrains: ['plain'], canCrossCliffs: false } },
+    terrainLevels: { water: 0, plain: 1, forest: 2, mountain: 3, glacier: 4 },
+    resourceCaps: { gold: null, wood: 5, stone: 5 },
+    unitSupplyCaps: {},
+    companionKindsByCardKind: {},
+    activationsPerTurnByKind: {},
+  }
+
+  function makeTwoCitiesState(): GameState {
+    const board = setTile(setTile(setTile(createEmptyBoard('hex'), { q: 0, r: 0 }, 'forest'), { q: 5, r: 0 }, 'plain'), { q: 6, r: 0 }, 'plain')
+    const cityA: Unit = {
+      id: 'city_a',
+      ownerId: 'p1',
+      kind: 'city',
+      coord: { q: 0, r: 0 },
+      movement: { isMobile: false, terrains: [], canCrossCliffs: false },
+      traits: [],
+    }
+    const cityB: Unit = {
+      id: 'city_b',
+      ownerId: 'p1',
+      kind: 'city',
+      coord: { q: 5, r: 0 },
+      movement: { isMobile: false, terrains: [], canCrossCliffs: false },
+      traits: [],
+    }
+    const lobby = createNewGame({
+      gameId: 'game_2',
+      playMode: 'hotseat',
+      board,
+      players: [
+        { id: 'p1', authUserId: null, displayName: 'Alice', color: 'red' },
+        { id: 'p2', authUserId: null, displayName: 'Bob', color: 'blue' },
+      ],
+      resourceBank: { gold: 100, wood: 100, stone: 100 },
+    })
+    // p2 never gets a real turn in this fixture — it's not testing multi-
+    // player interaction at all, just p1's own action resolution — so p2 is
+    // excluded up front (not in turnOrder, marked eliminated) rather than
+    // given no cards and left for beginSelectCardsPhase to eliminate: since
+    // eliminatePlayer ends the game outright once only one player remains
+    // (elimination.ts), letting the engine eliminate p2 here would complete
+    // the game before this test's own CHOOSE_CARD/RESOLVE_UNIT_ACTION ever
+    // ran.
+    const active: GameState = {
+      ...lobby,
+      board,
+      units: [cityA, cityB],
+      status: 'active',
+      turnOrder: ['p1'],
+      players: lobby.players.map((p) => (p.id === 'p2' ? { ...p, eliminated: true } : p)),
+    }
+    const selecting = beginSelectCardsPhase(syncCardZonesWithBoard(active))
+    const chosen = applyAction(selecting, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: cardIdFor('p1', 'city') })
+    if (!chosen.ok) throw new Error('setup failed')
+    return chosen.state
+  }
+
+  it('resolves a different action per unit in a single RESOLVE_UNIT_ACTION', () => {
+    const state = makeTwoCitiesState()
+    expect(state.roundPhase).toBe('actions')
+
+    const result = applyAction(
+      state,
+      {
+        type: 'RESOLVE_UNIT_ACTION',
+        playerId: 'p1',
+        unitActions: [
+          { unitId: 'city_a', actionId: 'generate-income' },
+          { unitId: 'city_b', actionId: 'create-nomad', target: { q: 6, r: 0 } },
+        ],
+      },
+      testUnitContent,
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // city_a's income ran exactly once (not city_b's too, which has no income effect).
+    expect(result.state.players.find((p) => p.id === 'p1')!.resources.gold).toBe(3)
+    // city_b's create ran exactly once (not city_a's too, which wasn't given that action).
+    expect(result.state.units).toHaveLength(3)
+    expect(result.state.units.some((u) => u.kind === 'nomad' && u.coord.q === 6 && u.coord.r === 0)).toBe(true)
+  })
+
+  it('leaves a unit with no assigned action untouched', () => {
+    const state = makeTwoCitiesState()
+
+    const result = applyAction(
+      state,
+      { type: 'RESOLVE_UNIT_ACTION', playerId: 'p1', unitActions: [{ unitId: 'city_a', actionId: 'generate-income' }] },
+      testUnitContent,
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.players.find((p) => p.id === 'p1')!.resources.gold).toBe(3)
+    expect(result.state.units).toHaveLength(2)
+  })
+})
+
+describe('applyResolveUnitAction — unit actions resolve in order, one at a time', () => {
+  const nomadContent: UnitContent = {
+    actionsByKind: {
+      nomad: [
+        {
+          id: 'produce-resource',
+          name: 'Produce Resource',
+          description: '',
+          effect: { actionType: 'produce', resourceByTerrain: { forest: { wood: 1 } } },
+        },
+        {
+          id: 'transform-to-city',
+          name: 'Transform to City',
+          description: '',
+          effect: { actionType: 'transform', targetUnit: 'city', targetHex: { terrainType: ['plain', 'forest'], location: 'self' }, destroySelf: true, cost: { wood: 1 } },
+        },
+      ],
+    },
+    movementByKind: {},
+    terrainLevels: { water: 0, plain: 1, forest: 2, mountain: 3, glacier: 4 },
+    resourceCaps: { gold: null, wood: 5, stone: 5 },
+    unitSupplyCaps: {},
+    companionKindsByCardKind: {},
+    activationsPerTurnByKind: {},
+  }
+
+  function makeTwoNomadsState(): GameState {
+    const board = setTile(setTile(createEmptyBoard('hex'), { q: 0, r: 0 }, 'forest'), { q: 5, r: 0 }, 'plain')
+    const nomadA: Unit = { id: 'nomad_a', ownerId: 'p1', kind: 'nomad', coord: { q: 0, r: 0 }, movement: { isMobile: true, terrains: [], canCrossCliffs: false }, traits: [] }
+    const nomadB: Unit = { id: 'nomad_b', ownerId: 'p1', kind: 'nomad', coord: { q: 5, r: 0 }, movement: { isMobile: true, terrains: [], canCrossCliffs: false }, traits: [] }
+    const lobby = createNewGame({
+      gameId: 'game_3',
+      playMode: 'hotseat',
+      board,
+      players: [
+        { id: 'p1', authUserId: null, displayName: 'Alice', color: 'red' },
+        { id: 'p2', authUserId: null, displayName: 'Bob', color: 'blue' },
+      ],
+      resourceBank: { gold: 100, wood: 100, stone: 100 },
+    })
+    // p2 excluded up front, same reasoning as makeTwoCitiesState above —
+    // eliminating them for real (no cards) would end the game outright.
+    const active: GameState = {
+      ...lobby,
+      board,
+      units: [nomadA, nomadB],
+      status: 'active',
+      turnOrder: ['p1'],
+      players: lobby.players.map((p) => (p.id === 'p2' ? { ...p, eliminated: true } : p)),
+    }
+    const selecting = beginSelectCardsPhase(syncCardZonesWithBoard(active))
+    const chosen = applyAction(selecting, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: cardIdFor('p1', 'nomad') })
+    if (!chosen.ok) throw new Error('setup failed')
+    return chosen.state
+  }
+
+  it("a unit spending a resource sees an EARLIER unit's gain in the same submission", () => {
+    const state = makeTwoNomadsState()
+    expect(state.players.find((p) => p.id === 'p1')!.resources.wood).toBe(0)
+
+    const result = applyAction(
+      state,
+      {
+        type: 'RESOLVE_UNIT_ACTION',
+        playerId: 'p1',
+        unitActions: [
+          { unitId: 'nomad_a', actionId: 'produce-resource' },
+          { unitId: 'nomad_b', actionId: 'transform-to-city' },
+        ],
+      },
+      nomadContent,
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // transform-to-city is destroySelf, so nomad_b's id is gone — a new
+    // City stands in its place instead.
+    expect(result.state.units.some((u) => u.id === 'nomad_b')).toBe(false)
+    expect(result.state.units.some((u) => u.kind === 'city' && u.coord.q === 5 && u.coord.r === 0)).toBe(true)
+    expect(result.state.players.find((p) => p.id === 'p1')!.resources.wood).toBe(0)
+  })
+
+  it("a unit spending a resource does NOT see a LATER unit's gain — order is exactly what was assigned", () => {
+    const state = makeTwoNomadsState()
+
+    const result = applyAction(
+      state,
+      {
+        type: 'RESOLVE_UNIT_ACTION',
+        playerId: 'p1',
+        unitActions: [
+          { unitId: 'nomad_b', actionId: 'transform-to-city' },
+          { unitId: 'nomad_a', actionId: 'produce-resource' },
+        ],
+      },
+      nomadContent,
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // nomad_b had no wood yet when its transform ran — stays a nomad.
+    expect(result.state.units.find((u) => u.id === 'nomad_b')?.kind).toBe('nomad')
+    // nomad_a's production still ran afterward.
+    expect(result.state.players.find((p) => p.id === 'p1')!.resources.wood).toBe(1)
+  })
+})
+
+describe('RESOLVE_UNIT_ACTION resolves immediately; the turn ends via PASS_ACTIONS or automatically once every unit has acted', () => {
+  const twoCityContent: UnitContent = {
+    actionsByKind: {
+      city: [{ id: 'generate-income', name: 'Generate Income', description: '', effect: { actionType: 'income', goldByTerrain: { forest: 3 } } }],
+    },
+    movementByKind: {},
+    terrainLevels: { water: 0, plain: 1, forest: 2, mountain: 3, glacier: 4 },
+    resourceCaps: { gold: null, wood: 5, stone: 5 },
+    unitSupplyCaps: {},
+    companionKindsByCardKind: {},
+    activationsPerTurnByKind: {},
+  }
+
+  // Both players get a real City unit + card (not just p1, per
+  // applyResolveUnitAction's other fixture above) so pendingPlayerIds stays
+  // ['p1', 'p2'] throughout rather than p2 being eliminated for having no
+  // card to choose — keeps p1 finishing their turn from cascading into
+  // finishRound's discard-recycle, which would otherwise obscure the
+  // discard-zone assertions below.
+  function makeTwoCitiesState(): GameState {
+    const board = setTile(setTile(setTile(createEmptyBoard('hex'), { q: 0, r: 0 }, 'forest'), { q: 5, r: 0 }, 'forest'), { q: 10, r: 0 }, 'forest')
+    const cityA: Unit = { id: 'city_a', ownerId: 'p1', kind: 'city', coord: { q: 0, r: 0 }, movement: { isMobile: false, terrains: [], canCrossCliffs: false }, traits: [] }
+    const cityB: Unit = { id: 'city_b', ownerId: 'p1', kind: 'city', coord: { q: 5, r: 0 }, movement: { isMobile: false, terrains: [], canCrossCliffs: false }, traits: [] }
+    const cityC: Unit = { id: 'city_c', ownerId: 'p2', kind: 'city', coord: { q: 10, r: 0 }, movement: { isMobile: false, terrains: [], canCrossCliffs: false }, traits: [] }
+    const lobby = createNewGame({
+      gameId: 'game_4',
+      playMode: 'hotseat',
+      board,
+      players: [
+        { id: 'p1', authUserId: null, displayName: 'Alice', color: 'red' },
+        { id: 'p2', authUserId: null, displayName: 'Bob', color: 'blue' },
+      ],
+      resourceBank: { gold: 100, wood: 100, stone: 100 },
+    })
+    const active: GameState = { ...lobby, board, units: [cityA, cityB, cityC], status: 'active' }
+    const selecting = beginSelectCardsPhase(syncCardZonesWithBoard(active))
+    // p2's hand is a single card ('city', backed by city_c) — p1's own
+    // CHOOSE_CARD already folds p2's forced pick into the same applyAction()
+    // call (RULE_ENFORCEMENT_PLAN.md §4.2/§4.3), so no separate submission
+    // for p2 is needed (or possible — p2 is no longer pending afterward).
+    const result = applyAction(selecting, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: cardIdFor('p1', 'city') })
+    if (!result.ok) throw new Error('setup failed')
+    return result.state
+  }
+
+  it('resolving one unit applies its effect immediately but leaves the turn open', () => {
+    const state = makeTwoCitiesState()
+
+    const result = applyAction(
+      state,
+      { type: 'RESOLVE_UNIT_ACTION', playerId: 'p1', unitActions: [{ unitId: 'city_a', actionId: 'generate-income' }] },
+      twoCityContent,
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // The effect already applied...
+    expect(result.state.players.find((p) => p.id === 'p1')!.resources.gold).toBe(3)
+    expect(result.state.resolvedUnitIdsThisTurn).toEqual(['city_a'])
+    // ...but the turn itself hasn't ended: still p1's turn, card not yet discarded.
+    expect(result.state.roundPhase).toBe('actions')
+    expect(result.state.pendingPlayerIds).toEqual(['p1', 'p2'])
+    expect(result.state.activePlayerId).toBe('p1')
+    const p1 = result.state.players.find((p) => p.id === 'p1')!
+    expect(p1.discardCardIds).not.toContain(cardIdFor('p1', 'city'))
+  })
+
+  it('rejects re-resolving the same unit twice in the same turn', () => {
+    const state = makeTwoCitiesState()
+    const first = applyAction(
+      state,
+      { type: 'RESOLVE_UNIT_ACTION', playerId: 'p1', unitActions: [{ unitId: 'city_a', actionId: 'generate-income' }] },
+      twoCityContent,
+    )
+    if (!first.ok) throw new Error('setup failed')
+
+    const second = applyAction(
+      first.state,
+      { type: 'RESOLVE_UNIT_ACTION', playerId: 'p1', unitActions: [{ unitId: 'city_a', actionId: 'generate-income' }] },
+      twoCityContent,
+    )
+    expect(second.ok).toBe(false)
+    // Gold only credited once, from the first resolve.
+    expect(first.state.players.find((p) => p.id === 'p1')!.resources.gold).toBe(3)
+  })
+
+  it('rejects a RESOLVE_UNIT_ACTION that resolves nothing at all (empty list, or every unit already acted)', () => {
+    const state = makeTwoCitiesState()
+    const empty = applyAction(state, { type: 'RESOLVE_UNIT_ACTION', playerId: 'p1', unitActions: [] }, twoCityContent)
+    expect(empty.ok).toBe(false)
+  })
+
+  it('PASS_ACTIONS ends the turn: moves the card to discard and advances to the next player', () => {
+    const state = makeTwoCitiesState()
+    const resolved = applyAction(
+      state,
+      { type: 'RESOLVE_UNIT_ACTION', playerId: 'p1', unitActions: [{ unitId: 'city_a', actionId: 'generate-income' }] },
+      twoCityContent,
+    )
+    if (!resolved.ok) throw new Error('setup failed')
+
+    const passed = applyAction(resolved.state, { type: 'PASS_ACTIONS', playerId: 'p1' })
+    expect(passed.ok).toBe(true)
+    if (!passed.ok) return
+    // city_b was never resolved — Pass leaves it idle rather than erroring.
+    expect(passed.state.units).toHaveLength(3)
+    const p1 = passed.state.players.find((p) => p.id === 'p1')!
+    expect(p1.discardCardIds).toContain(cardIdFor('p1', 'city'))
+    expect(passed.state.resolvedUnitIdsThisTurn).toEqual([])
+    // p2 is still pending — the round doesn't finish yet.
+    expect(passed.state.pendingPlayerIds).toEqual(['p2'])
+    expect(passed.state.activePlayerId).toBe('p2')
+  })
+
+  it('PASS_ACTIONS adds exactly one actionHistory entry regardless of how many units it leaves idle', () => {
+    const state = makeTwoCitiesState()
+    const passed = applyAction(state, { type: 'PASS_ACTIONS', playerId: 'p1' })
+    expect(passed.ok).toBe(true)
+    if (!passed.ok) return
+    expect(passed.state.actionHistory).toHaveLength(state.actionHistory.length + 1)
+    expect(passed.state.actionHistory.at(-1)?.action.type).toBe('PASS_ACTIONS')
+  })
+
+  it('rejects PASS_ACTIONS out of turn order', () => {
+    const state = makeTwoCitiesState()
+    const result = applyAction(state, { type: 'PASS_ACTIONS', playerId: 'p2' })
+    expect(result.ok).toBe(false)
+  })
+
+  it('rejects PASS_ACTIONS outside the actions phase', () => {
+    const lobbyState = makeActiveGame()
+    const result = applyAction(lobbyState, { type: 'PASS_ACTIONS', playerId: 'p1' })
+    expect(result.ok).toBe(false)
+  })
+
+  it('resolving the last unassigned unit ends the turn automatically — no PASS_ACTIONS needed', () => {
+    const state = makeTwoCitiesState()
+    const firstUnit = applyAction(
+      state,
+      { type: 'RESOLVE_UNIT_ACTION', playerId: 'p1', unitActions: [{ unitId: 'city_a', actionId: 'generate-income' }] },
+      twoCityContent,
+    )
+    if (!firstUnit.ok) throw new Error('setup failed')
+    // Still p1's turn — city_b hasn't acted yet.
+    expect(firstUnit.state.pendingPlayerIds).toEqual(['p1', 'p2'])
+
+    const lastUnit = applyAction(
+      firstUnit.state,
+      { type: 'RESOLVE_UNIT_ACTION', playerId: 'p1', unitActions: [{ unitId: 'city_b', actionId: 'generate-income' }] },
+      twoCityContent,
+    )
+    expect(lastUnit.ok).toBe(true)
+    if (!lastUnit.ok) return
+    // Both of p1's cities' income applied...
+    expect(lastUnit.state.players.find((p) => p.id === 'p1')!.resources.gold).toBe(6)
+    // ...and the turn ended on its own: card discarded, next player up,
+    // resolvedUnitIdsThisTurn reset for p2's fresh turn.
+    const p1 = lastUnit.state.players.find((p) => p.id === 'p1')!
+    expect(p1.discardCardIds).toContain(cardIdFor('p1', 'city'))
+    expect(lastUnit.state.pendingPlayerIds).toEqual(['p2'])
+    expect(lastUnit.state.activePlayerId).toBe('p2')
+    expect(lastUnit.state.resolvedUnitIdsThisTurn).toEqual([])
+    // Still just the one RESOLVE_UNIT_ACTION entry for this last resolve — no separate PASS_ACTIONS was dispatched.
+    expect(lastUnit.state.actionHistory).toHaveLength(firstUnit.state.actionHistory.length + 1)
+    expect(lastUnit.state.actionHistory.at(-1)?.action.type).toBe('RESOLVE_UNIT_ACTION')
+  })
+
+  it("resolving a player's only acting unit ends their turn immediately, finishing the actions phase", () => {
+    const state = makeTwoCitiesState()
+    let result = applyAction(state, { type: 'PASS_ACTIONS', playerId: 'p1' })
+    if (!result.ok) throw new Error('setup failed')
+    expect(result.state.pendingPlayerIds).toEqual(['p2'])
+
+    // p2 has just city_c — resolving it is p2's whole turn.
+    result = applyAction(
+      result.state,
+      { type: 'RESOLVE_UNIT_ACTION', playerId: 'p2', unitActions: [{ unitId: 'city_c', actionId: 'generate-income' }] },
+      twoCityContent,
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.players.find((p) => p.id === 'p2')!.resources.gold).toBe(3)
+    // Both players are done — the actions phase itself finished and the
+    // round closed out (discard-zone assertions belong to the dedicated
+    // PASS_ACTIONS test above; here both hands were also empty of anything
+    // else, so finishRound's empty-hand recycle already moved the discarded
+    // card straight back to hand by the time this settles) — turn 1 begins.
+    // Both players are back down to their single 'city' card again, so the
+    // new round's own forced CHOOSE_CARD picks (RULE_ENFORCEMENT_PLAN.md
+    // §4.2/§4.3) fold straight through selectCards and land back in the new
+    // round's actions phase, all within this same RESOLVE_UNIT_ACTION call.
+    expect(result.state.turn).toBe(1)
+    expect(result.state.roundPhase).toBe('actions')
+  })
+})
+
+describe('RESOLVE_UNIT_ACTION rejects an action whose cost/target preconditions were not met (bug: an unaffordable Transform silently consumed the unit\'s turn)', () => {
+  const nomadContent: UnitContent = {
+    actionsByKind: {
+      nomad: [
+        {
+          id: 'transform-to-city',
+          name: 'Transform to City',
+          description: '',
+          effect: {
+            actionType: 'transform',
+            targetUnit: 'city',
+            targetHex: { terrainType: ['plain'], location: 'self' },
+            destroySelf: true,
+            cost: { wood: 5 },
+          },
+        },
+        { id: 'generate-income', name: 'Generate Income', description: '', effect: { actionType: 'income', goldByTerrain: { forest: 3 } } },
+        { id: 'produce-resource', name: 'Produce Resource', description: '', effect: { actionType: 'produce', resourceByTerrain: { forest: { wood: 1 } } } },
+      ],
+    },
+    movementByKind: {},
+    terrainLevels: { water: 0, plain: 1, forest: 2, mountain: 3, glacier: 4 },
+    resourceCaps: { gold: null, wood: 5, stone: 5 },
+    unitSupplyCaps: {},
+    companionKindsByCardKind: {},
+    activationsPerTurnByKind: {},
+  }
+
+  function makeSingleNomadState(): GameState {
+    const board = setTile(createEmptyBoard('hex'), { q: 0, r: 0 }, 'plain')
+    const nomad: Unit = { id: 'nomad_a', ownerId: 'p1', kind: 'nomad', coord: { q: 0, r: 0 }, movement: { isMobile: true, terrains: [], canCrossCliffs: false }, traits: [] }
+    const lobby = createNewGame({
+      gameId: 'game_5',
+      playMode: 'hotseat',
+      board,
+      players: [
+        { id: 'p1', authUserId: null, displayName: 'Alice', color: 'red' },
+        { id: 'p2', authUserId: null, displayName: 'Bob', color: 'blue' },
+      ],
+      resourceBank: { gold: 100, wood: 100, stone: 100 },
+    })
+    // p2 excluded up front, same reasoning as makeTwoCitiesState above —
+    // eliminating them for real (no cards) would end the game outright.
+    const active: GameState = {
+      ...lobby,
+      board,
+      units: [nomad],
+      status: 'active',
+      turnOrder: ['p1'],
+      players: lobby.players.map((p) => (p.id === 'p2' ? { ...p, eliminated: true } : p)),
+    }
+    const selecting = beginSelectCardsPhase(syncCardZonesWithBoard(active))
+    const chosen = applyAction(selecting, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: cardIdFor('p1', 'nomad') })
+    if (!chosen.ok) throw new Error('setup failed')
+    return chosen.state
+  }
+
+  it('rejects the whole dispatch when the unit cannot afford the cost — no unit is created, the unit stays free to act', () => {
+    const state = makeSingleNomadState()
+    expect(state.players.find((p) => p.id === 'p1')!.resources.wood).toBe(0)
+
+    const result = applyAction(
+      state,
+      { type: 'RESOLVE_UNIT_ACTION', playerId: 'p1', unitActions: [{ unitId: 'nomad_a', actionId: 'transform-to-city' }] },
+      nomadContent,
+    )
+
+    expect(result.ok).toBe(false)
+    // Nothing about the input state leaked through: no City appeared, and
+    // the actionHistory/resolvedUnitIdsThisTurn this bug report complained
+    // about staying untouched.
+    expect(state.units).toHaveLength(1)
+    expect(state.units[0].kind).toBe('nomad')
+    expect(state.resolvedUnitIdsThisTurn).toEqual([])
+  })
+
+  it('the same Transform succeeds once the unit can actually afford it', () => {
+    const state = makeSingleNomadState()
+    const funded: GameState = {
+      ...state,
+      players: state.players.map((p) => (p.id === 'p1' ? { ...p, resources: { ...p.resources, wood: 5 } } : p)),
+    }
+
+    const result = applyAction(
+      funded,
+      { type: 'RESOLVE_UNIT_ACTION', playerId: 'p1', unitActions: [{ unitId: 'nomad_a', actionId: 'transform-to-city' }] },
+      nomadContent,
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.units.some((u) => u.kind === 'city' && u.coord.q === 0 && u.coord.r === 0)).toBe(true)
+    // nomad_a was p1's only acting unit, so resolving it ends the turn on
+    // its own — resolvedUnitIdsThisTurn is already reset for the next
+    // player, exactly like the "resolving the last unassigned unit ends the
+    // turn automatically" case above; the one new actionHistory entry is
+    // what shows this resolved successfully rather than being rejected.
+    expect(result.state.actionHistory.at(-1)?.action.type).toBe('RESOLVE_UNIT_ACTION')
+    expect(result.state.actionHistory).toHaveLength(state.actionHistory.length + 1)
+  })
+
+  it("rejects income whose payout would be zero (bug: a Nomad on Plain could \"Generate Income\" — goldByTerrain only has forest — and still consume its turn for 0 gold)", () => {
+    const state = makeSingleNomadState()
+
+    const result = applyAction(
+      state,
+      { type: 'RESOLVE_UNIT_ACTION', playerId: 'p1', unitActions: [{ unitId: 'nomad_a', actionId: 'generate-income' }] },
+      nomadContent,
+    )
+
+    expect(result.ok).toBe(false)
+    // Nothing about the input state leaked through: the unit is still free to act.
+    expect(state.units).toHaveLength(1)
+    expect(state.resolvedUnitIdsThisTurn).toEqual([])
+  })
+
+  it('the same income succeeds once the terrain actually pays out', () => {
+    const state = makeSingleNomadState()
+    const onForest: GameState = { ...state, board: setTile(state.board, { q: 0, r: 0 }, 'forest') }
+
+    const result = applyAction(
+      onForest,
+      { type: 'RESOLVE_UNIT_ACTION', playerId: 'p1', unitActions: [{ unitId: 'nomad_a', actionId: 'generate-income' }] },
+      nomadContent,
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.players.find((p) => p.id === 'p1')!.resources.gold).toBe(3)
+    // Same "only acting unit" auto-end-turn case as above.
+    expect(result.state.actionHistory.at(-1)?.action.type).toBe('RESOLVE_UNIT_ACTION')
+    expect(result.state.actionHistory).toHaveLength(state.actionHistory.length + 1)
+  })
+
+  it('rejects produce once the player is already at that resource\'s cap (bug: Produce Resource stayed available and consumed the turn for 0 Wood once already at the Wood cap)', () => {
+    const state = makeSingleNomadState()
+    const onForestAtCap: GameState = {
+      ...state,
+      board: setTile(state.board, { q: 0, r: 0 }, 'forest'),
+      players: state.players.map((p) => (p.id === 'p1' ? { ...p, resources: { ...p.resources, wood: 5 } } : p)),
+    }
+
+    const result = applyAction(
+      onForestAtCap,
+      { type: 'RESOLVE_UNIT_ACTION', playerId: 'p1', unitActions: [{ unitId: 'nomad_a', actionId: 'produce-resource' }] },
+      nomadContent,
+    )
+
+    expect(result.ok).toBe(false)
+    expect(onForestAtCap.units).toHaveLength(1)
+    expect(onForestAtCap.resolvedUnitIdsThisTurn).toEqual([])
+  })
+
+  it('the same produce succeeds once below the cap', () => {
+    const state = makeSingleNomadState()
+    const onForest: GameState = { ...state, board: setTile(state.board, { q: 0, r: 0 }, 'forest') }
+
+    const result = applyAction(
+      onForest,
+      { type: 'RESOLVE_UNIT_ACTION', playerId: 'p1', unitActions: [{ unitId: 'nomad_a', actionId: 'produce-resource' }] },
+      nomadContent,
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.players.find((p) => p.id === 'p1')!.resources.wood).toBe(1)
+    expect(result.state.actionHistory.at(-1)?.action.type).toBe('RESOLVE_UNIT_ACTION')
+    expect(result.state.actionHistory).toHaveLength(state.actionHistory.length + 1)
+  })
+})
+
+describe('applyAction — PLACE_TILE/PLACE_UNIT dispatch during boardSetup', () => {
+  function makeBoardSetupState(): GameState {
+    const lobby = createNewGame({
+      gameId: 'game_1',
+      playMode: 'hotseat',
+      board: setTile(setTile(createEmptyBoard('hex'), { q: 0, r: 0 }, 'water'), { q: 1, r: 0 }, 'water'),
+      players: [
+        { id: 'p1', authUserId: 'auth_1', displayName: 'Alice', color: 'red' },
+        { id: 'p2', authUserId: 'auth_2', displayName: 'Bob', color: 'blue' },
+      ],
+    })
+    return {
+      ...lobby,
+      status: 'boardSetup',
+      boardSetup: { tileTierQueue: ['plain'], tilesRemainingInTier: 1, tilePlacerIndex: 0, unitsRemainingByPlayerId: {}, unitPlacerIndex: 0 },
+    }
+  }
+
+  const boardGenerationContent: BoardGenerationContent = {
+    startingWaterShapeCells: [],
+    tiers: [{ terrain: 'plain', shapeCells: [{ q: 0, r: 0 }, { q: 1, r: 0 }], placesOn: ['water'], poolSize: 1 }],
+  }
+
+  it('routes PLACE_TILE through even though status is not "active"', () => {
+    const state = makeBoardSetupState()
+    const result = applyAction(
+      state,
+      { type: 'PLACE_TILE', playerId: 'p1', anchor: { q: 0, r: 0 }, rotationSteps: 0 },
+      undefined,
+      undefined,
+      boardGenerationContent,
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.boardSetup?.tileTierQueue).toEqual([])
+  })
+
+  it('rejects a normal round action (CHOOSE_CARD) during boardSetup status', () => {
+    const state = makeBoardSetupState()
+    const result = applyAction(state, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: cardIdFor('p1', 'city') })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain('not active')
+  })
+
+  it('trustedReplay (7th param) reaches placeTile and skips its legality check', () => {
+    // A PLACE_TILE anchor that isn't covering the required lower terrain at
+    // all — ordinarily rejected outright — succeeds once `trustedReplay` is
+    // passed, proving the flag threads all the way from applyAction through
+    // dispatchAction into placeTile's own skipLegalityCheck (see
+    // replayActions/gameLog.ts's extendGameLog/turnReview.ts's
+    // buildTurnReview, which all pass this for reconstructing already-
+    // validated history rather than re-running PLACE_TILE's expensive
+    // room-search check on every replay).
+    const state = makeBoardSetupState()
+    const untrusted = applyAction(
+      state,
+      { type: 'PLACE_TILE', playerId: 'p1', anchor: { q: 50, r: 50 }, rotationSteps: 0 },
+      undefined,
+      undefined,
+      boardGenerationContent,
+    )
+    expect(untrusted.ok).toBe(false)
+
+    const trusted = applyAction(
+      state,
+      { type: 'PLACE_TILE', playerId: 'p1', anchor: { q: 50, r: 50 }, rotationSteps: 0 },
+      undefined,
+      undefined,
+      boardGenerationContent,
+      undefined,
+      true,
+    )
+    expect(trusted.ok).toBe(true)
+    if (!trusted.ok) return
+    expect(getTile(trusted.state.board, { q: 50, r: 50 })?.terrain).toBe('plain')
+  })
+})
+
+describe('applyAction (forced tile-placement cascade folds into the SAME actionHistory entry, RULE_ENFORCEMENT_PLAN.md §4.2)', () => {
+  const domino = [{ q: 0, r: 0 }, { q: 1, r: 0 }]
+
+  function makeForcedChainState(): GameState {
+    const lobby = createNewGame({
+      gameId: 'game_1',
+      playMode: 'hotseat',
+      board: [
+        [0, 0], [1, 0],
+        [5, 5], [6, 5], [7, 5], [8, 5],
+      ].reduce((b, [q, r]) => setTile(b, { q, r }, 'water'), createEmptyBoard('hex')),
+      players: [
+        { id: 'p1', authUserId: 'auth_1', displayName: 'Alice', color: 'red' },
+        { id: 'p2', authUserId: 'auth_2', displayName: 'Bob', color: 'blue' },
+      ],
+    })
+    return {
+      ...lobby,
+      status: 'boardSetup',
+      boardSetup: { tileTierQueue: ['plain'], tilesRemainingInTier: 3, tilePlacerIndex: 0, unitsRemainingByPlayerId: {}, unitPlacerIndex: 0 },
+    }
+  }
+
+  const boardGenerationContent: BoardGenerationContent = {
+    startingWaterShapeCells: [],
+    tiers: [{ terrain: 'plain', shapeCells: domino, placesOn: ['water'], poolSize: 3 }],
+  }
+
+  it('auto-places the rest of a tier once only one way remains, cycling turn order for the skipped decisions', () => {
+    const state = makeForcedChainState()
+    const action = { type: 'PLACE_TILE' as const, playerId: 'p1', anchor: { q: 0, r: 0 }, rotationSteps: 0 }
+
+    // p1 manually places the (0,0)-(1,0) domino. That leaves the (5,5)-
+    // (6,5)-(7,5)-(8,5) chain with exactly one way to place the 2 tiles
+    // still owed (see findForcedPlacement's tests) — no real decision left,
+    // so both should auto-place instead of waiting on p2 and p1 again.
+    const result = applyAction(state, action, undefined, undefined, boardGenerationContent)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+
+    for (const [q, r] of [[0, 0], [1, 0], [5, 5], [6, 5], [7, 5], [8, 5]]) {
+      expect(getTile(result.state.board, { q, r })?.terrain).toBe('plain')
+    }
+
+    // Tier's pool (3) is fully spent -> tile placement is over.
+    expect(result.state.boardSetup?.tileTierQueue).toEqual([])
+
+    // Only ONE actionHistory entry — the 2 forced placements aren't separate
+    // entries, they're folded into this same one (see applyAction's own doc
+    // comment). applyActionWithSteps below is what still lets a caller
+    // (gameLog.ts) see each individual step that happened.
+    expect(result.state.actionHistory).toHaveLength(1)
+    expect(result.state.actionHistory[0].action).toEqual(action)
+
+    const withSteps = applyActionWithSteps(state, action, undefined, undefined, boardGenerationContent)
+    if (!withSteps.ok) throw new Error(withSteps.error)
+    // 3 dispatched steps: the manual one plus the 2 fast-forwarded ones,
+    // attributed in turn order (p1 manual, then p2, then p1 again).
+    expect(withSteps.steps.map((step) => step.action.type)).toEqual(['PLACE_TILE', 'PLACE_TILE', 'PLACE_TILE'])
+    expect(withSteps.steps.map((step) => (step.action as { playerId: string }).playerId)).toEqual(['p1', 'p2', 'p1'])
+  })
+
+  it("doesn't fast-forward while more than one legal arrangement remains", () => {
+    const lobby = createNewGame({
+      gameId: 'game_1',
+      playMode: 'hotseat',
+      board: [
+        [0, 0], [1, 0],
+        [5, 5], [6, 5],
+        [10, 5], [11, 5],
+        [15, 5], [16, 5],
+      ].reduce((b, [q, r]) => setTile(b, { q, r }, 'water'), createEmptyBoard('hex')),
+      players: [
+        { id: 'p1', authUserId: 'auth_1', displayName: 'Alice', color: 'red' },
+        { id: 'p2', authUserId: 'auth_2', displayName: 'Bob', color: 'blue' },
+      ],
+    })
+    const state: GameState = {
+      ...lobby,
+      status: 'boardSetup',
+      boardSetup: { tileTierQueue: ['plain'], tilesRemainingInTier: 3, tilePlacerIndex: 0, unitsRemainingByPlayerId: {}, unitPlacerIndex: 0 },
+    }
+    const content: BoardGenerationContent = { startingWaterShapeCells: [], tiers: [{ terrain: 'plain', shapeCells: domino, placesOn: ['water'], poolSize: 3 }] }
+
+    // Three fully independent, interchangeable pairs remain after p1's
+    // placement, but only 2 tiles are still owed — which 2 of the 3 pairs
+    // get used isn't determined, so nothing should auto-place.
+    const result = applyAction(state, { type: 'PLACE_TILE', playerId: 'p1', anchor: { q: 0, r: 0 }, rotationSteps: 0 }, undefined, undefined, content)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.boardSetup?.tilesRemainingInTier).toBe(2)
+    expect(result.state.actionHistory.filter((entry) => entry.action.type === 'PLACE_TILE')).toHaveLength(1)
+  })
+})
+
+describe('applyAction (forced card-choice/decline cascade folds into the SAME actionHistory entry, RULE_ENFORCEMENT_PLAN.md §4.3)', () => {
+  it('auto-chooses a still-pending player who only has one card in hand', () => {
+    // makeActiveGame() seeds both players with a hand of exactly one card
+    // (backed by their 'ship' unit) — p1's manual pick leaves p2 pending
+    // with a single-card hand, no real decision left.
+    const state = makeActiveGame()
+    const action = { type: 'CHOOSE_CARD' as const, playerId: 'p1', cardId: cardIdFor('p1', 'ship') }
+    const result = applyAction(state, action)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.roundPhase).toBe('actions')
+    // Only ONE actionHistory entry — p2's fast-forwarded pick is folded
+    // into p1's, not a separate entry.
+    expect(result.state.actionHistory).toHaveLength(1)
+    expect(result.state.actionHistory[0].action).toEqual(action)
+
+    const withSteps = applyActionWithSteps(state, action)
+    if (!withSteps.ok) throw new Error(withSteps.error)
+    const chooseCardSteps = withSteps.steps.filter((step) => step.action.type === 'CHOOSE_CARD')
+    expect(chooseCardSteps.map((step) => (step.action as { playerId: string }).playerId)).toEqual(['p1', 'p2'])
+  })
+
+  it("doesn't fast-forward a select-cards pick while more than one hand card remains", () => {
+    const state = makeActiveGameWithFullHands()
+    const result = applyAction(state, { type: 'CHOOSE_CARD', playerId: 'p1', cardId: cardIdFor('p1', 'city') })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.roundPhase).toBe('selectCards')
+    expect(result.state.pendingPlayerIds).toEqual(['p2'])
+    expect(result.state.actionHistory.filter((entry) => entry.action.type === 'CHOOSE_CARD')).toHaveLength(1)
+  })
+
+  it('auto-declines a still-pending player whose hand+discard together hold exactly what they still owe', () => {
+    const declineState = reachDeclinePhase(makeActiveGameWithFullHands(), 1)
+    // Trim p2's hand to nothing, so their discard's single card (`ship`,
+    // played this round) is their only remaining option — hand+discard now
+    // exactly matches the 1 card they still owe.
+    const trimmedPlayers = declineState.players.map((p) => (p.id === 'p2' ? { ...p, handCardIds: [] } : p))
+    const state: GameState = { ...declineState, players: trimmedPlayers }
+    expect(state.pendingPlayerIds).toContain('p2')
+
+    const action = { type: 'MOVE_TO_DECLINE' as const, playerId: 'p1', cardId: cardIdFor('p1', 'temple') }
+    const result = applyAction(state, action)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // Both players have now supplied their one owed card each, so the
+    // decline phase itself is fully resolved — chaining straight into the
+    // purchase phase, whose own pendingPlayerIds naturally includes both
+    // players again (each may now buy a card back), which is why this
+    // asserts on roundPhase rather than pendingPlayerIds here.
+    expect(result.state.roundPhase).toBe('purchase')
+    // Exactly one new actionHistory entry — p2's fast-forwarded decline is
+    // folded into p1's, not a separate entry.
+    expect(result.state.actionHistory).toHaveLength(state.actionHistory.length + 1)
+
+    const withSteps = applyActionWithSteps(state, action)
+    if (!withSteps.ok) throw new Error(withSteps.error)
+    const moveToDeclineSteps = withSteps.steps.filter((step) => step.action.type === 'MOVE_TO_DECLINE')
+    expect(moveToDeclineSteps.map((step) => (step.action as { playerId: string }).playerId)).toEqual(['p1', 'p2'])
+  })
+
+  it("doesn't fast-forward a decline while more cards remain available than are owed", () => {
+    const state = reachDeclinePhase(makeActiveGameWithFullHands(), 1)
+    const result = applyAction(state, { type: 'MOVE_TO_DECLINE', playerId: 'p1', cardId: cardIdFor('p1', 'temple') })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.pendingPlayerIds).toContain('p2')
+    expect(result.state.actionHistory.filter((entry) => entry.action.type === 'MOVE_TO_DECLINE')).toHaveLength(1)
+  })
+})
+
+describe('replaying a legacy actionHistory whose forced follow-up predates the fold-in-place design (issue #436)', () => {
+  // Before the 2026-09-05 "second follow-up" design change, a forced pick
+  // (a one-card hand's CHOOSE_CARD, a tile placement with only one legal
+  // arrangement left) landed its own standalone actionHistory entry rather
+  // than folding into its triggering action's entry. A game already in
+  // progress when that change shipped has such entries baked permanently
+  // into its actionHistory (append-only, never rewritten) — replaying them
+  // under today's applyAction must not blow up just because today's engine
+  // already took that same forced pick one step earlier.
+  it('tolerates a standalone CHOOSE_CARD entry for what today folds into the previous pick', () => {
+    const genesis = makeActiveGame()
+    // p1's manual pick, followed by a SEPARATE entry for p2's forced
+    // single-card pick — the pre-fold shape; today's applyAction folds p2's
+    // pick into p1's own entry instead (see the fold test above).
+    const legacyHistory = [
+      { action: { type: 'CHOOSE_CARD' as const, playerId: 'p1', cardId: cardIdFor('p1', 'ship') }, turn: genesis.turn, timestamp: 't1' },
+      { action: { type: 'CHOOSE_CARD' as const, playerId: 'p2', cardId: cardIdFor('p2', 'ship') }, turn: genesis.turn, timestamp: 't2' },
+    ]
+
+    const replayed = replayActions(genesis, legacyHistory)
+
+    expect(replayed.roundPhase).toBe('actions')
+    expect(replayed.actionHistory).toEqual(legacyHistory)
+  })
+
+  it('tolerates a standalone PLACE_TILE entry for what today folds into the previous placement', () => {
+    const domino = [{ q: 0, r: 0 }, { q: 1, r: 0 }]
+    const lobby = createNewGame({
+      gameId: 'game_1',
+      playMode: 'hotseat',
+      board: [
+        [0, 0], [1, 0],
+        [5, 5], [6, 5], [7, 5], [8, 5],
+      ].reduce((b, [q, r]) => setTile(b, { q, r }, 'water'), createEmptyBoard('hex')),
+      players: [
+        { id: 'p1', authUserId: 'auth_1', displayName: 'Alice', color: 'red' },
+        { id: 'p2', authUserId: 'auth_2', displayName: 'Bob', color: 'blue' },
+      ],
+    })
+    const genesis: GameState = {
+      ...lobby,
+      status: 'boardSetup',
+      boardSetup: { tileTierQueue: ['plain'], tilesRemainingInTier: 3, tilePlacerIndex: 0, unitsRemainingByPlayerId: {}, unitPlacerIndex: 0 },
+    }
+    const boardGenerationContent: BoardGenerationContent = {
+      startingWaterShapeCells: [],
+      tiers: [{ terrain: 'plain', shapeCells: domino, placesOn: ['water'], poolSize: 3 }],
+    }
+    // p1's manual placement, followed by SEPARATE entries for the 2 forced
+    // placements that today folds into p1's own entry (see the fold test
+    // above) — the pre-fold shape, each attributed to whoever's turn it
+    // actually was.
+    const legacyHistory = [
+      { action: { type: 'PLACE_TILE' as const, playerId: 'p1', anchor: { q: 0, r: 0 }, rotationSteps: 0 }, turn: genesis.turn, timestamp: 't1' },
+      { action: { type: 'PLACE_TILE' as const, playerId: 'p2', anchor: { q: 5, r: 5 }, rotationSteps: 0 }, turn: genesis.turn, timestamp: 't2' },
+      { action: { type: 'PLACE_TILE' as const, playerId: 'p1', anchor: { q: 7, r: 5 }, rotationSteps: 0 }, turn: genesis.turn, timestamp: 't3' },
+    ]
+
+    const replayed = replayActions(genesis, legacyHistory, undefined, undefined, boardGenerationContent)
+
+    for (const [q, r] of [[0, 0], [1, 0], [5, 5], [6, 5], [7, 5], [8, 5]]) {
+      expect(getTile(replayed.board, { q, r })?.terrain).toBe('plain')
+    }
+    expect(replayed.boardSetup?.tileTierQueue).toEqual([])
+    expect(replayed.actionHistory).toEqual(legacyHistory)
+  })
+})

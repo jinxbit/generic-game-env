@@ -14,6 +14,14 @@ export interface ActionDescription {
    * (GameDefinition.isActionSecret). Omit for an action that's never secret.
    */
   redactedMessage?: string
+  /**
+   * Further lines the same step produced, logged after `message` — for a
+   * game whose one action cascades into things worth their own line (an
+   * achievement claimed, a player eliminated, a new round). Each names its
+   * own player (`{player}` becomes that player's name), and is shown as is to
+   * every viewer, so it must not reveal anything secret.
+   */
+  extraLines?: { playerId: string | null; message: string }[]
 }
 
 /**

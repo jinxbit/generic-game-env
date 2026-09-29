@@ -1,6 +1,6 @@
 # Implementing a game — learnings
 
-Notes from adding **Incorporated** and **Shark** to this platform, meant to
+Notes from adding **Incorporated**, **Shark** and **Rise & Fall** to this platform, meant to
 make the next game faster. Read `packages/unique-pick/README.md` first for
 the contract itself; this file is about how to get from a rulebook to a
 merged, green game package with the least rework.
@@ -82,6 +82,36 @@ small, you don't need a second copy of the package — Shark's version 2
   for the new genesis.
 - The Edge Function stack test should start a game on the current version.
 
+## 3a. Porting a game that already has its own engine
+
+Rise & Fall arrived with a mature engine, 800 tests and real finished games,
+all written against its own flat state. Rewriting that around the envelope
+would have touched every module. What worked instead:
+
+- **Keep the engine verbatim and put an adapter at the seam**
+  (`packages/rise-and-fall/src/adapter.ts`). `toEngine` joins envelope and
+  `GameData` into the engine's state; `toPlatform` splits it back and
+  *derives* the envelope — including the fields whose shape differs, such as
+  a pending list that repeats a player or queues a whole sequential phase.
+  Keep the engine's own copy of such fields in `GameData`; the envelope is a
+  projection of it.
+- **Strip what the framework now owns** (log appending, undo/redo, admin mode,
+  the forced-follow-up loop) by exporting the engine's single-dispatch and
+  "next forced move" functions and wiring them to `applyAction` and
+  `nextForcedAction`. The framework's CONCEDE runs first and flags the player
+  on the envelope; let `onPlayerEliminated` run the engine's own concede from
+  the engine's copy of the state, and cover any stage the old app never let a
+  player concede in.
+- **Prove equivalence with real games.** Replay the old app's exported games
+  through the platform (`replayActions` from a genesis built by the adapter)
+  and compare with the old engine's replay field for field
+  (`productionGames.test.ts`). It's the cheapest strong evidence the port
+  changed nothing.
+- **Anything the old app replayed client-side** (turn recaps, end-of-game
+  charts) can still replay the engine in the view, from a genesis the rules
+  can rebuild without random draws — record what setup resolved in
+  `GameData` (`seating`).
+
 ## 4. Pitfalls actually hit
 
 - **Shallow copies mutate history.** `{ ...state.game }` copies only the top
@@ -100,6 +130,11 @@ small, you don't need a second copy of the package — Shark's version 2
   players hold shares when prices fall), and add a final test asserting that,
   across all fuzz games, each rare path (forced sale, write-off, elimination)
   was reached at least once.
+- **`undefined` in state.** The view log's patches travel as JSON, where a
+  key holding `undefined` is simply absent. An engine that writes
+  `placementId: undefined` broke clients' patching until `diffState` learned
+  to treat such keys as absent (`packages/sdk/src/statePatch.ts`). Prefer
+  omitting a key or using `null`; the stack test is what catches this.
 - **Money formatting.** Don't use `toLocaleString` in rules narration: the
   Edge Runtime and browsers can format differently, and the narration is
   stored. Format by hand (`formatFT`).

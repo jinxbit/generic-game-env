@@ -17,6 +17,7 @@
   "dependencies": {
     "@game-platform/incorporated": "*",
     "@game-platform/kogge": "*",
+    "@game-platform/rise-and-fall": "*",
     "@game-platform/sdk": "*",
     "@game-platform/shark": "*",
     "@game-platform/unique-pick": "*",

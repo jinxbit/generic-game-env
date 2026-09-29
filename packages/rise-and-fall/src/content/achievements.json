@@ -1,0 +1,58 @@
+{
+  "$schema": "./achievements.schema.json",
+  "gameLength": {
+    "default": 4,
+    "min": 1,
+    "max": 6
+  },
+  "purchaseCost": {
+    "byAchievementCount": [5, 10, 20, 40, 60, 80]
+  },
+  "goldVictoryPoints": {
+    "goldPerPoint": 2
+  },
+  "achievements": [
+    {
+      "id": "city-mastery",
+      "name": "City",
+      "unitId": "city",
+      "description": "Claimed by the first player to simultaneously control their full per-player supply of Cities. Once claimed, no other player can claim it.",
+      "victoryPoints": 10
+    },
+    {
+      "id": "temple-mastery",
+      "name": "Temple",
+      "unitId": "temple",
+      "description": "Claimed by the first player to simultaneously control their full per-player supply of Temples. Once claimed, no other player can claim it.",
+      "victoryPoints": 20
+    },
+    {
+      "id": "nomad-mastery",
+      "name": "Nomad",
+      "unitId": "nomad",
+      "description": "Claimed by the first player to simultaneously control their full per-player supply of Nomads. Once claimed, no other player can claim it.",
+      "victoryPoints": 10
+    },
+    {
+      "id": "merchant-mastery",
+      "name": "Merchant",
+      "unitId": "merchant",
+      "description": "Claimed by the first player to simultaneously control their full per-player supply of Merchants. Once claimed, no other player can claim it.",
+      "victoryPoints": 20
+    },
+    {
+      "id": "mountaineer-mastery",
+      "name": "Mountaineer",
+      "unitId": "mountaineer",
+      "description": "Claimed by the first player to simultaneously control their full per-player supply of Mountaineers. Once claimed, no other player can claim it.",
+      "victoryPoints": 15
+    },
+    {
+      "id": "ship-mastery",
+      "name": "Ship",
+      "unitId": "ship",
+      "description": "Claimed by the first player to simultaneously control their full per-player supply of Ships. Once claimed, no other player can claim it.",
+      "victoryPoints": 25
+    }
+  ]
+}

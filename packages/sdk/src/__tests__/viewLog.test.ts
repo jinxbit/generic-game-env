@@ -25,6 +25,18 @@ describe('statePatch', () => {
   it('round-trips: applying the diff of two values gives the second', () => {
     for (const [previous, current] of cases) expect(applyStatePatch(previous, diffState(previous, current))).toEqual(current)
   })
+  it('survives a JSON round trip when a value is undefined, treating it as absent', () => {
+    const viaJson = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
+    const undefinedCases: [unknown, unknown][] = [
+      [{ tiles: { a: { id: 't1' } } }, { tiles: { a: { id: 't1', placementId: undefined }, b: { id: 't2', placementId: undefined } } }],
+      [{ kept: 1, dropped: 2 }, { kept: 1, dropped: undefined }],
+      [{ list: [1] }, { list: [1, undefined] }],
+    ]
+    for (const [previous, current] of undefinedCases) {
+      expect(applyStatePatch(viaJson(previous), viaJson(diffState(previous, current)))).toEqual(viaJson(current))
+    }
+    expect(diffState({ a: 1, b: undefined }, { a: 1 })).toBeNull()
+  })
   it('is null for no change, and never larger than replacing the value outright', () => {
     expect(diffState({ a: [1] }, { a: [1] })).toBeNull()
     for (const [previous, current] of cases) {

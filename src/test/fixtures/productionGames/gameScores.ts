@@ -6,15 +6,18 @@
 //
 // Keyed by `GameState.gameType`, so fixtures of several registered games can
 // sit side by side. For the example game ("Unique Pick",
-// @game-platform/unique-pick) the score is simply `game.scores`. A game with
+// @game-platform/unique-pick) the score is simply `game.scores`; for Rise &
+// Fall it's each player's total victory points. A game with
 // no entry here — or no notion of a score — yields `{}`, in which case its
 // sidecars just declare `winners`.
 
 import type { GameState } from '@game-platform/sdk'
+import { victoryPointsOf, type GameState as RiseAndFallState } from '@game-platform/rise-and-fall/rules'
 import type { GameState as UniquePickState } from '@game-platform/unique-pick/rules'
 
 const SCORE_READERS: Record<string, (state: GameState) => Record<string, number>> = {
   'unique-pick': (state) => (state as UniquePickState).game.scores,
+  'rise-and-fall': (state) => victoryPointsOf(state as RiseAndFallState),
 }
 
 /** Final score per player id, as the end-of-game screen shows it. */

@@ -1,0 +1,7 @@
+{
+  "name": "Player B vs Player D vs Player E — three-player async on a preset board",
+  "expected": {
+    "finalScores": { "Player B": 217, "Player D": 135, "Player E": 68 },
+    "winners": ["Player B"]
+  }
+}

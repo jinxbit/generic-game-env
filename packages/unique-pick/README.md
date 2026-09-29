@@ -72,7 +72,10 @@ owns `game`, and keeps these envelope fields accurate:
   that still says what's public ("played 7 and drew a card"). For a
   hidden-information game the server narrates each entry when it writes it,
   so every player's log is complete; `redactedMessage` is what a player sees
-  while the entry is secret from them.
+  while the entry is secret from them. A step that cascades into more worth
+  its own line (an achievement claimed, a new round) can add `extraLines`,
+  each naming its own player; they're shown to everyone, so keep secrets out
+  of them.
 - `describePhase(phase)` — label for listing screens and notifications.
 
 Every game action must carry `playerId: string`; the framework reserves the

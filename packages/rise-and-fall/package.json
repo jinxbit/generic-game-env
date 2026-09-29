@@ -1,0 +1,17 @@
+{
+  "name": "@game-platform/rise-and-fall",
+  "version": "0.1.0",
+  "description": "Rise & Fall — an original hex-map strategy game of unit-kind cards, achievements and victory points.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    "./rules": "./src/rules.ts",
+    "./view": "./src/view.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "peerDependencies": {
+    "@game-platform/sdk": "*",
+    "html-to-image": "^1.11.13",
+    "react": "^19"
+  }
+}

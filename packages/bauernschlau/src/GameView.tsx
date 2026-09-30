@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { GameViewProps } from '@game-platform/sdk/ui'
-import { actionChoices, cellLabel, dogStays, emptyFields, faceDownCells, fenceMovesFor, isOpeningRound, specialCount, STEP_LABELS, type FenceMove, type GameState } from './rules.ts'
+import { actionChoices, bonusFields, cellLabel, dogStays, emptyFields, faceDownCells, fenceMovesFor, isOpeningRound, specialCount, STEP_LABELS, type FenceMove, type GameState } from './rules.ts'
 import type { GameAction, GameData, GameOptions } from './types.ts'
 import { Board } from './view/Board.tsx'
 import { BTN, BTN_PRIMARY, nameOf } from './view/helpers.ts'
@@ -112,6 +112,7 @@ export function GameView({ state, players, myPlayerId, submitting, onAction }: G
         ))}
       <Board
         game={g}
+        bonuses={bonusFields(state.rulesVersion)}
         players={players}
         myPlayerId={myPlayerId}
         targets={targets}

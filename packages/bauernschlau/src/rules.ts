@@ -12,10 +12,11 @@
 // (`GameData.actionsLeft`).
 //
 // Rules versions: version 2 leaves the dog where it was set down after
-// herding and adds the first-edition option (on by default: a black sheep
-// herded by the dog gives no extra actions). Version 1 let the dog move on and
-// always gave the bonus. Both run from this one code path, branching on
-// `rulesVersion` (`dogStays`, `herdingBlackGivesBonus`), and both stay
+// herding, adds the first-edition option (on by default: a black sheep
+// herded by the dog gives no extra actions) and scores 18 ×2/×3 bonus fields.
+// Version 1 let the dog move on, always gave the bonus and had six ×2 geese
+// fields. Both run from this one code path, branching on `rulesVersion`
+// (`dogStays`, `herdingBlackGivesBonus`, `bonusFields`), and both stay
 // registered (`gameDefinitionV1`) so a game started under version 1 replays.
 //
 // Hidden information: a sheep is put on the board face down, and only the
@@ -150,12 +151,12 @@ function canAct(state: GameState, game: GameData, playerId: PlayerId, round: num
 /** R-SCORE-01..05: everyone's score, as the board stands. */
 export function scoresOf(state: GameState, game: GameData = state.game): Record<PlayerId, Score> {
   const standing = game.seatOrder.filter((id) => !isOut(state, id))
-  const enclosedFarms = standing.filter((id) => isEnclosed(game, id)).map((id) => farmScore(game, id))
+  const enclosedFarms = standing.filter((id) => isEnclosed(game, id)).map((id) => farmScore(game, id, state.rulesVersion))
   const lowest = enclosedFarms.length > 0 ? Math.min(...enclosedFarms) : 0
   return Object.fromEntries(
     game.seatOrder.map((id) => {
       const enclosed = isEnclosed(game, id)
-      const farm = enclosed ? farmScore(game, id) : state.options.multiRoundScoring ? lowest - UNENCLOSED_GAP : 0
+      const farm = enclosed ? farmScore(game, id, state.rulesVersion) : state.options.multiRoundScoring ? lowest - UNENCLOSED_GAP : 0
       const fences = -game.farms[id].fencesLeft
       return [id, { enclosed, farm, fences, total: farm + fences }]
     }),

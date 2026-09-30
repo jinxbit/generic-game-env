@@ -78,7 +78,7 @@ export type EndReason = { kind: 'farmFull'; playerId: PlayerId } | { kind: 'stal
 /** A player's final score (§7). */
 export interface Score {
   enclosed: boolean
-  /** Face-up sheep in the farm, geese doubled — or the variant's substitute for an unenclosed farm. */
+  /** Face-up sheep in the farm, times their bonus fields' multipliers — or the variant's substitute for an unenclosed farm. */
   farm: number
   /** Minus one per unused fence (R-SCORE-04). */
   fences: number

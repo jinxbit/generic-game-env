@@ -33,8 +33,15 @@ much of the geometry below is this implementation's own.
   around the centre.
 - **R-BOARD-02** The seven central hexes — the centre and the six
   farmhouses around it — are unplayable. The other 84 hexes are **fields**.
-- **R-BOARD-03** Six fields are **geese fields**: the ring-3 hex straight out
-  from each farmhouse [AMBIG-4].
+- **R-BOARD-03** Eighteen fields are **bonus fields**, each multiplying the
+  sheep on it. The six **long diagonals** run from the centre through each
+  farmhouse to a corner of the board; on ring k they cross the ring at its
+  corners, every k-th hex.
+  - **Ring 2** (the first ring of fields): every 2nd hex, the six *not* on a
+    long diagonal — each where two farmhouses meet — **×2**.
+  - **Ring 3**: every 3rd hex, the six *on* the long diagonals — **×3**.
+  - **Ring 4**: every 4th hex, the six exactly midway between two long
+    diagonals — **×3**.
 - Cells are labelled by row letter from the top (A–K) and position in the row
   from the left: the top-left field is A1, the centre F6.
 
@@ -142,7 +149,8 @@ neighbouring farm — with two players, the two farms share both.
 - **R-SCORE-01** Only an enclosed farm scores its sheep.
 - **R-SCORE-02** It scores the value of every face-up sheep on its fields.
   Face-down sheep score nothing [AMBIG-9]; black sheep are worth 0.
-- **R-SCORE-03** A sheep on a geese field counts double [AMBIG-4].
+- **R-SCORE-03** A sheep on a bonus field counts its field's multiplier times
+  (×2 or ×3, R-BOARD-03) [AMBIG-4].
 - **R-SCORE-04** Each unused fence scores −1, enclosed or not.
 - **R-SCORE-05** Multi-round variant (option `multiRoundScoring`): an
   unenclosed farm scores 10 less than the lowest-scoring enclosed farm of a
@@ -177,9 +185,10 @@ neighbouring farm — with two players, the two farms share both.
 - **AMBIG-3 Sheep counters.** The sheet gives no mix. 90 counters (more than
   the 84 fields, so the bag never runs dry before the board is full),
   weighted positive, with 10 black sheep.
-- **AMBIG-4 Geese.** "Geese fields multiply the sum of all sheep within
-  them" — read as: a geese field doubles the sheep on it. Six geese fields,
-  one on each farmhouse's axis at ring 3.
+- **AMBIG-4 Bonus fields.** The sheet's "geese fields multiply the sum of all
+  sheep within them" gives no layout; the layout and multipliers of R-BOARD-03
+  were given after version 1 (which had six ×2 geese fields, §11). Each field
+  holds one sheep, so a multiplier applies to that sheep.
 - **AMBIG-5 Where the dog ends up.** It stays on the field it was set down
   on, where the sheep was (a ruling given after version 1). The sheet's "the
   sheepdog can be returned to the centre of the board, or any other empty
@@ -206,8 +215,8 @@ neighbouring farm — with two players, the two farms share both.
 
 Games started before rules version 2 replay under version 1, which is kept
 registered (`gameDefinitionV1`) and runs from the same code, branching on
-`rulesVersion` (`dogStays`, `herdingBlackGivesBonus`). It differed in two
-ways:
+`rulesVersion` (`dogStays`, `herdingBlackGivesBonus`, `bonusFields`). It
+differed in three ways:
 
 - **Where the dog ends up.** After herding, the player chose: the dog stayed
   on the sheep's old field, went back to the centre (`dog: null`), or went
@@ -215,3 +224,6 @@ ways:
 - **No first-edition rule.** A black sheep turned over with the dog always
   gave the two extra actions. The `firstEdition` option, which such games'
   options now read as on, is ignored.
+- **Geese fields, not bonus fields.** Six fields, the ring-3 hex straight
+  out from each farmhouse (where version 2 has its ×3 fields), each doubled
+  its sheep (`GEESE`). `bonusFields(rulesVersion)` picks the layout.

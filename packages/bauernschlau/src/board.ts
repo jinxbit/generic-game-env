@@ -51,8 +51,6 @@ export const FARM_POSITIONS: Record<number, number[]> = {
   6: [0, 1, 2, 3, 4, 5],
 }
 
-/** R-SCORE-03 (AMBIG-4): a sheep on a geese field counts double. */
-export const GEESE_MULTIPLIER = 2
 
 /** R-SCORE-05: the multi-round variant's gap below the lowest enclosed farm. */
 export const UNENCLOSED_GAP = 10
@@ -127,8 +125,43 @@ export function isField(cell: number): boolean {
 
 export const FIELDS: readonly number[] = CELLS.map((_, i) => i).filter(isField)
 
-/** R-BOARD-03 (AMBIG-4): the geese fields, one in the middle of each farm's stretch. */
-export const GEESE: ReadonlySet<number> = new Set(DIRECTIONS.map((d) => cellOf({ q: 3 * d.q, r: 3 * d.r })))
+function scaled(h: Hex, k: number): Hex {
+  return { q: h.q * k, r: h.r * k }
+}
+
+/**
+ * Rules version 1's bonus fields (AMBIG-4): the six "geese fields", the
+ * ring-3 hex straight out from each farmhouse, each doubling its sheep.
+ */
+export const GEESE: ReadonlySet<number> = new Set(DIRECTIONS.map((d) => cellOf(scaled(d, 3))))
+
+/**
+ * R-BOARD-03: the bonus fields from rules version 2, and what each multiplies
+ * its sheep by. The six long diagonals run from the centre through each
+ * farmhouse to a corner of the board; on ring k they meet the ring at its
+ * corners, every k-th hex.
+ * - ring 2 (the first ring of fields): the six hexes between its corners —
+ *   every 2nd hex, off the diagonals, each where two farmhouses meet — ×2;
+ * - ring 3: its six corners, on the diagonals — ×3;
+ * - ring 4: the six hexes exactly midway between its corners — ×3.
+ */
+export const BONUS_FIELDS: ReadonlyMap<number, number> = new Map(
+  DIRECTIONS.flatMap((d, i) => {
+    const next = DIRECTIONS[(i + 1) % 6]
+    return [
+      [cellOf(add(d, next)), 2],
+      [cellOf(scaled(d, 3)), 3],
+      [cellOf(add(scaled(d, 2), scaled(next, 2))), 3],
+    ] as [number, number][]
+  }),
+)
+
+const GEESE_FIELDS: ReadonlyMap<number, number> = new Map([...GEESE].map((cell) => [cell, 2]))
+
+/** R-BOARD-03 / R-SCORE-03: the bonus fields under `rulesVersion`, cell to multiplier. */
+export function bonusFields(rulesVersion: number): ReadonlyMap<number, number> {
+  return rulesVersion >= 2 ? BONUS_FIELDS : GEESE_FIELDS
+}
 
 /** On-board neighbours of a cell. */
 export function neighbours(cell: number): number[] {
@@ -380,18 +413,18 @@ export function isFarmFull(game: GameData, playerId: PlayerId): boolean {
   return isEnclosed(game, playerId) && farmFields(game.borders, game.farms[playerId].position).every((c) => isOccupied(game, c))
 }
 
-/** R-SCORE-02/03: face-up sheep on these fields, geese doubled. Face-down sheep count nothing. */
-export function sheepScore(sheep: readonly (FieldSheep | null)[], cells: readonly number[]): number {
+/** R-SCORE-02/03: face-up sheep on these fields, times their bonus field's multiplier. Face-down sheep count nothing. */
+export function sheepScore(sheep: readonly (FieldSheep | null)[], cells: readonly number[], bonuses: ReadonlyMap<number, number>): number {
   let total = 0
   for (const cell of cells) {
     const s = sheep[cell]
     if (!s || !s.faceUp || !s.sheep) continue
-    total += s.sheep.value * (GEESE.has(cell) ? GEESE_MULTIPLIER : 1)
+    total += s.sheep.value * (bonuses.get(cell) ?? 1)
   }
   return total
 }
 
-/** What a farm's sheep are worth right now (whether or not it's enclosed). */
-export function farmScore(game: GameData, playerId: PlayerId): number {
-  return sheepScore(game.sheep, farmFields(game.borders, game.farms[playerId].position))
+/** What a farm's sheep are worth right now (whether or not it's enclosed), under `rulesVersion`'s bonus fields. */
+export function farmScore(game: GameData, playerId: PlayerId, rulesVersion: number): number {
+  return sheepScore(game.sheep, farmFields(game.borders, game.farms[playerId].position), bonusFields(rulesVersion))
 }

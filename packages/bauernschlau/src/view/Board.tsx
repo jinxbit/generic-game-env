@@ -1,11 +1,14 @@
 import type { SeatInfo } from '@game-platform/sdk/ui'
-import { CELLS, CENTRE, cellLabel, cellOf, edgeBetween, FARMHOUSES, farmFields, GEESE, isEnclosed, isField, RADIUS, type FenceMove, type GameData } from '../rules.ts'
+import { CELLS, CENTRE, cellLabel, cellOf, edgeBetween, FARMHOUSES, farmFields, isEnclosed, isField, RADIUS, type FenceMove, type GameData } from '../rules.ts'
 import { cellCentre, HEX_SIZE, hexPoints, seatColourOf, vertexPoint } from './helpers.ts'
 
 const EXTENT = HEX_SIZE * Math.sqrt(3) * (RADIUS + 1)
 
+/** Plain fields, then bonus fields a shade brighter the more they multiply. */
+const BONUS_FILL: Record<number, string> = { 1: '#365314', 2: '#3f6212', 3: '#4d7c0f' }
+
 /**
- * The hex board as SVG: fields (geese fields marked), the seven central hexes
+ * The hex board as SVG: fields (bonus fields marked with their multiplier), the seven central hexes
  * with the farmhouses and the dog's kennel in the middle, sheep, the dog and
  * the fence lines. Enclosed farms are tinted in their owner's colour.
  *
@@ -16,6 +19,7 @@ const EXTENT = HEX_SIZE * Math.sqrt(3) * (RADIUS + 1)
  */
 export function Board({
   game,
+  bonuses,
   players,
   myPlayerId,
   targets,
@@ -28,6 +32,8 @@ export function Board({
   onFence,
 }: {
   game: GameData
+  /** Bonus fields for the game's rules version (`bonusFields`), cell to multiplier. */
+  bonuses: ReadonlyMap<number, number>
   players: SeatInfo[]
   myPlayerId: string | null
   targets: Set<number>
@@ -56,9 +62,9 @@ export function Board({
           const field = isField(cell)
           const owner = owners.get(cell)
           const clickable = !disabled && (cell === CENTRE ? centreTarget : targets.has(cell))
-          const fill = cell === CENTRE ? '#57534e' : owner ? seatColourOf(players, owner) : field ? (GEESE.has(cell) ? '#3f6212' : '#365314') : '#44403c'
+          const fill = cell === CENTRE ? '#57534e' : owner ? seatColourOf(players, owner) : field ? (BONUS_FILL[bonuses.get(cell) ?? 1] ?? '#365314') : '#44403c'
           const sheep = game.sheep[cell]
-          const label = cell === CENTRE ? 'Centre' : `${cellLabel(cell)}${GEESE.has(cell) ? ' · geese' : ''}${sheep ? (sheep.faceUp ? ' · face-up sheep' : ' · face-down sheep') : ''}${game.dog === cell ? ' · dog' : ''}`
+          const label = cell === CENTRE ? 'Centre' : `${cellLabel(cell)}${bonuses.has(cell) ? ` · bonus ×${bonuses.get(cell)}` : ''}${sheep ? (sheep.faceUp ? ' · face-up sheep' : ' · face-down sheep') : ''}${game.dog === cell ? ' · dog' : ''}`
           return (
             <g
               key={cell}
@@ -72,9 +78,9 @@ export function Board({
               <title>{label}</title>
               <polygon points={hexPoints(cell)} fill={fill} stroke="#1c1917" strokeWidth={1} />
               {tint.has(cell) && <polygon points={hexPoints(cell)} fill={tint.get(cell)} fillOpacity={0.28} />}
-              {GEESE.has(cell) && !sheep && game.dog !== cell && (
+              {bonuses.has(cell) && !sheep && game.dog !== cell && (
                 <text x={x} y={y + 4} textAnchor="middle" fontSize={11} fill="#d9f99d">
-                  ×2
+                  ×{bonuses.get(cell)}
                 </text>
               )}
               {owner && (

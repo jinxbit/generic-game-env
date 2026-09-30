@@ -8,6 +8,8 @@ import {
   fenceMoves,
   FIELDS,
   gameDefinition,
+  BONUS_FIELDS,
+  bonusFields,
   GEESE,
   isEdgeVertex,
   junction,
@@ -199,6 +201,22 @@ describe('§6 flipping and the sheepdog', () => {
 })
 
 describe('§11 rules version 1', () => {
+  it('scored with the six ×2 geese fields instead of the bonus fields', () => {
+    let s = arrange(skipOpening(newGame({ players: 2, rulesVersion: 1 })), (g) => {
+      g.sheep = g.sheep.map(() => null)
+      finishBorders(g, [0, 1])
+    })
+    const mine = farmFields(s.game.borders, s.game.farms.p1.position)
+    const last = mine[mine.length - 1]
+    s = arrange(s, (g) => {
+      for (const cell of mine) if (cell !== last) g.sheep[cell] = { sheep: { value: 1, black: false }, faceUp: true, placedBy: 'p2' }
+    })
+    s = placeSheep(s, last)
+    const expected = mine.filter((c) => c !== last).reduce((n, c) => n + (GEESE.has(c) ? 2 : 1), 0)
+    expect(s.game.finalScores!.p1.farm).toBe(expected)
+    expect(bonusFields(1)).not.toBe(bonusFields(2))
+  })
+
   it('the dog could stay, go home or move on after herding', () => {
     const base = withSheep(skipOpening(newGame({ players: 2, rulesVersion: 1 })), FIELDS[40], { value: 2, black: false }, false)
     expect(base.rulesVersion).toBe(1)
@@ -294,7 +312,7 @@ describe('§6 fences', () => {
 })
 
 describe('§8 the end and scoring', () => {
-  it('R-END-01, R-SCORE-01..04: the game ends when an enclosed farm is full; face-up sheep score, geese double, face-down and spare fences cost', () => {
+  it('R-END-01, R-SCORE-01..04: the game ends when an enclosed farm is full; face-up sheep score, bonus fields multiply, face-down and spare fences cost', () => {
     let s = arrange(skipOpening(newGame({ players: 2 })), (g) => {
       g.sheep = g.sheep.map(() => null)
       finishBorders(g, [0, 1])
@@ -303,7 +321,7 @@ describe('§8 the end and scoring', () => {
     const theirs = farmFields(s.game.borders, s.game.farms.p2.position)
     expect(mine.length + theirs.length).toBe(84)
     const last = mine[mine.length - 1]
-    const plain = theirs.find((c) => !GEESE.has(c))!
+    const plain = theirs.find((c) => !BONUS_FIELDS.has(c))!
     s = arrange(s, (g) => {
       for (const cell of mine) if (cell !== last) g.sheep[cell] = { sheep: { value: 2, black: false }, faceUp: true, placedBy: 'p2' }
       g.sheep[plain] = { sheep: { value: -3, black: false }, faceUp: true, placedBy: 'p1' }
@@ -312,8 +330,9 @@ describe('§8 the end and scoring', () => {
     s = placeSheep(s, last, { value: 4, black: false })
     expect(s.status).toBe('completed')
     expect(s.game.endReason).toEqual({ kind: 'farmFull', playerId: 'p1' })
-    const geese = mine.filter((c) => c !== last && GEESE.has(c)).length
-    const expected = 2 * (mine.length - 1 - geese) + 4 * geese
+    // Every sheep is worth 2, times its field's multiplier (×2 or ×3 on a bonus field).
+    const expected = mine.filter((c) => c !== last).reduce((n, c) => n + 2 * (BONUS_FIELDS.get(c) ?? 1), 0)
+    expect(mine.some((c) => c !== last && BONUS_FIELDS.get(c) === 3)).toBe(true)
     expect(s.game.finalScores!.p1).toEqual({ enclosed: true, farm: expected, fences: -(16 - s.game.borders[0].builtBy.length), total: expected - (16 - s.game.borders[0].builtBy.length) })
     expect(s.game.finalScores!.p2.farm).toBe(-3)
     expect(s.winnerPlayerIds).toEqual(['p1'])
@@ -329,10 +348,10 @@ describe('§8 the end and scoring', () => {
       })
       const mine = farmFields(s.game.borders, s.game.farms.p1.position)
       s = arrange(s, (g) => {
-        for (const cell of mine.slice(0, -1)) g.sheep[cell] = { sheep: { value: GEESE.has(cell) ? 0 : 1, black: false }, faceUp: true, placedBy: 'p2' }
+        for (const cell of mine.slice(0, -1)) g.sheep[cell] = { sheep: { value: BONUS_FIELDS.has(cell) ? 0 : 1, black: false }, faceUp: true, placedBy: 'p2' }
       })
       s = placeSheep(s, mine[mine.length - 1])
-      const farm = mine.slice(0, -1).filter((c) => !GEESE.has(c)).length
+      const farm = mine.slice(0, -1).filter((c) => !BONUS_FIELDS.has(c)).length
       expect(s.game.finalScores!.p1.farm).toBe(farm)
       expect(s.game.finalScores!.p2).toMatchObject({ enclosed: false, farm: multiRoundScoring ? farm - 10 : 0, fences: -16 })
     }

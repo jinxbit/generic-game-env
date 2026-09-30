@@ -1,8 +1,8 @@
 # Bauernschlau — Implementation Rules Spec
 
 > This file is the source of truth for the Bauernschlau rules engine in
-> `packages/bauernschlau`, as of **rules version 2**. §11 lists what version 1,
-> still registered for games started under it, did differently. Rule ids
+> `packages/bauernschlau`, as of **rules version 3**. §11 lists what versions
+> 1 and 2, still registered for games started under them, did differently. Rule ids
 > (`R-FENCE-03` and so on) are cited in the code and the tests. `[AMBIG-n]` marks a point
 > the rules sheet leaves open; §10 lists the behaviour chosen for each.
 > Changing any of them changes how existing games replay, so it ships with a
@@ -17,7 +17,7 @@ much of the geometry below is this implementation's own.
 
 | Component | Count | Model |
 | --- | --- | --- |
-| Board | a hexagon of hexes, radius 5 [AMBIG-1] | `CELLS` (board.ts), axial coordinates, 91 hexes numbered row by row |
+| Board | a hexagon of hexes, radius 4 [AMBIG-1] | `CELLS` (board.ts), axial coordinates: 91 hexes of a radius-5 grid numbered row by row, of which the board uses the 61 within its radius (`GameData.radius`) |
 | Farmhouses | six, one per colour | the six hexes around the centre |
 | Sheepdog | one | `dog`: a cell, or null for the centre |
 | Sheep counters | 90 [AMBIG-3] | `bag`, `hand`, `sheep[cell]` |
@@ -29,10 +29,10 @@ much of the geometry below is this implementation's own.
 
 ## 2. Board
 
-- **R-BOARD-01** The board is a hexagon of radius 5: 91 hexes in rings 0–5
-  around the centre.
+- **R-BOARD-01** The board is a hexagon of radius 4: 61 hexes in rings 0–4
+  around the centre — five hexes from the centre to the edge, inclusive.
 - **R-BOARD-02** The seven central hexes — the centre and the six
-  farmhouses around it — are unplayable. The other 84 hexes are **fields**.
+  farmhouses around it — are unplayable. The other 54 hexes are **fields**.
 - **R-BOARD-03** Eighteen fields are **bonus fields**, each multiplying the
   sheep on it. The six **long diagonals** run from the centre through each
   farmhouse to a corner of the board; on ring k they cross the ring at its
@@ -42,8 +42,8 @@ much of the geometry below is this implementation's own.
   - **Ring 3**: every 3rd hex, the six *on* the long diagonals — **×3**.
   - **Ring 4**: every 4th hex, the six exactly midway between two long
     diagonals — **×3**.
-- Cells are labelled by row letter from the top (A–K) and position in the row
-  from the left: the top-left field is A1, the centre F6.
+- Cells are labelled by row letter from the top (A–I) and position in the row
+  from the left: the top-left field is A1, the centre E5.
 
 ## 3. Setup
 
@@ -130,7 +130,7 @@ neighbouring farm — with two players, the two farms share both.
 - **R-FENCE-05** A fence may not cut off any border's last remaining path
   to the edge of the board (its own included).
 - **R-FENCE-06** A border is **finished** when its line reaches the outer
-  edge of the board. It takes at least eight fences.
+  edge of the board. It takes at least six fences.
 - **R-FENCE-07** A player with no fences left can't build.
 - A farm is **enclosed** when both its borders are finished. Its fields are
   everything reachable from its farmhouse without crossing a fence line (each
@@ -177,13 +177,15 @@ neighbouring farm — with two players, the two farms share both.
 
 ## 10. Decisions beyond the rules sheet
 
-- **AMBIG-1 Board.** The sheet shows no board. A radius-5 hex hexagon gives
-  84 fields and borders of 8+ fences, which fits the fence counts (16/12/10
-  per player over 2–6 shared borders) with room to bend.
+- **AMBIG-1 Board.** The sheet shows no board. Radius 4 (54 fields, borders
+  of 6+ fences) was given after version 2, which played on radius 5 (84
+  fields, borders of 8+ fences, §11). The fence counts (16/12/10 per player
+  over 2–6 shared borders) leave room to bend.
 - **AMBIG-2 Farms with fewer than six players.** Farmhouses are spread as
   evenly as six positions allow; the unused ones stay unplayable.
 - **AMBIG-3 Sheep counters.** The sheet gives no mix. 90 counters (more than
-  the 84 fields, so the bag never runs dry before the board is full),
+  the 54 fields — and the 84 of the older radius-5 board — so the bag never
+  runs dry before the board is full),
   weighted positive, with 10 black sheep.
 - **AMBIG-4 Bonus fields.** The sheet's "geese fields multiply the sum of all
   sheep within them" gives no layout; the layout and multipliers of R-BOARD-03
@@ -197,7 +199,7 @@ neighbouring farm — with two players, the two farms share both.
   move of its own. Version 1 read it as a choice after herding (§11).
 - **AMBIG-6 "Towards the farmhouses".** Measured by ring boundary: sideways
   along a boundary is allowed, inward is not. (Requiring every fence to lead
-  strictly outward would make every border exactly eight fences long, and the
+  strictly outward would make every border exactly six fences long, and the
   fence counts meaningless.) A line may run along a farmhouse only as its
   first fence, so a border can't wrap round a farmhouse and cut it off from
   its own fields.
@@ -211,12 +213,24 @@ neighbouring farm — with two players, the two farms share both.
 - **AMBIG-10 Ending mid-special.** The game ends the moment a farm fills,
   even with sheep of a special still to place.
 
-## 11. Rules version 1
+## 11. Older rules versions
 
-Games started before rules version 2 replay under version 1, which is kept
-registered (`gameDefinitionV1`) and runs from the same code, branching on
-`rulesVersion` (`dogStays`, `herdingBlackGivesBonus`, `bonusFields`). It
-differed in three ways:
+Games replay under the version they started with. Versions 1 and 2 are kept
+registered (`gameDefinitionV1`, `gameDefinitionV2`) and run from the same
+code, branching on `rulesVersion` (`boardRadius`, `dogStays`,
+`herdingBlackGivesBonus`, `bonusFields`) or on the board radius stored on the
+game (`radiusOf`).
+
+### Version 2
+
+- **Radius 5.** The board had rings 0–5: 91 hexes, 84 fields, cells labelled
+  A–K with the centre F6, and borders of at least eight fences. Such games
+  carry no `radius` on their state, which `radiusOf` reads as 5. The bonus
+  fields were the same; ring 4's stood one ring in from the edge.
+
+### Version 1
+
+As version 2 (radius 5), except in three ways:
 
 - **Where the dog ends up.** After herding, the player chose: the dog stayed
   on the sheep's old field, went back to the centre (`dog: null`), or went

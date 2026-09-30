@@ -2,7 +2,7 @@
 
 import { createNewGame, registerGame, type PlayMode, type Uint32Source } from '@game-platform/sdk'
 import { act, seatPlayers } from '@game-platform/sdk/testing'
-import { actionChoices, emptyFields, faceDownCells, fenceMoves, fenceMovesFor, gameDefinition, gameDefinitionV1, isEdgeVertex, vertexDepth, withEnvelope, type GameState } from './rules.ts'
+import { actionChoices, emptyFields, faceDownCells, fenceMoves, fenceMovesFor, gameDefinition, gameDefinitionV1, gameDefinitionV2, isEdgeVertex, radiusOf, vertexDepth, withEnvelope, type GameState } from './rules.ts'
 import type { GameAction, GameData, GameOptions, Sheep } from './types.ts'
 
 export { act, withoutTimestamps } from '@game-platform/sdk/testing'
@@ -37,6 +37,7 @@ export function newGame(
 ): GameState {
   registerGame(gameDefinition)
   registerGame(gameDefinitionV1)
+  registerGame(gameDefinitionV2)
   const players = params.players ?? 3
   return createNewGame({
     gameId: 'game_1',
@@ -80,7 +81,7 @@ export function skipOpening(state: GameState): GameState {
 export function finishBorders(game: GameData, indices: number[]): void {
   for (const b of indices) {
     while (!game.borders[b].finished) {
-      const [move] = fenceMoves(game.borders, b).sort((x, y) => vertexDepth(y.to) - vertexDepth(x.to))
+      const [move] = fenceMoves(game.borders, b, radiusOf(game)).sort((x, y) => vertexDepth(y.to) - vertexDepth(x.to))
       if (!move) throw new Error(`Border ${b} can't be finished`)
       const border = game.borders[b]
       const builder = border.between[0]
@@ -88,7 +89,7 @@ export function finishBorders(game: GameData, indices: number[]): void {
         ...border,
         path: border.path.length > 0 ? [...border.path, move.to] : [move.from, move.to],
         builtBy: [...border.builtBy, builder],
-        finished: isEdgeVertex(move.to),
+        finished: isEdgeVertex(move.to, radiusOf(game)),
       }
       game.farms[builder].fencesLeft -= 1
     }

@@ -11,13 +11,16 @@
 // action, plus two more for every black sheep turned over
 // (`GameData.actionsLeft`).
 //
-// Rules versions: version 2 leaves the dog where it was set down after
-// herding, adds the first-edition option (on by default: a black sheep
-// herded by the dog gives no extra actions) and scores 18 ×2/×3 bonus fields.
-// Version 1 let the dog move on, always gave the bonus and had six ×2 geese
-// fields. Both run from this one code path, branching on `rulesVersion`
-// (`dogStays`, `herdingBlackGivesBonus`, `bonusFields`), and both stay
-// registered (`gameDefinitionV1`) so a game started under version 1 replays.
+// Rules versions: version 3 plays on a board of radius 4 (rings 0–4, 54
+// fields), stored on the game at genesis (`GameData.radius`). Version 2 had
+// radius 5; it left the dog where it was set down after herding, added the
+// first-edition option (on by default: a black sheep herded by the dog gives
+// no extra actions) and scored 18 ×2/×3 bonus fields. Version 1 let the dog
+// move on, always gave the bonus and had six ×2 geese fields. All three run
+// from this one code path, branching on `rulesVersion` (`boardRadius`,
+// `dogStays`, `herdingBlackGivesBonus`, `bonusFields`) or on the stored
+// radius (`radiusOf`), and all stay registered (`gameDefinitionV1`,
+// `gameDefinitionV2`) so a game started under an older version replays.
 //
 // Hidden information: a sheep is put on the board face down, and only the
 // player who drew it knows what it is (R-HIDE-01). `redactGame` masks every
@@ -46,6 +49,8 @@ import {
   isEnclosed,
   isFarmFull,
   isField,
+  radiusOf,
+  boardRadius,
   sheepCounters,
   UNENCLOSED_GAP,
 } from './board.ts'
@@ -126,7 +131,7 @@ export function specialCount(state: GameState): number {
 export function fenceMovesFor(game: GameData, playerId: PlayerId) {
   const farm = game.farms[playerId]
   if (!farm || farm.fencesLeft <= 0) return []
-  return [...new Set(farm.borders)].flatMap((b) => fenceMoves(game.borders, b))
+  return [...new Set(farm.borders)].flatMap((b) => fenceMoves(game.borders, b, radiusOf(game)))
 }
 
 /** What `playerId` could do if it were their `choose` step in `round` (R-TURN-01, R-OPEN-01). */
@@ -245,14 +250,14 @@ function requireAfterOpening(state: GameState): void {
   if (isOpeningRound(state)) fail('In the first round everyone just places a sheep.')
 }
 
-function requireCell(raw: unknown): number {
-  if (typeof raw !== 'number' || !isField(raw)) fail('Choose a field on the board.')
+function requireCell(game: GameData, raw: unknown): number {
+  if (typeof raw !== 'number' || !isField(raw, radiusOf(game))) fail('Choose a field on the board.')
   return raw
 }
 
 function requireFaceDown(game: GameData, cell: number): void {
   const s = game.sheep[cell]
-  if (!s || s.faceUp) fail(`There is no face-down sheep on ${cellLabel(cell)}.`)
+  if (!s || s.faceUp) fail(`There is no face-down sheep on ${cellLabel(cell, radiusOf(game))}.`)
 }
 
 /** Takes `count` sheep from the bag at random into the hand (R-HIDE-02). Mutates `game`. */
@@ -288,9 +293,9 @@ function onSpecial(state: GameState, game: GameData, playerId: PlayerId, random:
 /** Put one drawn sheep face down on an empty field. Returns whether the hand is now empty. */
 function onPlace(state: GameState, game: GameData, playerId: PlayerId, rawCell: unknown, rawIndex: unknown): boolean {
   requireTurn(state, playerId, 'place')
-  const cell = requireCell(rawCell)
+  const cell = requireCell(game, rawCell)
   if (typeof rawIndex !== 'number' || !Number.isInteger(rawIndex) || rawIndex < 0 || rawIndex >= game.hand.length) fail('Choose one of the sheep you drew.')
-  if (game.sheep[cell] !== null || game.dog === cell) fail(`${cellLabel(cell)} is already occupied.`)
+  if (game.sheep[cell] !== null || game.dog === cell) fail(`${cellLabel(cell, radiusOf(game))} is already occupied.`)
   const hand = [...game.hand]
   const [sheep] = hand.splice(rawIndex, 1)
   game.sheep = [...game.sheep]
@@ -304,7 +309,7 @@ function onPlace(state: GameState, game: GameData, playerId: PlayerId, rawCell: 
 function onFlip(state: GameState, game: GameData, playerId: PlayerId, rawCell: unknown): void {
   requireTurn(state, playerId, 'choose')
   requireAfterOpening(state)
-  const cell = requireCell(rawCell)
+  const cell = requireCell(game, rawCell)
   requireFaceDown(game, cell)
   const placed = game.sheep[cell]!
   game.sheep = [...game.sheep]
@@ -317,19 +322,19 @@ function onFlip(state: GameState, game: GameData, playerId: PlayerId, rawCell: u
 function onHerd(state: GameState, game: GameData, playerId: PlayerId, rawFrom: unknown, rawTo: unknown, rawDog: unknown): void {
   requireTurn(state, playerId, 'choose')
   requireAfterOpening(state)
-  const from = requireCell(rawFrom)
+  const from = requireCell(game, rawFrom)
   requireFaceDown(game, from)
-  const to = requireCell(rawTo)
+  const to = requireCell(game, rawTo)
   // The dog leaves wherever it stood, so that field is free for the sheep.
-  if (to === from || game.sheep[to] !== null) fail(`Drive the sheep to an empty field, not ${cellLabel(to)}.`)
+  if (to === from || game.sheep[to] !== null) fail(`Drive the sheep to an empty field, not ${cellLabel(to, radiusOf(game))}.`)
   let dog: number | null = from
   if (dogStays(state.rulesVersion)) {
-    if (rawDog !== undefined && rawDog !== from) fail(`The dog stays on ${cellLabel(from)}, where you set it down.`)
+    if (rawDog !== undefined && rawDog !== from) fail(`The dog stays on ${cellLabel(from, radiusOf(game))}, where you set it down.`)
   } else if (rawDog === null) {
     dog = null
   } else {
-    dog = requireCell(rawDog)
-    if (dog !== from && (dog === to || game.sheep[dog] !== null)) fail(`The dog can stay on ${cellLabel(from)}, go back to the centre or go to an empty field — not ${cellLabel(dog)}.`)
+    dog = requireCell(game, rawDog)
+    if (dog !== from && (dog === to || game.sheep[dog] !== null)) fail(`The dog can stay on ${cellLabel(from, radiusOf(game))}, go back to the centre or go to an empty field — not ${cellLabel(dog, radiusOf(game))}.`)
   }
   const placed = game.sheep[from]!
   game.sheep = [...game.sheep]
@@ -349,10 +354,10 @@ function onFence(state: GameState, game: GameData, playerId: PlayerId, rawBorder
   if (farm.fencesLeft <= 0) fail('You have no fences left.')
   const border = game.borders[rawBorder]
   if (border.finished) fail('That border already reaches the edge of the board.')
-  const move = fenceMoves(game.borders, rawBorder).find((m) => m.from === rawFrom && m.to === rawTo)
+  const move = fenceMoves(game.borders, rawBorder, radiusOf(game)).find((m) => m.from === rawFrom && m.to === rawTo)
   if (!move) fail(border.path.length === 0 ? 'The first fence must start between the farmhouses and lead outwards.' : 'That fence would turn back, touch another fence or cut a border off from the edge.')
   const path = border.path.length === 0 ? [move.from, move.to] : [...border.path, move.to]
-  const finished = isEdgeVertex(move.to)
+  const finished = isEdgeVertex(move.to, radiusOf(game))
   game.borders = game.borders.map((b, i): Border => (i === rawBorder ? { ...b, path, builtBy: [...b.builtBy, playerId], finished } : b))
   game.farms = { ...game.farms, [playerId]: { ...farm, fencesLeft: farm.fencesLeft - 1 } }
   game.last = { kind: 'fence', playerId, border: rawBorder, from: move.from, to: move.to, finished }
@@ -416,13 +421,13 @@ function describeLast(before: GameState, after: GameState): string {
     case 'draw':
       return last.special ? `{player} called a sheep special and took ${last.count} sheep.` : '{player} took a sheep and looked at it.'
     case 'place':
-      return `{player} put a sheep face down on ${cellLabel(last.cell)}.${last.remaining > 0 ? ` ${last.remaining} left to place.` : ''}`
+      return `{player} put a sheep face down on ${cellLabel(last.cell, radiusOf(after.game))}.${last.remaining > 0 ? ` ${last.remaining} left to place.` : ''}`
     case 'flip':
-      return `{player} turned over the sheep on ${cellLabel(last.cell)}: ${sheepLabel(last.sheep)}.${last.sheep.black ? ` Two extra actions!` : ''}`
+      return `{player} turned over the sheep on ${cellLabel(last.cell, radiusOf(after.game))}: ${sheepLabel(last.sheep)}.${last.sheep.black ? ` Two extra actions!` : ''}`
     case 'herd': {
       const bonus = !last.sheep.black ? '' : herdingBlackGivesBonus(after) ? ' Two extra actions!' : ' No extra actions with the dog (first edition).'
-      const dog = dogStays(after.rulesVersion) ? '' : last.dog === last.from ? ' The dog stays there.' : last.dog === null ? ' The dog goes back to the centre.' : ` The dog goes to ${cellLabel(last.dog)}.`
-      return `{player} set the dog on ${cellLabel(last.from)} and drove the sheep to ${cellLabel(last.to)}: ${sheepLabel(last.sheep)}.${bonus}${dog}`
+      const dog = dogStays(after.rulesVersion) ? '' : last.dog === last.from ? ' The dog stays there.' : last.dog === null ? ' The dog goes back to the centre.' : ` The dog goes to ${cellLabel(last.dog, radiusOf(after.game))}.`
+      return `{player} set the dog on ${cellLabel(last.from, radiusOf(after.game))} and drove the sheep to ${cellLabel(last.to, radiusOf(after.game))}: ${sheepLabel(last.sheep)}.${bonus}${dog}`
     }
     case 'fence': {
       const [a, b] = after.game.borders[last.border].between
@@ -450,7 +455,7 @@ function describeEnd(after: GameState): string[] {
 
 export const gameDefinition: GameDefinition<GameData, GameOptions, GameAction> = {
   id: 'bauernschlau',
-  rulesVersion: 2,
+  rulesVersion: 3,
   title: 'Bauernschlau',
   turnLabel: 'Round',
   minPlayers: 2,
@@ -479,6 +484,9 @@ export const gameDefinition: GameDefinition<GameData, GameOptions, GameAction> =
       finished: false,
     }))
     const game: GameData = {
+      // R-BOARD-01: from rules version 3 the board has radius 4. Older games
+      // don't carry the key at all (radius 5), so their genesis is unchanged.
+      ...(lobby.rulesVersion >= 3 ? { radius: boardRadius(lobby.rulesVersion) } : {}),
       seatOrder: seats,
       farms,
       borders,
@@ -553,8 +561,12 @@ export const gameDefinition: GameDefinition<GameData, GameOptions, GameAction> =
 }
 
 /**
- * Rules version 1 — the dog could be sent back to the centre or on to another
- * field after herding, and a black sheep herded by the dog always gave extra
- * actions. Kept registered so games started under it still replay.
+ * Rules version 1 — as version 2 (radius 5), but the dog could be sent back
+ * to the centre or on to another field after herding, a black sheep herded by
+ * the dog always gave extra actions, and six ×2 geese fields stood in for the
+ * bonus fields. Kept registered so games started under it still replay.
  */
 export const gameDefinitionV1: GameDefinition<GameData, GameOptions, GameAction> = { ...gameDefinition, rulesVersion: 1 }
+
+/** Rules version 2 — the board had radius 5 (rings 0–5, 84 fields). Kept registered so games started under it still replay. */
+export const gameDefinitionV2: GameDefinition<GameData, GameOptions, GameAction> = { ...gameDefinition, rulesVersion: 2 }

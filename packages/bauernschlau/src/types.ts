@@ -91,7 +91,13 @@ export interface GameData {
   seatOrder: PlayerId[]
   farms: Record<PlayerId, Farm>
   borders: Border[]
-  /** One entry per cell (board.ts `CELLS`); null where no sheep stands. */
+  /**
+   * The board's radius (R-BOARD-01): 4, set at genesis from rules version 3.
+   * Absent in games started before, whose board has radius 5 — read it with
+   * `radiusOf` (board.ts).
+   */
+  radius?: number
+  /** One entry per cell of the radius-5 grid (board.ts `CELLS`); null where no sheep stands. */
   sheep: (FieldSheep | null)[]
   /** The sheepdog's cell; null while it stands in the centre (R-SETUP-04). */
   dog: number | null

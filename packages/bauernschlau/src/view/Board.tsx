@@ -1,8 +1,6 @@
 import type { SeatInfo } from '@game-platform/sdk/ui'
-import { CELLS, CENTRE, cellLabel, cellOf, edgeBetween, FARMHOUSES, farmFields, isEnclosed, isField, RADIUS, type FenceMove, type GameData } from '../rules.ts'
+import { CELLS, CENTRE, cellLabel, cellOf, edgeBetween, FARMHOUSES, farmFields, isEnclosed, isField, isOnBoard, radiusOf, type FenceMove, type GameData } from '../rules.ts'
 import { cellCentre, HEX_SIZE, hexPoints, seatColourOf, vertexPoint } from './helpers.ts'
-
-const EXTENT = HEX_SIZE * Math.sqrt(3) * (RADIUS + 1)
 
 /** Plain fields, then bonus fields a shade brighter the more they multiply. */
 const BONUS_FILL: Record<number, string> = { 1: '#365314', 2: '#3f6212', 3: '#4d7c0f' }
@@ -45,10 +43,13 @@ export function Board({
   onCentre: () => void
   onFence: (move: FenceMove) => void
 }) {
+  // Cells are numbered on the radius-5 grid; only the board's own are drawn.
+  const radius = radiusOf(game)
+  const extent = HEX_SIZE * Math.sqrt(3) * (radius + 1)
   const tint = new Map<number, string>()
   for (const id of game.seatOrder) {
     if (!isEnclosed(game, id)) continue
-    for (const cell of farmFields(game.borders, game.farms[id].position)) tint.set(cell, seatColourOf(players, id))
+    for (const cell of farmFields(game.borders, game.farms[id].position, radius)) tint.set(cell, seatColourOf(players, id))
   }
   const owners = new Map(game.seatOrder.map((id) => [FARMHOUSES[game.farms[id].position], id]))
   const last = game.last
@@ -56,15 +57,16 @@ export function Board({
 
   return (
     <div className="flex justify-center">
-      <svg viewBox={`${-EXTENT} ${-EXTENT} ${2 * EXTENT} ${2 * EXTENT}`} className="w-full max-w-xl select-none" role="group" aria-label="Board">
+      <svg viewBox={`${-extent} ${-extent} ${2 * extent} ${2 * extent}`} className="w-full max-w-xl select-none" role="group" aria-label="Board">
         {CELLS.map((_, cell) => {
+          if (!isOnBoard(cell, radius)) return null
           const { x, y } = cellCentre(cell)
-          const field = isField(cell)
+          const field = isField(cell, radius)
           const owner = owners.get(cell)
           const clickable = !disabled && (cell === CENTRE ? centreTarget : targets.has(cell))
           const fill = cell === CENTRE ? '#57534e' : owner ? seatColourOf(players, owner) : field ? (BONUS_FILL[bonuses.get(cell) ?? 1] ?? '#365314') : '#44403c'
           const sheep = game.sheep[cell]
-          const label = cell === CENTRE ? 'Centre' : `${cellLabel(cell)}${bonuses.has(cell) ? ` · bonus ×${bonuses.get(cell)}` : ''}${sheep ? (sheep.faceUp ? ' · face-up sheep' : ' · face-down sheep') : ''}${game.dog === cell ? ' · dog' : ''}`
+          const label = cell === CENTRE ? 'Centre' : `${cellLabel(cell, radius)}${bonuses.has(cell) ? ` · bonus ×${bonuses.get(cell)}` : ''}${sheep ? (sheep.faceUp ? ' · face-up sheep' : ' · face-down sheep') : ''}${game.dog === cell ? ' · dog' : ''}`
           return (
             <g
               key={cell}
@@ -110,7 +112,7 @@ export function Board({
           fenceOptions.map((move) => {
             const p = vertexPoint(move.from)
             const q = vertexPoint(move.to)
-            const label = `Fence between ${edgeLabel(move)}`
+            const label = `Fence between ${edgeLabel(move, radius)}`
             return (
               <g key={`${move.border}:${move.from}:${move.to}`} role="button" aria-label={label} tabIndex={0} className="cursor-pointer" onClick={() => onFence(move)} onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onFence(move)}>
                 <title>{label}</title>
@@ -150,12 +152,12 @@ function SheepToken({ x, y, sheep, mine, highlighted }: { x: number; y: number; 
 }
 
 /** "D4 and E5": the two hexes a fence would separate. */
-function edgeLabel(move: FenceMove): string {
+function edgeLabel(move: FenceMove, radius: number): string {
   return edgeBetween(move.from, move.to)
     .split('/')
     .map((key) => {
       const [q, r] = key.split(',').map(Number)
-      return cellLabel(cellOf({ q, r }))
+      return cellLabel(cellOf({ q, r }), radius)
     })
     .join(' and ')
 }

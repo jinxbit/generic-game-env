@@ -23,7 +23,7 @@ import { arrange, finishBorders, newGame, placeSheep, play, skipOpening } from '
 import type { GameAction } from '../types'
 
 const PLUS1: Sheep = { value: 1, black: false }
-const BLACK: Sheep = { value: 0, black: true }
+const BLACK: Sheep = { value: -3, black: true }
 
 function reject(state: GameState, action: GameAction): string {
   const result = applyAction(state as PlatformState, action)
@@ -51,7 +51,9 @@ describe('§3 setup', () => {
     ])
     expect(g.borders[0].starts).toEqual([gate(0), gate(1)])
     expect(g.dog).toBeNull()
-    expect(g.bag).toHaveLength(90)
+    expect(g.bag).toHaveLength(52)
+    expect(g.bag.filter((x) => x!.black)).toHaveLength(16)
+    expect(g.bag.every((x) => (x!.black ? x!.value === -3 : [1, 2, 3, 5].includes(x!.value)))).toBe(true)
     expect(s.turn).toBe(1)
     expect(s.pendingPlayerIds).toEqual(['p2'])
     expect(s.setupRandom).toHaveLength(1)
@@ -82,7 +84,7 @@ describe('§4 turns and the opening round', () => {
     s = play(s, { type: 'DRAW_SHEEP', playerId: 'p2' })
     expect(s.game.step).toBe('place')
     expect(s.game.hand).toHaveLength(1)
-    expect(s.game.bag).toHaveLength(89)
+    expect(s.game.bag).toHaveLength(51)
     expect(s.pendingPlayerIds).toEqual(['p2'])
     expect(reject(s, { type: 'DRAW_SHEEP', playerId: 'p2' })).toMatch(/Place the sheep you drew first/)
     expect(reject(s, { type: 'PLACE_SHEEP', playerId: 'p2', cell: CENTRE, index: 0 })).toMatch(/field/)

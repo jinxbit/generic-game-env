@@ -55,19 +55,17 @@ export const FARM_POSITIONS: Record<number, number[]> = {
 /** R-SCORE-05: the multi-round variant's gap below the lowest enclosed farm. */
 export const UNENCLOSED_GAP = 10
 
-/** R-COMP-02 (AMBIG-3): the sheep counters, as [value, count] — and the black sheep. */
+/** R-COMP-02: the white sheep counters, as [value, count]. */
 export const WHITE_SHEEP: readonly (readonly [number, number])[] = [
-  [5, 4],
-  [4, 6],
-  [3, 10],
-  [2, 12],
-  [1, 14],
-  [-1, 12],
-  [-2, 10],
-  [-3, 8],
-  [-4, 4],
+  [5, 9],
+  [3, 9],
+  [2, 9],
+  [1, 9],
 ]
-export const BLACK_SHEEP_COUNT = 10
+
+/** R-COMP-02: the black sheep, each worth −3. */
+export const BLACK_SHEEP_COUNT = 16
+export const BLACK_SHEEP_VALUE = -3
 
 /** R-FLIP-02: extra actions for turning over a black sheep. */
 export const BLACK_SHEEP_BONUS = 2
@@ -76,7 +74,7 @@ export const BLACK_SHEEP_BONUS = 2
 export function sheepCounters(): Sheep[] {
   const out: Sheep[] = []
   for (const [value, count] of WHITE_SHEEP) for (let i = 0; i < count; i++) out.push({ value, black: false })
-  for (let i = 0; i < BLACK_SHEEP_COUNT; i++) out.push({ value: 0, black: true })
+  for (let i = 0; i < BLACK_SHEEP_COUNT; i++) out.push({ value: BLACK_SHEEP_VALUE, black: true })
   return out
 }
 

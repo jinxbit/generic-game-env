@@ -7,7 +7,7 @@
 
 export type PlayerId = string
 
-/** One sheep counter (R-COMP-02). A black sheep is worth `value` 0 and grants extra turns when turned over (R-FLIP-02). */
+/** One sheep counter (R-COMP-02). A black sheep is worth −3 and grants extra actions when turned over (R-FLIP-02). */
 export interface Sheep {
   value: number
   black: boolean

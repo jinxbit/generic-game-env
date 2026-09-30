@@ -137,7 +137,7 @@ function SheepToken({ x, y, sheep, mine, highlighted }: { x: number; y: number; 
     <g>
       <circle cx={x} cy={y} r={r} fill={s.black ? '#0c0a09' : '#fafaf9'} stroke={s.black ? '#fafaf9' : ring} strokeWidth={highlighted ? 2.5 : 1} />
       <text x={x} y={y + 4} textAnchor="middle" fontSize={12} fontWeight={700} fill={s.black ? '#fafaf9' : s.value < 0 ? '#b91c1c' : '#15803d'}>
-        {s.black ? '🐑' : signed(s.value)}
+        {signed(s.value)}
       </text>
     </g>
   )

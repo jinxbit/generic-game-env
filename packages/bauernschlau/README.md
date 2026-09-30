@@ -57,7 +57,9 @@ likely to matter at the table:
   — with 54 fields (AMBIG-1), 18 of them bonus
   fields — ×2 on ring 2 between the long diagonals, ×3 on ring 3 on them, ×3
   on ring 4 midway between them (R-BOARD-03).
-- 90 sheep counters, +5 to −4, 10 of them black (AMBIG-3).
+- 52 sheep counters, the real game's manifest: +1, +2, +3 and +5 white sheep,
+  nine of each, and 16 black sheep worth −3 (R-COMP-02). That's fewer than
+  the 54 fields, so the bag can run dry (AMBIG-3).
 - A border's first fence runs between two neighbouring farmhouses, out from
   the centre, whatever the number of players (R-FENCE-02).
 - A fence may run sideways along a ring of hexes, never inward (AMBIG-6).

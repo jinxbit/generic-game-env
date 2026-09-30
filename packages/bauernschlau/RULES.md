@@ -19,12 +19,12 @@ much of the geometry below is this implementation's own.
 | Board | a hexagon of hexes, radius 4 [AMBIG-1] | `CELLS` (board.ts), axial coordinates, 61 hexes numbered row by row |
 | Farmhouses | six, one per colour | the six hexes around the centre |
 | Sheepdog | one | `dog`: a cell, or null for the centre |
-| Sheep counters | 90 [AMBIG-3] | `bag`, `hand`, `sheep[cell]` |
+| Sheep counters | 52 | `bag`, `hand`, `sheep[cell]` |
 | Fences | per player: 16 (2–3 players), 12 (4–5), 10 (6) | `farms[id].fencesLeft`; built fences on `borders[i].path` |
 
-- **R-COMP-02** The sheep counters [AMBIG-3]: white sheep worth +5 ×4,
-  +4 ×6, +3 ×10, +2 ×12, +1 ×14, −1 ×12, −2 ×10, −3 ×8, −4 ×4, and 10
-  black sheep worth 0.
+- **R-COMP-02** The sheep counters: 36 white sheep — +1, +2, +3 and +5, nine
+  of each — and 16 black sheep worth −3 each. There are fewer counters than
+  the 54 fields, so the bag can run dry before the board is full [AMBIG-3].
 
 ## 2. Board
 
@@ -152,7 +152,7 @@ neighbouring farm — with two players, the two farms share both.
 
 - **R-SCORE-01** Only an enclosed farm scores its sheep.
 - **R-SCORE-02** It scores the value of every face-up sheep on its fields.
-  Face-down sheep score nothing [AMBIG-9]; black sheep are worth 0.
+  Face-down sheep score nothing [AMBIG-9]; black sheep are worth −3.
 - **R-SCORE-03** A sheep on a bonus field counts its field's multiplier times
   (×2 or ×3, R-BOARD-03) [AMBIG-4].
 - **R-SCORE-04** Each unused fence scores −1, enclosed or not.
@@ -186,9 +186,11 @@ neighbouring farm — with two players, the two farms share both.
   counts (16/12/10 per player over 2–6 shared borders) leave room to bend.
 - **AMBIG-2 Farms with fewer than six players.** Farmhouses are spread as
   evenly as six positions allow; the unused ones stay unplayable.
-- **AMBIG-3 Sheep counters.** The sheet gives no mix. 90 counters (more than
-  the 54 fields, so the bag never runs dry before the board is full),
-  weighted positive, with 10 black sheep.
+- **AMBIG-3 An empty bag.** The sheet gives no mix; R-COMP-02's is the real
+  game's counter manifest. With 52 counters and 54 fields the bag can run out
+  first: from then on nobody can place a sheep or call a sheep special, and
+  the game goes on with flips, the dog and fences until a farm fills (the dog
+  can occupy a field, so 53 of 54 can be) or nobody can act (R-END-02).
 - **AMBIG-4 Bonus fields.** The sheet's "geese fields multiply the sum of all
   sheep within them" gives no layout; R-BOARD-03's layout and multipliers are
   a ruling given with this implementation. Each field holds one sheep, so a

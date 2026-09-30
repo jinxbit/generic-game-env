@@ -78,7 +78,7 @@ export function formatPoints(n: number): string {
 
 /** How a sheep reads once it's face up. */
 export function sheepLabel(sheep: Sheep): string {
-  return sheep.black ? 'a black sheep' : formatPoints(sheep.value)
+  return sheep.black ? `a black sheep (${formatPoints(sheep.value)})` : formatPoints(sheep.value)
 }
 
 /** R-OPEN-01: the first round, when every player must place a sheep and do nothing else. */

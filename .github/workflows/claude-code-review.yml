@@ -1,8 +1,14 @@
 name: Claude Code Review
 
+# Disabled for now: it doesn't run on PRs. To re-enable, uncomment the
+# `pull_request` trigger below (and drop `workflow_dispatch`, which is only
+# here because a workflow must declare some trigger). It also needs the
+# CLAUDE_CODE_OAUTH_TOKEN secret, which isn't set — without it every run fails
+# before reviewing anything.
 on:
-  pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
+  workflow_dispatch:
+  # pull_request:
+  #   types: [opened, synchronize, ready_for_review, reopened]
     # Optional: Only run on specific file changes
     # paths:
     #   - "src/**/*.ts"
@@ -12,6 +18,8 @@ on:
 
 jobs:
   claude-review:
+    # Only meaningful for a pull request; a manual run has no PR to review.
+    if: github.event_name == 'pull_request'
     # Optional: Filter by PR author
     # if: |
     #   github.event.pull_request.user.login == 'external-contributor' ||

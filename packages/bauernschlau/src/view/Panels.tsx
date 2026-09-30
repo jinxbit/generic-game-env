@@ -36,7 +36,7 @@ export function PlayersPanel({ state, players }: { state: GameState; players: Se
                 {!score.enclosed && ' (not enclosed)'}, fences {formatPoints(score.fences)} = <span className="font-mono font-semibold">{formatPoints(score.total)}</span>
               </span>
             ) : isEnclosed(g, id) ? (
-              <span className="text-emerald-400">enclosed · face-up sheep {formatPoints(farmScore(g, id, state.rulesVersion))}</span>
+              <span className="text-emerald-400">enclosed · face-up sheep {formatPoints(farmScore(g, id))}</span>
             ) : (
               <span className="text-neutral-500">not enclosed</span>
             )}

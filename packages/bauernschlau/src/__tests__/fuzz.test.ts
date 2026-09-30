@@ -10,8 +10,7 @@ import {
   faceDownCells,
   FENCES_BY_PLAYERS,
   fenceMovesFor,
-  fieldsOf,
-  radiusOf,
+  FIELDS,
   gameDefinition,
   isEdgeVertex,
   occupiedVertices,
@@ -42,10 +41,7 @@ function candidates(s: GameState, r: Random): GameAction[] {
     const from = r.pick(faceDown)
     const free = [...emptyFields(g), ...(g.dog !== null ? [g.dog] : [])]
     const to = r.pick(free)
-    const dogChoices = [from, null, ...free.filter((c) => c !== to)]
-    // From rules version 2 the dog stays put (R-DOG-04); a stray `dog` is refused.
-    if (s.rulesVersion >= 2 && r.next() < 0.9) out.push({ type: 'HERD', playerId: actor, from, to })
-    else out.push({ type: 'HERD', playerId: actor, from, to, dog: r.pick(dogChoices) })
+    out.push({ type: 'HERD', playerId: actor, from, to })
   }
   if (faceDown.length === 0) out.push({ type: 'SHEEP_SPECIAL', playerId: actor })
   out.push({ type: 'DRAW_SHEEP', playerId: actor })
@@ -57,10 +53,10 @@ function checkInvariants(s: GameState): void {
   const onBoard = g.sheep.filter((x) => x !== null)
   expect(g.bag.length + g.hand.length + onBoard.length).toBe(sheepCounters().length)
   g.sheep.forEach((x, cell) => {
-    if (x) expect(fieldsOf(radiusOf(g))).toContain(cell)
+    if (x) expect(FIELDS).toContain(cell)
   })
   if (g.dog !== null) {
-    expect(fieldsOf(radiusOf(g))).toContain(g.dog)
+    expect(FIELDS).toContain(g.dog)
     expect(g.sheep[g.dog]).toBeNull()
   }
   const vertices = g.borders.flatMap((b) => b.path)
@@ -68,8 +64,8 @@ function checkInvariants(s: GameState): void {
   const blocked = occupiedVertices(g.borders)
   for (const b of g.borders) {
     expect(b.builtBy.length).toBe(Math.max(0, b.path.length - 1))
-    expect(b.finished).toBe(b.path.length > 0 && isEdgeVertex(b.path[b.path.length - 1], radiusOf(g)))
-    expect(canStillFinish(b, blocked, radiusOf(g))).toBe(true)
+    expect(b.finished).toBe(b.path.length > 0 && isEdgeVertex(b.path[b.path.length - 1]))
+    expect(canStillFinish(b, blocked)).toBe(true)
   }
   for (const id of g.seatOrder) {
     const built = g.borders.reduce((n, b) => n + b.builtBy.filter((x) => x === id).length, 0)
@@ -100,16 +96,15 @@ function checkInvariants(s: GameState): void {
 /** What the games together reached — the last test checks the bot exercised the rarer paths. */
 const everSeen = new Set<string>()
 
-// Each test plays a whole game, checking every invariant at every step; the
-// old radius-5 board's games take several seconds, hence the explicit timeout.
+// Each test plays a whole game, checking every invariant at every step, which
+// can take a few seconds on a busy machine — hence the explicit timeout.
 describe('random games', { timeout: 30_000 }, () => {
   for (const players of [2, 3, 4, 5, 6]) {
-    // Seeds 1–6 play the current rules (seed 2 without the first-edition rule); 7 and 8 keep rules
-    // versions 1 and 2 (the radius-5 board) exercised.
-    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
+    // Seed 2 plays without the first-edition rule, seed 5 with multi-round scoring.
+    for (const seed of [1, 2, 3, 4, 5, 6]) {
       it(`${players} players, seed ${seed}${seed === 4 && players > 2 ? ', with a concession' : ''}`, () => {
         const r = createRandom('bauernschlau-fuzz', players, seed)
-        let s = newGame({ players, start: seed % players, rulesVersion: seed === 7 ? 1 : seed === 8 ? 2 : undefined, options: { multiRoundScoring: seed === 5, firstEdition: seed !== 2 } })
+        let s = newGame({ players, start: seed % players, options: { multiRoundScoring: seed === 5, firstEdition: seed !== 2 } })
         const genesis = s
         const concedeAt = seed === 4 && players > 2 ? r.int(10, 150) : -1
         for (let step = 0; step < 3000 && s.status === 'active'; step++) {

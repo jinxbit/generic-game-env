@@ -14,7 +14,7 @@
 // new one (e.g. install it under an npm alias) until no game uses it.
 
 import { registerGame } from '@game-platform/sdk'
-import { gameDefinition as bauernschlau, gameDefinitionV1 as bauernschlauV1, gameDefinitionV2 as bauernschlauV2 } from '@game-platform/bauernschlau/rules'
+import { gameDefinition as bauernschlau } from '@game-platform/bauernschlau/rules'
 import { gameDefinition as incorporated } from '@game-platform/incorporated/rules'
 import { gameDefinition as kogge } from '@game-platform/kogge/rules'
 import { gameDefinition as magic } from '@game-platform/magic/rules'
@@ -24,6 +24,6 @@ import { gameDefinition as shark, gameDefinitionV1 as sharkV1 } from '@game-plat
 import { gameDefinition as texasHoldem } from '@game-platform/texas-holdem/rules'
 import { gameDefinition as uniquePick } from '@game-platform/unique-pick/rules'
 
-export const REGISTERED_GAMES = [uniquePick, incorporated, kogge, shark, sharkV1, riseAndFall, texasHoldem, bauernschlau, bauernschlauV2, bauernschlauV1, magnaGrecia, magic]
+export const REGISTERED_GAMES = [uniquePick, incorporated, kogge, shark, sharkV1, riseAndFall, texasHoldem, bauernschlau, magnaGrecia, magic]
 
 for (const definition of REGISTERED_GAMES) registerGame(definition)

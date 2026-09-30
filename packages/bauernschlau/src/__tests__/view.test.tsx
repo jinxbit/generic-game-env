@@ -38,8 +38,21 @@ describe('Bauernschlau view', () => {
     expect(screen.queryByText('+4')).toBeNull()
   })
 
-  it('walks the sheepdog through its three clicks', () => {
+  it('walks the sheepdog through its two clicks: the sheep, then where it goes', () => {
     let state = skipOpening(newGame({ players: 2 }))
+    const [a, b] = emptyFields(state.game)
+    state = placeSheep(state, a, { value: -2, black: false })
+    const me = state.game.turnPlayerId!
+    const onAction = vi.fn()
+    render(<GameView state={state} players={seats(state)} myPlayerId={me} submitting={false} onAction={onAction} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Sheepdog' }))
+    fireEvent.click(screen.getByRole('button', { name: `${cellLabel(a)} · face-down sheep` }))
+    fireEvent.click(screen.getByRole('button', { name: cellLabel(b) }))
+    expect(onAction).toHaveBeenCalledWith({ type: 'HERD', playerId: me, from: a, to: b })
+  })
+
+  it('in a rules-version-1 game, still asks where the dog ends up', () => {
+    let state = skipOpening(newGame({ players: 2, rulesVersion: 1 }))
     const [a, b] = emptyFields(state.game)
     state = placeSheep(state, a, { value: -2, black: false })
     const me = state.game.turnPlayerId!
@@ -81,10 +94,14 @@ describe('Bauernschlau view', () => {
     expect(screen.getAllByText('🏆').length).toBeGreaterThan(0)
   })
 
-  it('renders the options editor', () => {
+  it('renders the options editor, first edition on by default', () => {
     const onChange = vi.fn()
     render(<GameOptionsEditor value={DEFAULT_GAME_OPTIONS} onChange={onChange} />)
-    fireEvent.click(screen.getByRole('checkbox'))
-    expect(onChange).toHaveBeenCalledWith({ multiRoundScoring: true })
+    const [firstEdition, multiRound] = screen.getAllByRole('checkbox')
+    expect(firstEdition).toBeChecked()
+    fireEvent.click(firstEdition)
+    expect(onChange).toHaveBeenCalledWith({ multiRoundScoring: false, firstEdition: false })
+    fireEvent.click(multiRound)
+    expect(onChange).toHaveBeenCalledWith({ multiRoundScoring: true, firstEdition: true })
   })
 })

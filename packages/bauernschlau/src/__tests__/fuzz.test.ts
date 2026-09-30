@@ -42,7 +42,9 @@ function candidates(s: GameState, r: Random): GameAction[] {
     const free = [...emptyFields(g), ...(g.dog !== null ? [g.dog] : [])]
     const to = r.pick(free)
     const dogChoices = [from, null, ...free.filter((c) => c !== to)]
-    out.push({ type: 'HERD', playerId: actor, from, to, dog: r.pick(dogChoices) })
+    // From rules version 2 the dog stays put (R-DOG-04); a stray `dog` is refused.
+    if (s.rulesVersion >= 2 && r.next() < 0.9) out.push({ type: 'HERD', playerId: actor, from, to })
+    else out.push({ type: 'HERD', playerId: actor, from, to, dog: r.pick(dogChoices) })
   }
   if (faceDown.length === 0) out.push({ type: 'SHEEP_SPECIAL', playerId: actor })
   out.push({ type: 'DRAW_SHEEP', playerId: actor })
@@ -99,10 +101,11 @@ const everSeen = new Set<string>()
 
 describe('random games', () => {
   for (const players of [2, 3, 4, 5, 6]) {
-    for (const seed of [1, 2, 3, 4, 5, 6]) {
+    // Seeds 1–6 play the current rules (seed 2 without the first-edition rule); 7 keeps rules version 1 exercised.
+    for (const seed of [1, 2, 3, 4, 5, 6, 7]) {
       it(`${players} players, seed ${seed}${seed === 4 && players > 2 ? ', with a concession' : ''}`, () => {
         const r = createRandom('bauernschlau-fuzz', players, seed)
-        let s = newGame({ players, start: seed % players, options: { multiRoundScoring: seed === 5 } })
+        let s = newGame({ players, start: seed % players, rulesVersion: seed === 7 ? 1 : undefined, options: { multiRoundScoring: seed === 5, firstEdition: seed !== 2 } })
         const genesis = s
         const concedeAt = seed === 4 && players > 2 ? r.int(10, 150) : -1
         for (let step = 0; step < 3000 && s.status === 'active'; step++) {

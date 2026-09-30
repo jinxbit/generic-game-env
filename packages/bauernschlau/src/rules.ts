@@ -11,6 +11,14 @@
 // action, plus two more for every black sheep turned over
 // (`GameData.actionsLeft`).
 //
+// Rules versions: version 2 leaves the dog where it was set down after
+// herding, adds the first-edition option (on by default: a black sheep
+// herded by the dog gives no extra actions) and scores 18 ×2/×3 bonus fields.
+// Version 1 let the dog move on, always gave the bonus and had six ×2 geese
+// fields. Both run from this one code path, branching on `rulesVersion`
+// (`dogStays`, `herdingBlackGivesBonus`, `bonusFields`), and both stay
+// registered (`gameDefinitionV1`) so a game started under version 1 replays.
+//
 // Hidden information: a sheep is put on the board face down, and only the
 // player who drew it knows what it is (R-HIDE-01). `redactGame` masks every
 // face-down sheep a viewer didn't place, the bag, and the hand of whoever is
@@ -49,7 +57,7 @@ export * from './board.ts'
 /** This game's GameState. */
 export type GameState = PlatformGameState<GameData, GameOptions>
 
-export const DEFAULT_GAME_OPTIONS: GameOptions = { multiRoundScoring: false }
+export const DEFAULT_GAME_OPTIONS: GameOptions = { multiRoundScoring: false, firstEdition: true }
 
 export const STEP_LABELS: Record<Step, string> = {
   choose: 'Choosing an action',
@@ -59,7 +67,25 @@ export const STEP_LABELS: Record<Step, string> = {
 
 export function normalizeGameOptions(raw: unknown): GameOptions {
   const o = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
-  return { multiRoundScoring: o.multiRoundScoring === true }
+  // firstEdition defaults on: only an explicit `false` turns it off.
+  return { multiRoundScoring: o.multiRoundScoring === true, firstEdition: o.firstEdition !== false }
+}
+
+/**
+ * R-DOG-04: whether the dog stays on the field it was set down on. Rules
+ * version 1 let the player send it back to the centre or on to another empty
+ * field (AMBIG-5 as first read); from version 2 it always stays.
+ */
+export function dogStays(rulesVersion: number): boolean {
+  return rulesVersion >= 2
+}
+
+/**
+ * R-DOG-03: whether turning over a black sheep with the dog gives the extra
+ * actions — not under the first-edition rule, which rules version 1 didn't have.
+ */
+export function herdingBlackGivesBonus(state: Pick<GameState, 'rulesVersion' | 'options'>): boolean {
+  return state.rulesVersion < 2 || !state.options.firstEdition
 }
 
 /** "+3", "−2", "0" — the sign written out, and formatted by hand so the stored narration is identical in every runtime. */
@@ -125,12 +151,12 @@ function canAct(state: GameState, game: GameData, playerId: PlayerId, round: num
 /** R-SCORE-01..05: everyone's score, as the board stands. */
 export function scoresOf(state: GameState, game: GameData = state.game): Record<PlayerId, Score> {
   const standing = game.seatOrder.filter((id) => !isOut(state, id))
-  const enclosedFarms = standing.filter((id) => isEnclosed(game, id)).map((id) => farmScore(game, id))
+  const enclosedFarms = standing.filter((id) => isEnclosed(game, id)).map((id) => farmScore(game, id, state.rulesVersion))
   const lowest = enclosedFarms.length > 0 ? Math.min(...enclosedFarms) : 0
   return Object.fromEntries(
     game.seatOrder.map((id) => {
       const enclosed = isEnclosed(game, id)
-      const farm = enclosed ? farmScore(game, id) : state.options.multiRoundScoring ? lowest - UNENCLOSED_GAP : 0
+      const farm = enclosed ? farmScore(game, id, state.rulesVersion) : state.options.multiRoundScoring ? lowest - UNENCLOSED_GAP : 0
       const fences = -game.farms[id].fencesLeft
       return [id, { enclosed, farm, fences, total: farm + fences }]
     }),
@@ -296,8 +322,12 @@ function onHerd(state: GameState, game: GameData, playerId: PlayerId, rawFrom: u
   const to = requireCell(rawTo)
   // The dog leaves wherever it stood, so that field is free for the sheep.
   if (to === from || game.sheep[to] !== null) fail(`Drive the sheep to an empty field, not ${cellLabel(to)}.`)
-  let dog: number | null = null
-  if (rawDog !== null) {
+  let dog: number | null = from
+  if (dogStays(state.rulesVersion)) {
+    if (rawDog !== undefined && rawDog !== from) fail(`The dog stays on ${cellLabel(from)}, where you set it down.`)
+  } else if (rawDog === null) {
+    dog = null
+  } else {
     dog = requireCell(rawDog)
     if (dog !== from && (dog === to || game.sheep[dog] !== null)) fail(`The dog can stay on ${cellLabel(from)}, go back to the centre or go to an empty field — not ${cellLabel(dog)}.`)
   }
@@ -306,7 +336,7 @@ function onHerd(state: GameState, game: GameData, playerId: PlayerId, rawFrom: u
   game.sheep[from] = null
   game.sheep[to] = { ...placed, faceUp: true }
   game.dog = dog
-  if (placed.sheep!.black) game.actionsLeft += BLACK_SHEEP_BONUS
+  if (placed.sheep!.black && herdingBlackGivesBonus(state)) game.actionsLeft += BLACK_SHEEP_BONUS
   game.last = { kind: 'herd', playerId, from, to, dog, sheep: placed.sheep! }
 }
 
@@ -390,8 +420,9 @@ function describeLast(before: GameState, after: GameState): string {
     case 'flip':
       return `{player} turned over the sheep on ${cellLabel(last.cell)}: ${sheepLabel(last.sheep)}.${last.sheep.black ? ` Two extra actions!` : ''}`
     case 'herd': {
-      const dog = last.dog === last.from ? 'The dog stays there.' : last.dog === null ? 'The dog goes back to the centre.' : `The dog goes to ${cellLabel(last.dog)}.`
-      return `{player} set the dog on ${cellLabel(last.from)} and drove the sheep to ${cellLabel(last.to)}: ${sheepLabel(last.sheep)}.${last.sheep.black ? ' Two extra actions!' : ''} ${dog}`
+      const bonus = !last.sheep.black ? '' : herdingBlackGivesBonus(after) ? ' Two extra actions!' : ' No extra actions with the dog (first edition).'
+      const dog = dogStays(after.rulesVersion) ? '' : last.dog === last.from ? ' The dog stays there.' : last.dog === null ? ' The dog goes back to the centre.' : ` The dog goes to ${cellLabel(last.dog)}.`
+      return `{player} set the dog on ${cellLabel(last.from)} and drove the sheep to ${cellLabel(last.to)}: ${sheepLabel(last.sheep)}.${bonus}${dog}`
     }
     case 'fence': {
       const [a, b] = after.game.borders[last.border].between
@@ -419,7 +450,7 @@ function describeEnd(after: GameState): string[] {
 
 export const gameDefinition: GameDefinition<GameData, GameOptions, GameAction> = {
   id: 'bauernschlau',
-  rulesVersion: 1,
+  rulesVersion: 2,
   title: 'Bauernschlau',
   turnLabel: 'Round',
   minPlayers: 2,
@@ -428,7 +459,7 @@ export const gameDefinition: GameDefinition<GameData, GameOptions, GameAction> =
   defaultOptions: DEFAULT_GAME_OPTIONS,
   normalizeOptions: normalizeGameOptions,
   describeOptions(options) {
-    return options.multiRoundScoring ? 'Multi-round scoring' : 'Standard rules'
+    return [options.firstEdition ? 'First edition' : 'Dog earns the black-sheep bonus', ...(options.multiRoundScoring ? ['multi-round scoring'] : [])].join(', ')
   },
 
   setup(lobby: LobbyState<GameOptions>, random: Random) {
@@ -520,3 +551,10 @@ export const gameDefinition: GameDefinition<GameData, GameOptions, GameAction> =
     return phase && phase in STEP_LABELS ? STEP_LABELS[phase as Step] : 'In progress'
   },
 }
+
+/**
+ * Rules version 1 — the dog could be sent back to the centre or on to another
+ * field after herding, and a black sheep herded by the dog always gave extra
+ * actions. Kept registered so games started under it still replay.
+ */
+export const gameDefinitionV1: GameDefinition<GameData, GameOptions, GameAction> = { ...gameDefinition, rulesVersion: 1 }

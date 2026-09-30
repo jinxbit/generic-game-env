@@ -8,6 +8,8 @@ import {
   fenceMoves,
   FIELDS,
   gameDefinition,
+  BONUS_FIELDS,
+  bonusFields,
   GEESE,
   isEdgeVertex,
   junction,
@@ -64,9 +66,11 @@ describe('§3 setup', () => {
   })
 
   it('normalizes options', () => {
-    expect(normalizeGameOptions(undefined)).toEqual({ multiRoundScoring: false })
-    expect(normalizeGameOptions({ multiRoundScoring: 'yes' })).toEqual({ multiRoundScoring: false })
-    expect(normalizeGameOptions({ multiRoundScoring: true })).toEqual({ multiRoundScoring: true })
+    expect(normalizeGameOptions(undefined)).toEqual({ multiRoundScoring: false, firstEdition: true })
+    expect(normalizeGameOptions({ multiRoundScoring: 'yes', firstEdition: 'no' })).toEqual({ multiRoundScoring: false, firstEdition: true })
+    expect(normalizeGameOptions({ multiRoundScoring: true, firstEdition: false })).toEqual({ multiRoundScoring: true, firstEdition: false })
+    expect(gameDefinition.describeOptions(normalizeGameOptions({}))).toBe('First edition')
+    expect(gameDefinition.rulesVersion).toBe(2)
   })
 })
 
@@ -159,30 +163,73 @@ describe('§6 flipping and the sheepdog', () => {
     expect(s.game.actionsLeft).toBe(1)
   })
 
-  it('R-DOG-01..04: the dog takes the sheep’s field, the sheep moves and is turned over, the dog may stay, go home or move on', () => {
+  it('R-DOG-01..04: the dog takes the sheep’s field and stays there; the sheep moves and is turned over', () => {
     const base = withSheep(skipOpening(newGame({ players: 2 })), FIELDS[40], { value: 2, black: false }, false)
     const [a, b] = emptyFields(base.game)
-    let s = play(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a, dog: FIELDS[40] })
+    let s = play(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a })
     expect(s.game.sheep[FIELDS[40]]).toBeNull()
     expect(s.game.sheep[a]).toMatchObject({ faceUp: true, sheep: { value: 2 } })
     expect(s.game.dog).toBe(FIELDS[40])
     expect(s.pendingPlayerIds).toEqual(['p2'])
-    s = play(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a, dog: null })
-    expect(s.game.dog).toBeNull()
-    s = play(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a, dog: b })
-    expect(s.game.dog).toBe(b)
-    expect(reject(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a, dog: a })).toMatch(/dog can stay/)
-    expect(reject(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: FIELDS[0], dog: null })).toMatch(/empty field/)
-    expect(reject(base, { type: 'HERD', playerId: 'p1', from: a, to: b, dog: null })).toMatch(/no face-down sheep/)
+    expect(gameDefinition.describeAction({ type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a }, base, s).message).not.toMatch(/dog (stays|goes)/)
+    // Naming the dog's own field is fine; anywhere else is refused.
+    expect(play(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a, dog: FIELDS[40] }).game.dog).toBe(FIELDS[40])
+    expect(reject(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a, dog: null })).toMatch(/dog stays on/)
+    expect(reject(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a, dog: b })).toMatch(/dog stays on/)
+    expect(reject(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: FIELDS[0] })).toMatch(/empty field/)
+    expect(reject(base, { type: 'HERD', playerId: 'p1', from: a, to: b })).toMatch(/no face-down sheep/)
     // The dog's own field is free for the sheep once the dog leaves it.
-    const dogged = arrange(base, (g) => (g.dog = b))
-    s = play(dogged, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: b, dog: null })
+    s = play(arrange(base, (g) => (g.dog = b)), { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: b })
     expect(s.game.sheep[b]).toMatchObject({ faceUp: true })
-    expect(s.game.dog).toBeNull()
+    expect(s.game.dog).toBe(FIELDS[40])
   })
 
-  it('R-DOG-03: herding a black sheep gives the extra actions too', () => {
-    const s = play(withSheep(skipOpening(newGame({ players: 2 })), FIELDS[40], BLACK, false), { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: FIELDS[41], dog: null })
+  it('R-DOG-03: under the first-edition rule (the default) a black sheep herded by the dog gives no extra actions', () => {
+    const herd = (options: { firstEdition?: boolean }) =>
+      play(withSheep(skipOpening(newGame({ players: 2, options })), FIELDS[40], BLACK, false), { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: FIELDS[41] })
+    const first = herd({})
+    expect(first.pendingPlayerIds).toEqual(['p2'])
+    expect(first.game.actionsLeft).toBe(1)
+    expect(gameDefinition.describeAction({ type: 'HERD', playerId: 'p1', from: FIELDS[40], to: FIELDS[41] }, first, first).message).toMatch(/No extra actions with the dog/)
+    const later = herd({ firstEdition: false })
+    expect(later.pendingPlayerIds).toEqual(['p1'])
+    expect(later.game.actionsLeft).toBe(2)
+    // Flipping a black sheep still gives them either way.
+    const flipped = play(withSheep(skipOpening(newGame({ players: 2 })), FIELDS[40], BLACK, false), { type: 'FLIP_SHEEP', playerId: 'p1', cell: FIELDS[40] })
+    expect(flipped.game.actionsLeft).toBe(2)
+  })
+})
+
+describe('§11 rules version 1', () => {
+  it('scored with the six ×2 geese fields instead of the bonus fields', () => {
+    let s = arrange(skipOpening(newGame({ players: 2, rulesVersion: 1 })), (g) => {
+      g.sheep = g.sheep.map(() => null)
+      finishBorders(g, [0, 1])
+    })
+    const mine = farmFields(s.game.borders, s.game.farms.p1.position)
+    const last = mine[mine.length - 1]
+    s = arrange(s, (g) => {
+      for (const cell of mine) if (cell !== last) g.sheep[cell] = { sheep: { value: 1, black: false }, faceUp: true, placedBy: 'p2' }
+    })
+    s = placeSheep(s, last)
+    const expected = mine.filter((c) => c !== last).reduce((n, c) => n + (GEESE.has(c) ? 2 : 1), 0)
+    expect(s.game.finalScores!.p1.farm).toBe(expected)
+    expect(bonusFields(1)).not.toBe(bonusFields(2))
+  })
+
+  it('the dog could stay, go home or move on after herding', () => {
+    const base = withSheep(skipOpening(newGame({ players: 2, rulesVersion: 1 })), FIELDS[40], { value: 2, black: false }, false)
+    expect(base.rulesVersion).toBe(1)
+    const [a, b] = emptyFields(base.game)
+    expect(play(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a, dog: FIELDS[40] }).game.dog).toBe(FIELDS[40])
+    expect(play(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a, dog: null }).game.dog).toBeNull()
+    expect(play(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a, dog: b }).game.dog).toBe(b)
+    expect(reject(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a, dog: a })).toMatch(/dog can stay/)
+  })
+
+  it('a black sheep herded by the dog always gave extra actions, whatever the option says', () => {
+    const s = play(withSheep(skipOpening(newGame({ players: 2, rulesVersion: 1 })), FIELDS[40], BLACK, false), { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: FIELDS[41], dog: null })
+    expect(s.options.firstEdition).toBe(true)
     expect(s.pendingPlayerIds).toEqual(['p1'])
     expect(s.game.actionsLeft).toBe(2)
   })
@@ -265,7 +312,7 @@ describe('§6 fences', () => {
 })
 
 describe('§8 the end and scoring', () => {
-  it('R-END-01, R-SCORE-01..04: the game ends when an enclosed farm is full; face-up sheep score, geese double, face-down and spare fences cost', () => {
+  it('R-END-01, R-SCORE-01..04: the game ends when an enclosed farm is full; face-up sheep score, bonus fields multiply, face-down and spare fences cost', () => {
     let s = arrange(skipOpening(newGame({ players: 2 })), (g) => {
       g.sheep = g.sheep.map(() => null)
       finishBorders(g, [0, 1])
@@ -274,7 +321,7 @@ describe('§8 the end and scoring', () => {
     const theirs = farmFields(s.game.borders, s.game.farms.p2.position)
     expect(mine.length + theirs.length).toBe(84)
     const last = mine[mine.length - 1]
-    const plain = theirs.find((c) => !GEESE.has(c))!
+    const plain = theirs.find((c) => !BONUS_FIELDS.has(c))!
     s = arrange(s, (g) => {
       for (const cell of mine) if (cell !== last) g.sheep[cell] = { sheep: { value: 2, black: false }, faceUp: true, placedBy: 'p2' }
       g.sheep[plain] = { sheep: { value: -3, black: false }, faceUp: true, placedBy: 'p1' }
@@ -283,8 +330,9 @@ describe('§8 the end and scoring', () => {
     s = placeSheep(s, last, { value: 4, black: false })
     expect(s.status).toBe('completed')
     expect(s.game.endReason).toEqual({ kind: 'farmFull', playerId: 'p1' })
-    const geese = mine.filter((c) => c !== last && GEESE.has(c)).length
-    const expected = 2 * (mine.length - 1 - geese) + 4 * geese
+    // Every sheep is worth 2, times its field's multiplier (×2 or ×3 on a bonus field).
+    const expected = mine.filter((c) => c !== last).reduce((n, c) => n + 2 * (BONUS_FIELDS.get(c) ?? 1), 0)
+    expect(mine.some((c) => c !== last && BONUS_FIELDS.get(c) === 3)).toBe(true)
     expect(s.game.finalScores!.p1).toEqual({ enclosed: true, farm: expected, fences: -(16 - s.game.borders[0].builtBy.length), total: expected - (16 - s.game.borders[0].builtBy.length) })
     expect(s.game.finalScores!.p2.farm).toBe(-3)
     expect(s.winnerPlayerIds).toEqual(['p1'])
@@ -300,10 +348,10 @@ describe('§8 the end and scoring', () => {
       })
       const mine = farmFields(s.game.borders, s.game.farms.p1.position)
       s = arrange(s, (g) => {
-        for (const cell of mine.slice(0, -1)) g.sheep[cell] = { sheep: { value: GEESE.has(cell) ? 0 : 1, black: false }, faceUp: true, placedBy: 'p2' }
+        for (const cell of mine.slice(0, -1)) g.sheep[cell] = { sheep: { value: BONUS_FIELDS.has(cell) ? 0 : 1, black: false }, faceUp: true, placedBy: 'p2' }
       })
       s = placeSheep(s, mine[mine.length - 1])
-      const farm = mine.slice(0, -1).filter((c) => !GEESE.has(c)).length
+      const farm = mine.slice(0, -1).filter((c) => !BONUS_FIELDS.has(c)).length
       expect(s.game.finalScores!.p1.farm).toBe(farm)
       expect(s.game.finalScores!.p2).toMatchObject({ enclosed: false, farm: multiRoundScoring ? farm - 10 : 0, fences: -16 })
     }

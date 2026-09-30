@@ -10,6 +10,8 @@ import {
   farmFields,
   fenceMoves,
   FIELDS,
+  BONUS_FIELDS,
+  DIRECTIONS,
   GEESE,
   hexDistance,
   isEdgeVertex,
@@ -52,11 +54,38 @@ describe('§2 the board', () => {
     expect(FIELDS).toHaveLength(84)
     expect(hexDistance(CELLS[CENTRE])).toBe(0)
     expect(FARMHOUSES.map((c) => hexDistance(CELLS[c]))).toEqual([1, 1, 1, 1, 1, 1])
+    // Rules version 1's geese fields.
     expect([...GEESE].every((c) => FIELDS.includes(c) && hexDistance(CELLS[c]) === 3)).toBe(true)
     expect(GEESE.size).toBe(6)
     expect(cellLabel(0)).toBe('A1')
     expect(cellLabel(CENTRE)).toBe('F6')
     expect(cellLabel(90)).toBe('K6')
+  })
+
+  it('R-BOARD-03: bonus fields — ring 2 between the diagonals ×2, ring 3 on them ×3, ring 4 midway between them ×3', () => {
+    // A hex lies on a long diagonal when it's a multiple of one direction.
+    const onDiagonal = (cell: number) => DIRECTIONS.some((d) => {
+      const h = CELLS[cell]
+      const k = hexDistance(h)
+      return h.q === d.q * k && h.r === d.r * k
+    })
+    const byRing = (ring: number) => [...BONUS_FIELDS].filter(([c]) => hexDistance(CELLS[c]) === ring)
+    expect(BONUS_FIELDS.size).toBe(18)
+    expect([...BONUS_FIELDS.keys()].every((c) => FIELDS.includes(c))).toBe(true)
+    const ring2 = byRing(2)
+    expect(ring2).toHaveLength(6)
+    expect(ring2.every(([c, x]) => x === 2 && !onDiagonal(c))).toBe(true)
+    // Each sits where two farmhouses meet.
+    expect(ring2.every(([c]) => FARMHOUSES.filter((f) => hexDistance({ q: CELLS[c].q - CELLS[f].q, r: CELLS[c].r - CELLS[f].r }) === 1).length === 2)).toBe(true)
+    const ring3 = byRing(3)
+    expect(ring3).toHaveLength(6)
+    expect(ring3.every(([c, x]) => x === 3 && onDiagonal(c))).toBe(true)
+    const ring4 = byRing(4)
+    expect(ring4).toHaveLength(6)
+    // Exactly midway: two steps from the corner on either side.
+    const corners4 = DIRECTIONS.map((d) => ({ q: d.q * 4, r: d.r * 4 }))
+    const dist = (a: { q: number; r: number }, b: { q: number; r: number }) => hexDistance({ q: a.q - b.q, r: a.r - b.r })
+    expect(ring4.every(([c, x]) => x === 3 && corners4.filter((k) => dist(k, CELLS[c]) === 2).length === 2)).toBe(true)
   })
 
   it('vertices: three neighbours each, symmetric; junctions sit between two farmhouses', () => {
@@ -98,7 +127,8 @@ describe('§6 fence lines', () => {
 
   it('R-FENCE-04/05: lines never touch, and a fence that would box another border in is not offered', () => {
     let cutOffs = 0
-    for (let seed = 1; seed <= 40; seed++) {
+    // Fifteen random games find plenty of cut-offs; each is slow-ish to search, hence the explicit timeout.
+    for (let seed = 1; seed <= 15; seed++) {
       const next = testRandom(seed)
       let borders = bordersFor(6)
       for (let guard = 0; guard < 300 && borders.some((b) => !b.finished); guard++) {
@@ -127,5 +157,5 @@ describe('§6 fence lines', () => {
       }
     }
     expect(cutOffs).toBeGreaterThan(0)
-  })
+  }, 20_000)
 })

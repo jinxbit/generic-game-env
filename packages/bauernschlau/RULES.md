@@ -1,8 +1,9 @@
 # Bauernschlau — Implementation Rules Spec
 
 > This file is the source of truth for the Bauernschlau rules engine in
-> `packages/bauernschlau`, as of **rules version 1**. Rule ids (`R-FENCE-03`
-> and so on) are cited in the code and the tests. `[AMBIG-n]` marks a point
+> `packages/bauernschlau`, as of **rules version 2**. §11 lists what version 1,
+> still registered for games started under it, did differently. Rule ids
+> (`R-FENCE-03` and so on) are cited in the code and the tests. `[AMBIG-n]` marks a point
 > the rules sheet leaves open; §10 lists the behaviour chosen for each.
 > Changing any of them changes how existing games replay, so it ships with a
 > new `rulesVersion`.
@@ -32,8 +33,15 @@ much of the geometry below is this implementation's own.
   around the centre.
 - **R-BOARD-02** The seven central hexes — the centre and the six
   farmhouses around it — are unplayable. The other 84 hexes are **fields**.
-- **R-BOARD-03** Six fields are **geese fields**: the ring-3 hex straight out
-  from each farmhouse [AMBIG-4].
+- **R-BOARD-03** Eighteen fields are **bonus fields**, each multiplying the
+  sheep on it. The six **long diagonals** run from the centre through each
+  farmhouse to a corner of the board; on ring k they cross the ring at its
+  corners, every k-th hex.
+  - **Ring 2** (the first ring of fields): every 2nd hex, the six *not* on a
+    long diagonal — each where two farmhouses meet — **×2**.
+  - **Ring 3**: every 3rd hex, the six *on* the long diagonals — **×3**.
+  - **Ring 4**: every 4th hex, the six exactly midway between two long
+    diagonals — **×3**.
 - Cells are labelled by row letter from the top (A–K) and position in the row
   from the left: the top-left field is A1, the centre F6.
 
@@ -57,8 +65,8 @@ much of the geometry below is this implementation's own.
   their turn:
   place a sheep (R-PLACE), flip a sheep (R-FLIP), the sheepdog (R-DOG),
   build a fence (R-FENCE) or a sheep special (R-SPECIAL).
-- **R-TURN-02** Turning over a black sheep, by flipping or with the dog,
-  gives two extra actions, taken at once, of any kind (R-FLIP-02). Extra
+- **R-TURN-02** Turning over a black sheep by flipping it — or with the dog,
+  unless the first-edition rule is on (R-DOG-03) — gives two extra actions, taken at once, of any kind (R-FLIP-02). Extra
   actions stack.
 - **R-TURN-03** A player who can take no action at all is skipped
   [AMBIG-8]. If nobody can act, the game ends (R-END-02).
@@ -95,9 +103,11 @@ much of the geometry below is this implementation's own.
 - **R-DOG-02** Move that sheep to another empty field (the one the dog just
   left counts) and only then turn it over.
 - **R-DOG-03** A black sheep turned over this way gives the two extra
-  actions too.
-- **R-DOG-04** The dog then stays on the sheep's old field, or goes back to
-  the centre, or to any other empty field, occupying it [AMBIG-5].
+  actions too — **except under the first-edition rule** (option
+  `firstEdition`, on by default), where turning a black sheep over with the
+  dog gives no extra actions. Flipping one (R-FLIP-02) always does.
+- **R-DOG-04** The dog stays where it was set down, on the sheep's old field,
+  occupying it; it doesn't move with the sheep [AMBIG-5].
 
 ### Fences
 
@@ -139,7 +149,8 @@ neighbouring farm — with two players, the two farms share both.
 - **R-SCORE-01** Only an enclosed farm scores its sheep.
 - **R-SCORE-02** It scores the value of every face-up sheep on its fields.
   Face-down sheep score nothing [AMBIG-9]; black sheep are worth 0.
-- **R-SCORE-03** A sheep on a geese field counts double [AMBIG-4].
+- **R-SCORE-03** A sheep on a bonus field counts its field's multiplier times
+  (×2 or ×3, R-BOARD-03) [AMBIG-4].
 - **R-SCORE-04** Each unused fence scores −1, enclosed or not.
 - **R-SCORE-05** Multi-round variant (option `multiRoundScoring`): an
   unenclosed farm scores 10 less than the lowest-scoring enclosed farm of a
@@ -174,13 +185,16 @@ neighbouring farm — with two players, the two farms share both.
 - **AMBIG-3 Sheep counters.** The sheet gives no mix. 90 counters (more than
   the 84 fields, so the bag never runs dry before the board is full),
   weighted positive, with 10 black sheep.
-- **AMBIG-4 Geese.** "Geese fields multiply the sum of all sheep within
-  them" — read as: a geese field doubles the sheep on it. Six geese fields,
-  one on each farmhouse's axis at ring 3.
-- **AMBIG-5 Where the dog ends up.** "The sheepdog can be returned to the
-  centre of the board, or any other empty space" is read as part of the
-  sheepdog action: after herding, the dog stays, goes home, or moves on. It
-  is not a separate action (which would let the game stall forever).
+- **AMBIG-4 Bonus fields.** The sheet's "geese fields multiply the sum of all
+  sheep within them" gives no layout; the layout and multipliers of R-BOARD-03
+  were given after version 1 (which had six ×2 geese fields, §11). Each field
+  holds one sheep, so a multiplier applies to that sheep.
+- **AMBIG-5 Where the dog ends up.** It stays on the field it was set down
+  on, where the sheep was (a ruling given after version 1). The sheet's "the
+  sheepdog can be returned to the centre of the board, or any other empty
+  space" is read as describing where the dog stands before it is used —
+  in the centre at the start, or wherever the last herd left it — not as a
+  move of its own. Version 1 read it as a choice after herding (§11).
 - **AMBIG-6 "Towards the farmhouses".** Measured by ring boundary: sideways
   along a boundary is allowed, inward is not. (Requiring every fence to lead
   strictly outward would make every border exactly eight fences long, and the
@@ -196,3 +210,20 @@ neighbouring farm — with two players, the two farms share both.
   ("face up sheep"); they are shown afterwards.
 - **AMBIG-10 Ending mid-special.** The game ends the moment a farm fills,
   even with sheep of a special still to place.
+
+## 11. Rules version 1
+
+Games started before rules version 2 replay under version 1, which is kept
+registered (`gameDefinitionV1`) and runs from the same code, branching on
+`rulesVersion` (`dogStays`, `herdingBlackGivesBonus`, `bonusFields`). It
+differed in three ways:
+
+- **Where the dog ends up.** After herding, the player chose: the dog stayed
+  on the sheep's old field, went back to the centre (`dog: null`), or went
+  to any other empty field. The `HERD` action had to say which (`dog`).
+- **No first-edition rule.** A black sheep turned over with the dog always
+  gave the two extra actions. The `firstEdition` option, which such games'
+  options now read as on, is ignored.
+- **Geese fields, not bonus fields.** Six fields, the ring-3 hex straight
+  out from each farmhouse (where version 2 has its ×3 fields), each doubled
+  its sheep (`GEESE`). `bonusFields(rulesVersion)` picks the layout.

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { GameViewProps } from '@game-platform/sdk/ui'
-import { actionChoices, cellLabel, emptyFields, faceDownCells, fenceMovesFor, isOpeningRound, specialCount, STEP_LABELS, type FenceMove, type GameState } from './rules.ts'
+import { actionChoices, bonusFields, cellLabel, dogStays, emptyFields, faceDownCells, fenceMovesFor, isOpeningRound, specialCount, STEP_LABELS, type FenceMove, type GameState } from './rules.ts'
 import type { GameAction, GameData, GameOptions } from './types.ts'
 import { Board } from './view/Board.tsx'
 import { BTN, BTN_PRIMARY, nameOf } from './view/helpers.ts'
@@ -49,10 +49,12 @@ export function GameView({ state, players, myPlayerId, submitting, onAction }: G
       prompt = 'Sheepdog: click the face-down sheep the dog goes to.'
       onCell = (from) => setMode({ kind: 'herd', from, to: null })
     } else if (mode.to === null) {
-      selected = [mode.from]
+      const from = mode.from
+      selected = [from]
       targets = new Set(free)
-      prompt = `Where does the sheep from ${cellLabel(mode.from)} go? Click an empty field.`
-      onCell = (to) => setMode({ ...mode, to })
+      prompt = `Where does the sheep from ${cellLabel(from)} go? Click an empty field.${dogStays(state.rulesVersion) ? ' The dog stays on ' + cellLabel(from) + '.' : ''}`
+      // R-DOG-04: from rules version 2 the dog stays put, so this click finishes the move.
+      onCell = (to) => (dogStays(state.rulesVersion) ? onAction({ type: 'HERD', playerId: me, from, to }) : setMode({ ...mode, to }))
     } else {
       const { from, to } = mode
       selected = [from, to]
@@ -110,6 +112,7 @@ export function GameView({ state, players, myPlayerId, submitting, onAction }: G
         ))}
       <Board
         game={g}
+        bonuses={bonusFields(state.rulesVersion)}
         players={players}
         myPlayerId={myPlayerId}
         targets={targets}

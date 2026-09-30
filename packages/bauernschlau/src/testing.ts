@@ -2,7 +2,7 @@
 
 import { createNewGame, registerGame, type PlayMode, type Uint32Source } from '@game-platform/sdk'
 import { act, seatPlayers } from '@game-platform/sdk/testing'
-import { actionChoices, emptyFields, faceDownCells, fenceMoves, fenceMovesFor, gameDefinition, isEdgeVertex, vertexDepth, withEnvelope, type GameState } from './rules.ts'
+import { actionChoices, emptyFields, faceDownCells, fenceMoves, fenceMovesFor, gameDefinition, gameDefinitionV1, isEdgeVertex, vertexDepth, withEnvelope, type GameState } from './rules.ts'
 import type { GameAction, GameData, GameOptions, Sheep } from './types.ts'
 
 export { act, withoutTimestamps } from '@game-platform/sdk/testing'
@@ -28,17 +28,20 @@ export function picks(...draws: [index: number, sides: number][]): Uint32Source 
 
 /**
  * A fresh genesis with players `p1..pN` (Alice, Bob, Carol, ...). Defaults:
- * 3 players, live, the default options, `p1` to start (`start` is the seat
- * index of the start player).
+ * 3 players, live, the default options, the newest rules version, `p1` to
+ * start (`start` is the seat index of the start player). Registers every
+ * rules version first.
  */
 export function newGame(
-  params: { players?: number; playMode?: PlayMode; options?: Partial<GameOptions>; hiddenInformationEnabled?: boolean; lockRevealedInformationEnabled?: boolean; start?: number } = {},
+  params: { players?: number; playMode?: PlayMode; options?: Partial<GameOptions>; hiddenInformationEnabled?: boolean; lockRevealedInformationEnabled?: boolean; start?: number; rulesVersion?: number } = {},
 ): GameState {
   registerGame(gameDefinition)
+  registerGame(gameDefinitionV1)
   const players = params.players ?? 3
   return createNewGame({
     gameId: 'game_1',
     gameType: gameDefinition.id,
+    rulesVersion: params.rulesVersion,
     playMode: params.playMode ?? 'live',
     hiddenInformationEnabled: params.hiddenInformationEnabled,
     lockRevealedInformationEnabled: params.lockRevealedInformationEnabled,

@@ -26,6 +26,11 @@ export interface FieldSheep {
 export interface GameOptions {
   /** The multi-round variant's scoring for unenclosed farms (R-SCORE-05). */
   multiRoundScoring: boolean
+  /**
+   * First-edition rule (R-DOG-03, rules version 2 on; default on): a black
+   * sheep turned over with the sheepdog gives no extra actions.
+   */
+  firstEdition: boolean
 }
 
 /**
@@ -135,15 +140,18 @@ export interface FlipSheepAction {
 
 /**
  * R-DOG-01..04: the dog goes to the face-down sheep on `from`; the sheep moves
- * to the empty field `to` and is turned over; the dog then stays on `from`,
- * or goes to the centre (`dog: null`) or another empty field.
+ * to the empty field `to` and is turned over; the dog stays on `from`.
+ *
+ * Rules version 1 let the dog then go to the centre (`dog: null`) or another
+ * empty field instead, and required `dog`; from version 2 it's omitted (or
+ * must equal `from`).
  */
 export interface HerdAction {
   type: 'HERD'
   playerId: PlayerId
   from: number
   to: number
-  dog: number | null
+  dog?: number | null
 }
 
 /** R-FENCE-01..07: extend `border` by one fence, from vertex `from` to vertex `to`. */

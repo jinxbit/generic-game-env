@@ -43,6 +43,12 @@ The package follows the layout of the example game
   `Random` and are recorded on the entry that drew them, which a redacted
   viewer never receives. In a room that locks revealed information, a draw
   can't be undone by a player (the drawer has seen the sheep).
+- **Rules versions.** Version 2 (current) leaves the dog where it was set
+  down after herding and adds the first-edition option (on by default: a
+  black sheep herded by the dog gives no extra actions). Version 1 let the dog
+  move on afterwards and always gave the bonus; it stays registered
+  (`gameDefinitionV1`) so games started under it still replay. Both run from
+  one code path that branches on `state.rulesVersion` (RULES.md §11).
 - **Every action consumes something** — a sheep from the bag, a face-down
   sheep, a fence — so a game always ends: by a full enclosed farm, or when
   nobody can act.
@@ -57,5 +63,7 @@ likely to matter at the table:
   (AMBIG-1, AMBIG-4).
 - 90 sheep counters, +5 to −4, 10 of them black (AMBIG-3).
 - A fence may run sideways along a ring of hexes, never inward (AMBIG-6).
-- Returning the dog to the centre is part of the sheepdog action (AMBIG-5).
+- After herding, the dog stays where it was set down (R-DOG-04, AMBIG-5).
+- First-edition rule, on by default: herding a black sheep with the dog gives
+  no extra actions (R-DOG-03).
 - Face-down sheep score nothing at the end (AMBIG-9).

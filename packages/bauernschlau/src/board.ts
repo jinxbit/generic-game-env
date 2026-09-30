@@ -2,12 +2,8 @@
 // geometry, fence lines and which fences are legal, the farms they enclose,
 // and scoring. RULES.md is the source of truth; its rule ids are cited.
 //
-// The board is a hexagon of hexes (R-BOARD-01) in axial coordinates (q, r):
-// rings 0–4 around the centre from rules version 3, rings 0–5 before. Cells
-// are numbered row by row from the top of the radius-5 grid in every version
-// (`CELLS`), so a stored cell means the same hex whatever the version; a
-// smaller board just leaves the outer ring's cells off it. The board's radius
-// is on the game (`radiusOf`), and everything that depends on it takes it. Fences run
+// The board is a hexagon of hexes, radius 4 (R-BOARD-01), in axial
+// coordinates (q, r). Cells are numbered row by row from the top. Fences run
 // along hex edges and join at hex corners ("vertices"). A vertex is named by
 // the three hexes that meet there — some of which may lie off the board, which
 // is exactly what makes it a vertex on the board's edge (R-FENCE-06). An edge
@@ -18,7 +14,8 @@
 // ring: vertices lie on the boundaries between one ring of hexes and the
 // next, and a fence may run along a boundary (sideways) or out to the next
 // one, never in to an earlier one. The edge of the board is the boundary past
-// its outermost ring.
+// ring 4. A border's line starts at the centre, between two farmhouses
+// (R-FENCE-02), so its first fence always runs between those farmhouses.
 //
 // Pure and deterministic — imported by the Edge Functions, so keep the `.ts`
 // extensions on relative imports.
@@ -30,21 +27,8 @@ export interface Hex {
   r: number
 }
 
-/** The grid cells are numbered on: rings 0–5 — the board of rules versions 1 and 2. */
-export const GRID_RADIUS = 5
-
-/** R-BOARD-01: rings 0–4 around the centre, from rules version 3. */
-export const BOARD_RADIUS = 4
-
-/** R-BOARD-01: the board's radius under `rulesVersion`. */
-export function boardRadius(rulesVersion: number): number {
-  return rulesVersion >= 3 ? BOARD_RADIUS : GRID_RADIUS
-}
-
-/** A game's board radius: stored at genesis from rules version 3, absent (so 5) before. */
-export function radiusOf(game: Pick<GameData, 'radius'>): number {
-  return game.radius ?? GRID_RADIUS
-}
+/** R-BOARD-01: rings 0–4 around the centre — five hexes from the centre to the edge. */
+export const RADIUS = 4
 
 /** The six neighbour directions, clockwise from the top right (screen y grows downwards). */
 export const DIRECTIONS: readonly Hex[] = [
@@ -67,7 +51,6 @@ export const FARM_POSITIONS: Record<number, number[]> = {
   5: [0, 1, 2, 3, 4],
   6: [0, 1, 2, 3, 4, 5],
 }
-
 
 /** R-SCORE-05: the multi-round variant's gap below the lowest enclosed farm. */
 export const UNENCLOSED_GAP = 10
@@ -114,18 +97,18 @@ function parseHex(key: string): Hex {
   return { q, r }
 }
 
-/** Every hex of the radius-5 grid, row by row from the top, left to right. A cell is an index into this. */
+/** Every hex on the board, row by row from the top, left to right. A cell is an index into this. */
 export const CELLS: readonly Hex[] = (() => {
   const cells: Hex[] = []
-  for (let r = -GRID_RADIUS; r <= GRID_RADIUS; r++) {
-    for (let q = Math.max(-GRID_RADIUS, -r - GRID_RADIUS); q <= Math.min(GRID_RADIUS, -r + GRID_RADIUS); q++) cells.push({ q, r })
+  for (let r = -RADIUS; r <= RADIUS; r++) {
+    for (let q = Math.max(-RADIUS, -r - RADIUS); q <= Math.min(RADIUS, -r + RADIUS); q++) cells.push({ q, r })
   }
   return cells
 })()
 
 const CELL_BY_KEY = new Map(CELLS.map((h, i) => [hexKey(h), i]))
 
-/** The cell of a hex on the grid, or -1. */
+/** The cell of an on-board hex, or -1. */
 export function cellOf(h: Hex): number {
   return CELL_BY_KEY.get(hexKey(h)) ?? -1
 }
@@ -135,45 +118,27 @@ export const CENTRE = cellOf({ q: 0, r: 0 })
 /** R-SETUP-02: the six farmhouse hexes around the centre, by position. */
 export const FARMHOUSES: readonly number[] = DIRECTIONS.map(cellOf)
 
-/** Whether a cell is on a board of `radius`. */
-export function isOnBoard(cell: number, radius: number): boolean {
-  return Number.isInteger(cell) && cell >= 0 && cell < CELLS.length && hexDistance(CELLS[cell]) <= radius
+/** R-BOARD-02: every hex outside the seven central ones is a field. */
+export function isField(cell: number): boolean {
+  return Number.isInteger(cell) && cell >= 0 && cell < CELLS.length && hexDistance(CELLS[cell]) >= 2
 }
 
-/** R-BOARD-02: every hex of the board outside the seven central ones is a field. */
-export function isField(cell: number, radius: number): boolean {
-  return isOnBoard(cell, radius) && hexDistance(CELLS[cell]) >= 2
-}
-
-const FIELDS_BY_RADIUS = new Map([BOARD_RADIUS, GRID_RADIUS].map((r) => [r, CELLS.map((_, i) => i).filter((c) => isField(c, r))]))
-
-/** The fields of a board of `radius`, in cell order. */
-export function fieldsOf(radius: number): readonly number[] {
-  return FIELDS_BY_RADIUS.get(radius) ?? CELLS.map((_, i) => i).filter((c) => isField(c, radius))
-}
-
-/** The fields of the current board (rules version 3 on). */
-export const FIELDS: readonly number[] = fieldsOf(BOARD_RADIUS)
+export const FIELDS: readonly number[] = CELLS.map((_, i) => i).filter(isField)
 
 function scaled(h: Hex, k: number): Hex {
   return { q: h.q * k, r: h.r * k }
 }
 
 /**
- * Rules version 1's bonus fields (AMBIG-4): the six "geese fields", the
- * ring-3 hex straight out from each farmhouse, each doubling its sheep.
- */
-export const GEESE: ReadonlySet<number> = new Set(DIRECTIONS.map((d) => cellOf(scaled(d, 3))))
-
-/**
- * R-BOARD-03: the bonus fields from rules version 2, and what each multiplies
+ * R-BOARD-03: the bonus fields, and what each multiplies
  * its sheep by. The six long diagonals run from the centre through each
  * farmhouse to a corner of the board; on ring k they meet the ring at its
  * corners, every k-th hex.
  * - ring 2 (the first ring of fields): the six hexes between its corners —
  *   every 2nd hex, off the diagonals, each where two farmhouses meet — ×2;
  * - ring 3: its six corners, on the diagonals — ×3;
- * - ring 4: the six hexes exactly midway between its corners — ×3.
+ * - ring 4, the edge of the board: the six hexes exactly midway between its
+ *   corners — ×3.
  */
 export const BONUS_FIELDS: ReadonlyMap<number, number> = new Map(
   DIRECTIONS.flatMap((d, i) => {
@@ -186,24 +151,17 @@ export const BONUS_FIELDS: ReadonlyMap<number, number> = new Map(
   }),
 )
 
-const GEESE_FIELDS: ReadonlyMap<number, number> = new Map([...GEESE].map((cell) => [cell, 2]))
-
-/** R-BOARD-03 / R-SCORE-03: the bonus fields under `rulesVersion`, cell to multiplier. */
-export function bonusFields(rulesVersion: number): ReadonlyMap<number, number> {
-  return rulesVersion >= 2 ? BONUS_FIELDS : GEESE_FIELDS
+/** On-board neighbours of a cell. */
+export function neighbours(cell: number): number[] {
+  return DIRECTIONS.map((d) => cellOf(add(CELLS[cell], d))).filter((c) => c >= 0)
 }
 
-/** Neighbours of a cell on a board of `radius`. */
-export function neighbours(cell: number, radius: number): number[] {
-  return DIRECTIONS.map((d) => cellOf(add(CELLS[cell], d))).filter((c) => isOnBoard(c, radius))
-}
-
-/** "D4" on a board of `radius`: row letter from the top, then the position in the row from the left. */
-export function cellLabel(cell: number, radius: number): string {
+/** "D4": row letter from the top, then the position in the row from the left. */
+export function cellLabel(cell: number): string {
   const h = CELLS[cell]
   if (!h) return '?'
-  const row = h.r + radius
-  const first = Math.max(-radius, -h.r - radius)
+  const row = h.r + RADIUS
+  const first = Math.max(-RADIUS, -h.r - RADIUS)
   return `${String.fromCharCode(65 + row)}${h.q - first + 1}`
 }
 
@@ -234,9 +192,9 @@ function touchesCentre(key: string): boolean {
   return vertexHexes(key).some((h) => hexDistance(h) <= 1)
 }
 
-/** R-FENCE-06: a vertex on the outer edge of a board of `radius` touches a hex off it. */
-export function isEdgeVertex(key: string, radius: number): boolean {
-  return vertexHexes(key).some((h) => hexDistance(h) > radius)
+/** R-FENCE-06: a vertex on the board's outer edge touches a hex off the board. */
+export function isEdgeVertex(key: string): boolean {
+  return vertexHexes(key).some((h) => hexDistance(h) > RADIUS)
 }
 
 function adjacent(a: Hex, b: Hex): boolean {
@@ -280,22 +238,28 @@ function edgeKey(a: Hex, b: Hex): string {
   return [hexKey(a), hexKey(b)].sort().join('/')
 }
 
-/** R-FENCE-02: the vertex where farmhouses `position` and `position + 1` meet the fields — where their border begins. */
+/** The vertex where farmhouses `position` and `position + 1` meet the fields — the far end of the fence between them. */
 export function junction(position: number): string {
   const a = DIRECTIONS[position % 6]
   const b = DIRECTIONS[(position + 1) % 6]
   return vertexKey([a, b, add(a, b)])
 }
 
+/** R-FENCE-02: the vertex where farmhouses `position` and `position + 1` meet the centre hex — where a border between them begins. */
+export function gate(position: number): string {
+  return vertexKey([{ q: 0, r: 0 }, DIRECTIONS[position % 6], DIRECTIONS[(position + 1) % 6]])
+}
+
 /**
  * R-FENCE-02: where the border between the farms at positions `from` and
- * `to` (clockwise) may begin — every junction between them. With six
- * players that's the single junction between neighbouring farmhouses.
+ * `to` (clockwise) may begin — the gate between every pair of neighbouring
+ * farmhouses from one to the other, used or not. With six players that's the
+ * single gate between the two farms' own farmhouses.
  */
 export function borderStarts(from: number, to: number): string[] {
   const starts: string[] = []
   for (let p = from; p !== to; p = (p + 1) % 6) {
-    starts.push(junction(p))
+    starts.push(gate(p))
     if (starts.length > 6) break
   }
   return starts
@@ -307,44 +271,56 @@ export function occupiedVertices(borders: readonly Border[]): Set<string> {
 }
 
 /**
- * R-FENCE-03/04: whether a fence may run from `from` to its neighbour `to`,
- * board-wise — not onto an earlier ring boundary, and never along a farmhouse
- * except as a border's `first` fence, which necessarily runs from the
- * junction along one of the two farmhouses there. Every later fence runs
- * between two fields.
+ * R-FENCE-02..04: whether the fence after `built` fences of a line may run
+ * from `from` to its neighbour `to`, board-wise:
+ * - the first fence runs between the two farmhouses, from the gate out to
+ *   their junction with the fields (not round the centre hex);
+ * - the second runs from the junction along one of those farmhouses;
+ * - every later one runs between two fields;
+ * - and none leads onto an earlier ring boundary.
  */
-export function isOutwardStep(from: string, to: string, first: boolean): boolean {
+export function isOutwardStep(from: string, to: string, built: number): boolean {
+  if (built === 0) return !vertexHexes(to).some((h) => hexDistance(h) === 0)
   if (vertexRing(to) < vertexRing(from)) return false
-  return first || !touchesCentre(to)
+  return built === 1 || !touchesCentre(to)
 }
 
-/** Whether a line standing at `from` can still be extended to the edge without touching `blocked` (R-FENCE-05). */
-export function reachesEdge(from: string, blocked: ReadonlySet<string>, radius: number, first = false): boolean {
-  if (isEdgeVertex(from, radius)) return true
+/**
+ * Whether a line standing at `from` after `built` fences can still be extended
+ * to the edge without touching `blocked` (R-FENCE-05). A breadth-first search,
+ * one fence per layer, so each layer knows how many fences its lines have.
+ */
+export function reachesEdge(from: string, blocked: ReadonlySet<string>, built: number): boolean {
+  if (isEdgeVertex(from)) return true
   const seen = new Set([from])
   let frontier = [from]
-  let isFirst = first
+  let fences = built
   while (frontier.length > 0) {
     const next: string[] = []
     for (const v of frontier) {
       for (const w of vertexNeighbours(v)) {
-        if (seen.has(w) || blocked.has(w) || !isOutwardStep(v, w, isFirst)) continue
-        if (isEdgeVertex(w, radius)) return true
+        if (seen.has(w) || blocked.has(w) || !isOutwardStep(v, w, fences)) continue
+        if (isEdgeVertex(w)) return true
         seen.add(w)
         next.push(w)
       }
     }
     frontier = next
-    isFirst = false
+    fences++
   }
   return false
 }
 
+/** Fences a line has: none until it starts, then one fewer than its vertices. */
+function fencesIn(border: Border): number {
+  return Math.max(0, border.path.length - 1)
+}
+
 /** R-FENCE-05: whether a border can still be finished, given every fence on the board. */
-export function canStillFinish(border: Border, blocked: ReadonlySet<string>, radius: number): boolean {
+export function canStillFinish(border: Border, blocked: ReadonlySet<string>): boolean {
   if (border.finished) return true
-  if (border.path.length === 0) return border.starts.some((s) => !blocked.has(s) && reachesEdge(s, blocked, radius, true))
-  return reachesEdge(border.path[border.path.length - 1], blocked, radius)
+  if (border.path.length === 0) return border.starts.some((s) => !blocked.has(s) && reachesEdge(s, blocked, 0))
+  return reachesEdge(border.path[border.path.length - 1], blocked, fencesIn(border))
 }
 
 export interface FenceMove {
@@ -356,65 +332,57 @@ export interface FenceMove {
 /**
  * R-FENCE-02..05: every fence that could extend `borderIndex` right now —
  * never inward, touching no fence line, and leaving every unfinished border
- * a way to the edge of a board of `radius`. Ignores whose turn it is and fence stocks.
+ * a way to the edge. Ignores whose turn it is and fence stocks.
  */
-export function fenceMoves(borders: readonly Border[], borderIndex: number, radius: number): FenceMove[] {
+export function fenceMoves(borders: readonly Border[], borderIndex: number): FenceMove[] {
   const border = borders[borderIndex]
   if (!border || border.finished) return []
   const blocked = occupiedVertices(borders)
   const froms = border.path.length > 0 ? [border.path[border.path.length - 1]] : border.starts.filter((s) => !blocked.has(s))
   const moves: FenceMove[] = []
-  const first = border.path.length === 0
+  const built = fencesIn(border)
   for (const from of froms) {
     for (const to of vertexNeighbours(from)) {
-      if (blocked.has(to) || !isOutwardStep(from, to, first)) continue
+      if (blocked.has(to) || !isOutwardStep(from, to, built)) continue
       const after = new Set(blocked)
       after.add(from)
       after.add(to)
-      const extended: Border = { ...border, path: border.path.length > 0 ? [...border.path, to] : [from, to], finished: isEdgeVertex(to, radius) }
-      const ok = borders.every((b, i) => canStillFinish(i === borderIndex ? extended : b, after, radius))
+      const extended: Border = { ...border, path: border.path.length > 0 ? [...border.path, to] : [from, to], finished: isEdgeVertex(to) }
+      const ok = borders.every((b, i) => canStillFinish(i === borderIndex ? extended : b, after))
       if (ok) moves.push({ border: borderIndex, from, to })
     }
   }
   return moves
 }
 
-/**
- * Every edge a fence stands on, plus — for each started border — the edge
- * between the two farmhouses its line grows from, so the line reaches all the
- * way in to the centre and splits the ring of farmhouses too.
- */
+/** Every edge a fence stands on. A line starts at the centre, so it splits the ring of farmhouses too. */
 export function fencedEdges(borders: readonly Border[]): Set<string> {
   const edges = new Set<string>()
   for (const b of borders) {
-    if (b.path.length === 0) continue
-    const inner = vertexHexes(b.path[0]).filter((h) => hexDistance(h) === 1)
-    if (inner.length === 2) edges.add(edgeKey(inner[0], inner[1]))
     for (let i = 1; i < b.path.length; i++) edges.add(edgeBetween(b.path[i - 1], b.path[i]))
   }
   return edges
 }
 
 /**
- * The fields of the farm at `position` on a board of `radius`: everything
- * reachable from its farmhouse without crossing a fence, the centre hex or the
- * board's edge (R-SCORE-01). Only a meaningful farm once both its borders are
+ * The fields of the farm at `position`: everything reachable from its
+ * farmhouse without crossing a fence or the centre hex (R-SCORE-01). Only a meaningful farm once both its borders are
  * finished; before that it leaks into its neighbours.
  */
-export function farmFields(borders: readonly Border[], position: number, radius: number): number[] {
+export function farmFields(borders: readonly Border[], position: number): number[] {
   const fenced = fencedEdges(borders)
   const start = FARMHOUSES[position]
   const seen = new Set([start])
   const queue = [start]
   while (queue.length > 0) {
     const cell = queue.shift()!
-    for (const next of neighbours(cell, radius)) {
+    for (const next of neighbours(cell)) {
       if (next === CENTRE || seen.has(next) || fenced.has(edgeKey(CELLS[cell], CELLS[next]))) continue
       seen.add(next)
       queue.push(next)
     }
   }
-  return [...seen].filter((c) => isField(c, radius)).sort((a, b) => a - b)
+  return [...seen].filter(isField).sort((a, b) => a - b)
 }
 
 // ---------------------------------------------------------------------------
@@ -431,30 +399,30 @@ export function isOccupied(game: GameData, cell: number): boolean {
 }
 
 export function emptyFields(game: GameData): number[] {
-  return fieldsOf(radiusOf(game)).filter((c) => !isOccupied(game, c))
+  return FIELDS.filter((c) => !isOccupied(game, c))
 }
 
 export function faceDownCells(game: GameData): number[] {
-  return fieldsOf(radiusOf(game)).filter((c) => game.sheep[c] !== null && !game.sheep[c]!.faceUp)
+  return FIELDS.filter((c) => game.sheep[c] !== null && !game.sheep[c]!.faceUp)
 }
 
 /** R-END-01: an enclosed farm whose every field is occupied. */
 export function isFarmFull(game: GameData, playerId: PlayerId): boolean {
-  return isEnclosed(game, playerId) && farmFields(game.borders, game.farms[playerId].position, radiusOf(game)).every((c) => isOccupied(game, c))
+  return isEnclosed(game, playerId) && farmFields(game.borders, game.farms[playerId].position).every((c) => isOccupied(game, c))
 }
 
 /** R-SCORE-02/03: face-up sheep on these fields, times their bonus field's multiplier. Face-down sheep count nothing. */
-export function sheepScore(sheep: readonly (FieldSheep | null)[], cells: readonly number[], bonuses: ReadonlyMap<number, number>): number {
+export function sheepScore(sheep: readonly (FieldSheep | null)[], cells: readonly number[]): number {
   let total = 0
   for (const cell of cells) {
     const s = sheep[cell]
     if (!s || !s.faceUp || !s.sheep) continue
-    total += s.sheep.value * (bonuses.get(cell) ?? 1)
+    total += s.sheep.value * (BONUS_FIELDS.get(cell) ?? 1)
   }
   return total
 }
 
-/** What a farm's sheep are worth right now (whether or not it's enclosed), under `rulesVersion`'s bonus fields. */
-export function farmScore(game: GameData, playerId: PlayerId, rulesVersion: number): number {
-  return sheepScore(game.sheep, farmFields(game.borders, game.farms[playerId].position, radiusOf(game)), bonusFields(rulesVersion))
+/** What a farm's sheep are worth right now (whether or not it's enclosed). */
+export function farmScore(game: GameData, playerId: PlayerId): number {
+  return sheepScore(game.sheep, farmFields(game.borders, game.farms[playerId].position))
 }

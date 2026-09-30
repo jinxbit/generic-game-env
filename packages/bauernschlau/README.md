@@ -43,17 +43,6 @@ The package follows the layout of the example game
   `Random` and are recorded on the entry that drew them, which a redacted
   viewer never receives. In a room that locks revealed information, a draw
   can't be undone by a player (the drawer has seen the sheep).
-- **Rules versions.** Version 3 (current) plays on a board of radius 4.
-  Cells keep their numbers on the radius-5 grid of the older versions, and
-  the radius is stored on the game (`GameData.radius`), so every
-  radius-dependent helper in `board.ts` takes it explicitly. Version 2 played
-  on radius 5; it left the dog where it was set down after herding, added the
-  first-edition option (on by default: a black sheep herded by the dog gives
-  no extra actions) and replaced the six ×2 geese fields with 18 ×2/×3 bonus
-  fields. Version 1 let the dog move on afterwards, always gave the bonus and
-  had the geese. Both stay registered (`gameDefinitionV1`,
-  `gameDefinitionV2`) so games started under them still replay; all three run
-  from one code path (RULES.md §11).
 - **Every action consumes something** — a sheep from the bag, a face-down
   sheep, a fence — so a game always ends: by a full enclosed farm, or when
   nobody can act.
@@ -69,6 +58,8 @@ likely to matter at the table:
   fields — ×2 on ring 2 between the long diagonals, ×3 on ring 3 on them, ×3
   on ring 4 midway between them (R-BOARD-03).
 - 90 sheep counters, +5 to −4, 10 of them black (AMBIG-3).
+- A border's first fence runs between two neighbouring farmhouses, out from
+  the centre, whatever the number of players (R-FENCE-02).
 - A fence may run sideways along a ring of hexes, never inward (AMBIG-6).
 - After herding, the dog stays where it was set down (R-DOG-04, AMBIG-5).
 - First-edition rule, on by default: herding a black sheep with the dog gives

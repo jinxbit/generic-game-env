@@ -27,7 +27,7 @@ export interface GameOptions {
   /** The multi-round variant's scoring for unenclosed farms (R-SCORE-05). */
   multiRoundScoring: boolean
   /**
-   * First-edition rule (R-DOG-03, rules version 2 on; default on): a black
+   * First-edition rule (R-DOG-03, default on): a black
    * sheep turned over with the sheepdog gives no extra actions.
    */
   firstEdition: boolean
@@ -70,7 +70,7 @@ export type LastEvent =
   | { kind: 'draw'; playerId: PlayerId; count: number; special: boolean }
   | { kind: 'place'; playerId: PlayerId; cell: number; remaining: number }
   | { kind: 'flip'; playerId: PlayerId; cell: number; sheep: Sheep }
-  | { kind: 'herd'; playerId: PlayerId; from: number; to: number; dog: number | null; sheep: Sheep }
+  | { kind: 'herd'; playerId: PlayerId; from: number; to: number; sheep: Sheep }
   | { kind: 'fence'; playerId: PlayerId; border: number; from: string; to: string; finished: boolean }
 
 export type EndReason = { kind: 'farmFull'; playerId: PlayerId } | { kind: 'stalemate' }
@@ -91,13 +91,7 @@ export interface GameData {
   seatOrder: PlayerId[]
   farms: Record<PlayerId, Farm>
   borders: Border[]
-  /**
-   * The board's radius (R-BOARD-01): 4, set at genesis from rules version 3.
-   * Absent in games started before, whose board has radius 5 — read it with
-   * `radiusOf` (board.ts).
-   */
-  radius?: number
-  /** One entry per cell of the radius-5 grid (board.ts `CELLS`); null where no sheep stands. */
+  /** One entry per cell (board.ts `CELLS`); null where no sheep stands. */
   sheep: (FieldSheep | null)[]
   /** The sheepdog's cell; null while it stands in the centre (R-SETUP-04). */
   dog: number | null
@@ -147,17 +141,12 @@ export interface FlipSheepAction {
 /**
  * R-DOG-01..04: the dog goes to the face-down sheep on `from`; the sheep moves
  * to the empty field `to` and is turned over; the dog stays on `from`.
- *
- * Rules version 1 let the dog then go to the centre (`dog: null`) or another
- * empty field instead, and required `dog`; from version 2 it's omitted (or
- * must equal `from`).
  */
 export interface HerdAction {
   type: 'HERD'
   playerId: PlayerId
   from: number
   to: number
-  dog?: number | null
 }
 
 /** R-FENCE-01..07: extend `border` by one fence, from vertex `from` to vertex `to`. */

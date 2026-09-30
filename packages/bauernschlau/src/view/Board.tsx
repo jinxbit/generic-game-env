@@ -1,6 +1,8 @@
 import type { SeatInfo } from '@game-platform/sdk/ui'
-import { CELLS, CENTRE, cellLabel, cellOf, edgeBetween, FARMHOUSES, farmFields, isEnclosed, isField, isOnBoard, radiusOf, type FenceMove, type GameData } from '../rules.ts'
+import { BONUS_FIELDS, CELLS, CENTRE, cellLabel, cellOf, edgeBetween, FARMHOUSES, farmFields, isEnclosed, isField, RADIUS, type FenceMove, type GameData } from '../rules.ts'
 import { cellCentre, HEX_SIZE, hexPoints, seatColourOf, vertexPoint } from './helpers.ts'
+
+const EXTENT = HEX_SIZE * Math.sqrt(3) * (RADIUS + 1)
 
 /** Plain fields, then bonus fields a shade brighter the more they multiply. */
 const BONUS_FILL: Record<number, string> = { 1: '#365314', 2: '#3f6212', 3: '#4d7c0f' }
@@ -10,46 +12,37 @@ const BONUS_FILL: Record<number, string> = { 1: '#365314', 2: '#3f6212', 3: '#4d
  * with the farmhouses and the dog's kennel in the middle, sheep, the dog and
  * the fence lines. Enclosed farms are tinted in their owner's colour.
  *
- * What's clickable comes from the caller: `targets` (cells), `centreTarget`,
+ * What's clickable comes from the caller: `targets` (cells)
  * and `fenceOptions` (drawn dashed, clickable). A face-down sheep shows its
  * value only to the player who placed it (`myPlayerId`), and only if the
  * state carries it — a redacted view doesn't.
  */
 export function Board({
   game,
-  bonuses,
   players,
   myPlayerId,
   targets,
   selected,
-  centreTarget,
   fenceOptions,
   disabled,
   onCell,
-  onCentre,
   onFence,
 }: {
   game: GameData
-  /** Bonus fields for the game's rules version (`bonusFields`), cell to multiplier. */
-  bonuses: ReadonlyMap<number, number>
   players: SeatInfo[]
   myPlayerId: string | null
   targets: Set<number>
   selected: number[]
-  centreTarget: boolean
   fenceOptions: FenceMove[]
   disabled: boolean
   onCell: (cell: number) => void
-  onCentre: () => void
   onFence: (move: FenceMove) => void
 }) {
-  // Cells are numbered on the radius-5 grid; only the board's own are drawn.
-  const radius = radiusOf(game)
-  const extent = HEX_SIZE * Math.sqrt(3) * (radius + 1)
+  const bonuses = BONUS_FIELDS
   const tint = new Map<number, string>()
   for (const id of game.seatOrder) {
     if (!isEnclosed(game, id)) continue
-    for (const cell of farmFields(game.borders, game.farms[id].position, radius)) tint.set(cell, seatColourOf(players, id))
+    for (const cell of farmFields(game.borders, game.farms[id].position)) tint.set(cell, seatColourOf(players, id))
   }
   const owners = new Map(game.seatOrder.map((id) => [FARMHOUSES[game.farms[id].position], id]))
   const last = game.last
@@ -57,24 +50,23 @@ export function Board({
 
   return (
     <div className="flex justify-center">
-      <svg viewBox={`${-extent} ${-extent} ${2 * extent} ${2 * extent}`} className="w-full max-w-xl select-none" role="group" aria-label="Board">
+      <svg viewBox={`${-EXTENT} ${-EXTENT} ${2 * EXTENT} ${2 * EXTENT}`} className="w-full max-w-xl select-none" role="group" aria-label="Board">
         {CELLS.map((_, cell) => {
-          if (!isOnBoard(cell, radius)) return null
           const { x, y } = cellCentre(cell)
-          const field = isField(cell, radius)
+          const field = isField(cell)
           const owner = owners.get(cell)
-          const clickable = !disabled && (cell === CENTRE ? centreTarget : targets.has(cell))
+          const clickable = !disabled && targets.has(cell)
           const fill = cell === CENTRE ? '#57534e' : owner ? seatColourOf(players, owner) : field ? (BONUS_FILL[bonuses.get(cell) ?? 1] ?? '#365314') : '#44403c'
           const sheep = game.sheep[cell]
-          const label = cell === CENTRE ? 'Centre' : `${cellLabel(cell, radius)}${bonuses.has(cell) ? ` · bonus ×${bonuses.get(cell)}` : ''}${sheep ? (sheep.faceUp ? ' · face-up sheep' : ' · face-down sheep') : ''}${game.dog === cell ? ' · dog' : ''}`
+          const label = cell === CENTRE ? 'Centre' : `${cellLabel(cell)}${bonuses.has(cell) ? ` · bonus ×${bonuses.get(cell)}` : ''}${sheep ? (sheep.faceUp ? ' · face-up sheep' : ' · face-down sheep') : ''}${game.dog === cell ? ' · dog' : ''}`
           return (
             <g
               key={cell}
               role={clickable ? 'button' : undefined}
               aria-label={clickable ? label : undefined}
               tabIndex={clickable ? 0 : undefined}
-              onClick={clickable ? () => (cell === CENTRE ? onCentre() : onCell(cell)) : undefined}
-              onKeyDown={clickable ? (e) => (e.key === 'Enter' || e.key === ' ') && (cell === CENTRE ? onCentre() : onCell(cell)) : undefined}
+              onClick={clickable ? () => onCell(cell) : undefined}
+              onKeyDown={clickable ? (e) => (e.key === 'Enter' || e.key === ' ') && onCell(cell) : undefined}
               className={clickable ? 'cursor-pointer' : undefined}
             >
               <title>{label}</title>
@@ -112,7 +104,7 @@ export function Board({
           fenceOptions.map((move) => {
             const p = vertexPoint(move.from)
             const q = vertexPoint(move.to)
-            const label = `Fence between ${edgeLabel(move, radius)}`
+            const label = `Fence between ${edgeLabel(move)}`
             return (
               <g key={`${move.border}:${move.from}:${move.to}`} role="button" aria-label={label} tabIndex={0} className="cursor-pointer" onClick={() => onFence(move)} onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onFence(move)}>
                 <title>{label}</title>
@@ -152,12 +144,12 @@ function SheepToken({ x, y, sheep, mine, highlighted }: { x: number; y: number; 
 }
 
 /** "D4 and E5": the two hexes a fence would separate. */
-function edgeLabel(move: FenceMove, radius: number): string {
+function edgeLabel(move: FenceMove): string {
   return edgeBetween(move.from, move.to)
     .split('/')
     .map((key) => {
       const [q, r] = key.split(',').map(Number)
-      return cellLabel(cellOf({ q, r }), radius)
+      return cellLabel(cellOf({ q, r }))
     })
     .join(' and ')
 }

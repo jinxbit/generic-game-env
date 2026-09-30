@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import type { GameViewProps } from '@game-platform/sdk/ui'
-import { actionChoices, bonusFields, cellLabel, dogStays, radiusOf, emptyFields, faceDownCells, fenceMovesFor, isOpeningRound, specialCount, STEP_LABELS, type FenceMove, type GameState } from './rules.ts'
+import { actionChoices, cellLabel, emptyFields, faceDownCells, fenceMovesFor, isOpeningRound, specialCount, STEP_LABELS, type FenceMove, type GameState } from './rules.ts'
 import type { GameAction, GameData, GameOptions } from './types.ts'
 import { Board } from './view/Board.tsx'
 import { BTN, BTN_PRIMARY, nameOf } from './view/helpers.ts'
 import { Hand, PlayersPanel } from './view/Panels.tsx'
 
 /** What the viewer is in the middle of choosing on the board. */
-type Mode = { kind: 'flip' } | { kind: 'herd'; from: number | null; to: number | null } | { kind: 'fence' }
+type Mode = { kind: 'flip' } | { kind: 'herd'; from: number | null } | { kind: 'fence' }
 
 /**
  * Bauernschlau's table: whose turn it is, the action panel, the board (every
@@ -27,7 +27,6 @@ export function GameView({ state, players, myPlayerId, submitting, onAction }: G
   const [handIndex, setHandIndex] = useState(0)
 
   let targets = new Set<number>()
-  let centreTarget = false
   let fenceOptions: FenceMove[] = []
   let selected: number[] = []
   let onCell: (cell: number) => void = () => {}
@@ -47,29 +46,18 @@ export function GameView({ state, players, myPlayerId, submitting, onAction }: G
     if (mode.from === null) {
       targets = new Set(faceDownCells(g))
       prompt = 'Sheepdog: click the face-down sheep the dog goes to.'
-      onCell = (from) => setMode({ kind: 'herd', from, to: null })
-    } else if (mode.to === null) {
+      onCell = (from) => setMode({ kind: 'herd', from })
+    } else {
       const from = mode.from
       selected = [from]
       targets = new Set(free)
-      prompt = `Where does the sheep from ${cellLabel(from, radiusOf(g))} go? Click an empty field.${dogStays(state.rulesVersion) ? ' The dog stays on ' + cellLabel(from, radiusOf(g)) + '.' : ''}`
-      // R-DOG-04: from rules version 2 the dog stays put, so this click finishes the move.
-      onCell = (to) => (dogStays(state.rulesVersion) ? onAction({ type: 'HERD', playerId: me, from, to }) : setMode({ ...mode, to }))
-    } else {
-      const { from, to } = mode
-      selected = [from, to]
-      targets = new Set([from, ...free.filter((c) => c !== to)])
-      centreTarget = true
-      prompt = `Where does the dog end up? Click ${cellLabel(from, radiusOf(g))} to leave it there, the centre, or another empty field.`
-      onCell = (dog) => onAction({ type: 'HERD', playerId: me, from, to, dog })
+      // R-DOG-04: the dog stays put, so this click finishes the move.
+      prompt = `Where does the sheep from ${cellLabel(from)} go? Click an empty field. The dog stays on ${cellLabel(from)}.`
+      onCell = (to) => onAction({ type: 'HERD', playerId: me, from, to })
     }
   } else if (mode?.kind === 'fence') {
     fenceOptions = fenceMovesFor(g, me)
     prompt = 'Click a dashed yellow line to build that fence.'
-  }
-
-  const onCentre = () => {
-    if (mode?.kind === 'herd' && mode.from !== null && mode.to !== null) onAction({ type: 'HERD', playerId: me, from: mode.from, to: mode.to, dog: null })
   }
 
   return (
@@ -112,16 +100,13 @@ export function GameView({ state, players, myPlayerId, submitting, onAction }: G
         ))}
       <Board
         game={g}
-        bonuses={bonusFields(state.rulesVersion)}
         players={players}
         myPlayerId={myPlayerId}
         targets={targets}
         selected={selected}
-        centreTarget={centreTarget}
         fenceOptions={fenceOptions}
         disabled={submitting}
         onCell={onCell}
-        onCentre={onCentre}
         onFence={(move) => onAction({ type: 'BUILD_FENCE', playerId: me, ...move })}
       />
       <PlayersPanel state={s} players={players} />
@@ -142,7 +127,7 @@ function ActionButtons({ state, me, submitting, onAction, onMode }: { state: Gam
           <button type="button" className={BTN} disabled={submitting || !can.flip} onClick={() => onMode({ kind: 'flip' })}>
             Flip a sheep
           </button>
-          <button type="button" className={BTN} disabled={submitting || !can.herd} onClick={() => onMode({ kind: 'herd', from: null, to: null })}>
+          <button type="button" className={BTN} disabled={submitting || !can.herd} onClick={() => onMode({ kind: 'herd', from: null })}>
             Sheepdog
           </button>
           <button type="button" className={BTN} disabled={submitting || !can.fence} onClick={() => onMode({ kind: 'fence' })}>

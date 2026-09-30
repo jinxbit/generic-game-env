@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyAction, isUndoLockedByReveal, type GameState as PlatformState } from '@game-platform/sdk'
 import {
-  CELLS,
-  cellLabel,
   CENTRE,
-  hexDistance,
   emptyFields,
   FARMHOUSES,
   farmFields,
@@ -12,12 +9,10 @@ import {
   FIELDS,
   gameDefinition,
   BONUS_FIELDS,
-  bonusFields,
-  GEESE,
   isEdgeVertex,
+  gate,
   junction,
   normalizeGameOptions,
-  radiusOf,
   sheepCounters,
   vertexNeighbours,
   vertexRing,
@@ -54,7 +49,7 @@ describe('§3 setup', () => {
       ['p2', 'p3'],
       ['p3', 'p1'],
     ])
-    expect(g.borders[0].starts).toEqual([junction(0), junction(1)])
+    expect(g.borders[0].starts).toEqual([gate(0), gate(1)])
     expect(g.dog).toBeNull()
     expect(g.bag).toHaveLength(90)
     expect(s.turn).toBe(1)
@@ -65,7 +60,7 @@ describe('§3 setup', () => {
   it('R-SETUP-03: fences by player count; six players have one start per border', () => {
     expect([2, 3, 4, 5, 6].map((n) => newGame({ players: n }).game.farms.p1.fencesLeft)).toEqual([16, 16, 12, 12, 10])
     const six = newGame({ players: 6 })
-    expect(six.game.borders.every((b, i) => b.starts.length === 1 && b.starts[0] === junction(i))).toBe(true)
+    expect(six.game.borders.every((b, i) => b.starts.length === 1 && b.starts[0] === gate(i))).toBe(true)
     expect(newGame({ players: 2 }).game.borders.map((b) => b.starts.length)).toEqual([3, 3])
   })
 
@@ -74,7 +69,7 @@ describe('§3 setup', () => {
     expect(normalizeGameOptions({ multiRoundScoring: 'yes', firstEdition: 'no' })).toEqual({ multiRoundScoring: false, firstEdition: true })
     expect(normalizeGameOptions({ multiRoundScoring: true, firstEdition: false })).toEqual({ multiRoundScoring: true, firstEdition: false })
     expect(gameDefinition.describeOptions(normalizeGameOptions({}))).toBe('First edition')
-    expect(gameDefinition.rulesVersion).toBe(3)
+    expect(gameDefinition.rulesVersion).toBe(1)
   })
 })
 
@@ -176,10 +171,6 @@ describe('§6 flipping and the sheepdog', () => {
     expect(s.game.dog).toBe(FIELDS[40])
     expect(s.pendingPlayerIds).toEqual(['p2'])
     expect(gameDefinition.describeAction({ type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a }, base, s).message).not.toMatch(/dog (stays|goes)/)
-    // Naming the dog's own field is fine; anywhere else is refused.
-    expect(play(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a, dog: FIELDS[40] }).game.dog).toBe(FIELDS[40])
-    expect(reject(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a, dog: null })).toMatch(/dog stays on/)
-    expect(reject(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a, dog: b })).toMatch(/dog stays on/)
     expect(reject(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: FIELDS[0] })).toMatch(/empty field/)
     expect(reject(base, { type: 'HERD', playerId: 'p1', from: a, to: b })).toMatch(/no face-down sheep/)
     // The dog's own field is free for the sheep once the dog leaves it.
@@ -201,61 +192,6 @@ describe('§6 flipping and the sheepdog', () => {
     // Flipping a black sheep still gives them either way.
     const flipped = play(withSheep(skipOpening(newGame({ players: 2 })), FIELDS[40], BLACK, false), { type: 'FLIP_SHEEP', playerId: 'p1', cell: FIELDS[40] })
     expect(flipped.game.actionsLeft).toBe(2)
-  })
-})
-
-describe('§11 older rules versions', () => {
-  it('R-BOARD-01: version 3 plays on radius 4 — the outer ring is off the board; version 2 kept radius 5', () => {
-    const outer = CELLS.findIndex((h) => hexDistance(h) === 5)
-    const current = skipOpening(newGame({ players: 2 }))
-    expect(current.game.radius).toBe(4)
-    expect(emptyFields(current.game)).toHaveLength(54 - 2)
-    const drawn = play(current, { type: 'DRAW_SHEEP', playerId: 'p1' })
-    expect(reject(drawn, { type: 'PLACE_SHEEP', playerId: 'p1', cell: outer, index: 0 })).toMatch(/field on the board/)
-    const old = skipOpening(newGame({ players: 2, rulesVersion: 2 }))
-    expect('radius' in old.game).toBe(false)
-    expect(emptyFields(old.game)).toHaveLength(84 - 2)
-    const outerFree = emptyFields(old.game).find((c) => hexDistance(CELLS[c]) === 5)!
-    const placed = play(play(old, { type: 'DRAW_SHEEP', playerId: 'p1' }), { type: 'PLACE_SHEEP', playerId: 'p1', cell: outerFree, index: 0 })
-    expect(placed.game.sheep[outerFree]).toMatchObject({ placedBy: 'p1' })
-    // Labels count on the game's own board.
-    expect(gameDefinition.describeAction({ type: 'PLACE_SHEEP', playerId: 'p1', cell: outerFree, index: 0 }, old, placed).message).toContain(`on ${cellLabel(outerFree, 5)}.`)
-    expect(cellLabel(CENTRE, radiusOf(old.game))).toBe('F6')
-    expect(cellLabel(CENTRE, radiusOf(current.game))).toBe('E5')
-  })
-
-
-  it('scored with the six ×2 geese fields instead of the bonus fields', () => {
-    let s = arrange(skipOpening(newGame({ players: 2, rulesVersion: 1 })), (g) => {
-      g.sheep = g.sheep.map(() => null)
-      finishBorders(g, [0, 1])
-    })
-    const mine = farmFields(s.game.borders, s.game.farms.p1.position, radiusOf(s.game))
-    const last = mine[mine.length - 1]
-    s = arrange(s, (g) => {
-      for (const cell of mine) if (cell !== last) g.sheep[cell] = { sheep: { value: 1, black: false }, faceUp: true, placedBy: 'p2' }
-    })
-    s = placeSheep(s, last)
-    const expected = mine.filter((c) => c !== last).reduce((n, c) => n + (GEESE.has(c) ? 2 : 1), 0)
-    expect(s.game.finalScores!.p1.farm).toBe(expected)
-    expect(bonusFields(1)).not.toBe(bonusFields(2))
-  })
-
-  it('the dog could stay, go home or move on after herding', () => {
-    const base = withSheep(skipOpening(newGame({ players: 2, rulesVersion: 1 })), FIELDS[40], { value: 2, black: false }, false)
-    expect(base.rulesVersion).toBe(1)
-    const [a, b] = emptyFields(base.game)
-    expect(play(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a, dog: FIELDS[40] }).game.dog).toBe(FIELDS[40])
-    expect(play(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a, dog: null }).game.dog).toBeNull()
-    expect(play(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a, dog: b }).game.dog).toBe(b)
-    expect(reject(base, { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: a, dog: a })).toMatch(/dog can stay/)
-  })
-
-  it('a black sheep herded by the dog always gave extra actions, whatever the option says', () => {
-    const s = play(withSheep(skipOpening(newGame({ players: 2, rulesVersion: 1 })), FIELDS[40], BLACK, false), { type: 'HERD', playerId: 'p1', from: FIELDS[40], to: FIELDS[41], dog: null })
-    expect(s.options.firstEdition).toBe(true)
-    expect(s.pendingPlayerIds).toEqual(['p1'])
-    expect(s.game.actionsLeft).toBe(2)
   })
 })
 
@@ -287,51 +223,55 @@ describe('§7 sheep special', () => {
 })
 
 describe('§6 fences', () => {
-  it('R-FENCE-01..02: the first fence leaves the junction between the farmhouses, on your own borders only', () => {
+  it('R-FENCE-01..02: the first fence runs between the two farmhouses, from the centre out; on your own borders only', () => {
     let s = skipOpening(newGame({ players: 6 }))
-    const moves = fenceMoves(s.game.borders, 0, radiusOf(s.game))
-    expect(moves).toHaveLength(2)
-    expect(moves.every((m) => m.from === junction(0))).toBe(true)
-    expect(reject(s, { type: 'BUILD_FENCE', playerId: 'p1', ...fenceMoves(s.game.borders, 2, radiusOf(s.game))[0] })).toMatch(/own farm/)
+    const moves = fenceMoves(s.game.borders, 0)
+    expect(moves).toEqual([{ border: 0, from: gate(0), to: junction(0) }])
+    expect(reject(s, { type: 'BUILD_FENCE', playerId: 'p1', ...fenceMoves(s.game.borders, 2)[0] })).toMatch(/own farm/)
     s = play(s, { type: 'BUILD_FENCE', playerId: 'p1', ...moves[0] })
     expect(s.game.borders[0]).toMatchObject({ path: [moves[0].from, moves[0].to], builtBy: ['p1'], finished: false })
     expect(s.game.farms.p1.fencesLeft).toBe(9)
-    // p2 shares that border and may extend it.
-    const next = fenceMoves(s.game.borders, 0, radiusOf(s.game))
-    expect(next.every((m) => m.from === moves[0].to)).toBe(true)
+    // p2 shares that border and may extend it — along either farmhouse.
+    const next = fenceMoves(s.game.borders, 0)
+    expect(next).toHaveLength(2)
+    expect(next.every((m) => m.from === junction(0))).toBe(true)
     s = play(s, { type: 'BUILD_FENCE', playerId: 'p2', ...next[0] })
     expect(s.game.borders[0].builtBy).toEqual(['p1', 'p2'])
   })
 
-  it('R-FENCE-03/04: never inward, never along a farmhouse after the first fence, never onto another line', () => {
+  it('R-FENCE-03/04: never inward, never along a farmhouse after the second fence, never onto another line', () => {
     let s = skipOpening(newGame({ players: 6 }))
-    const [first] = fenceMoves(s.game.borders, 0, radiusOf(s.game))
+    const [first] = fenceMoves(s.game.borders, 0)
     s = play(s, { type: 'BUILD_FENCE', playerId: 'p1', ...first })
-    const options = vertexNeighbours(first.to).filter((v) => v !== first.from)
-    const legal = fenceMoves(s.game.borders, 0, radiusOf(s.game)).map((m) => m.to)
-    // From the first fence's end: one way out between two fields, one way along the farmhouse.
+    const [second] = fenceMoves(s.game.borders, 0)
+    s = play(s, { type: 'BUILD_FENCE', playerId: 'p2', ...second })
+    // Back to p1, who shares border 0 with p2.
+    s = arrange(s, (g) => (g.turnPlayerId = 'p1'))
+    const options = vertexNeighbours(second.to).filter((v) => v !== second.from)
+    const legal = fenceMoves(s.game.borders, 0).map((m) => m.to)
+    // From the second fence's end: one way out between two fields, one way along the farmhouse.
     expect(legal).toHaveLength(1)
     const alongFarmhouse = options.find((v) => !legal.includes(v))!
-    expect(reject(s, { type: 'BUILD_FENCE', playerId: 'p2', border: 0, from: first.to, to: alongFarmhouse })).toMatch(/turn back/)
-    expect(reject(s, { type: 'BUILD_FENCE', playerId: 'p2', border: 0, from: first.to, to: first.from })).toMatch(/turn back/)
-    expect(reject(s, { type: 'BUILD_FENCE', playerId: 'p2', border: 0, from: first.from, to: first.to })).toMatch(/turn back/)
+    expect(reject(s, { type: 'BUILD_FENCE', playerId: 'p1', border: 0, from: second.to, to: alongFarmhouse })).toMatch(/turn back/)
+    expect(reject(s, { type: 'BUILD_FENCE', playerId: 'p1', border: 0, from: second.to, to: second.from })).toMatch(/turn back/)
+    expect(reject(s, { type: 'BUILD_FENCE', playerId: 'p1', border: 0, from: first.from, to: first.to })).toMatch(/turn back/)
     // Every legal step keeps to its ring boundary or moves out.
-    for (const m of fenceMoves(s.game.borders, 0, radiusOf(s.game))) expect(vertexRing(m.to)).toBeGreaterThanOrEqual(vertexRing(m.from))
+    for (const m of fenceMoves(s.game.borders, 0)) expect(vertexRing(m.to)).toBeGreaterThanOrEqual(vertexRing(m.from))
   })
 
-  it('R-FENCE-06: a border is finished at the edge; it takes at least six fences', () => {
+  it('R-FENCE-06: a border is finished at the edge; it takes at least seven fences', () => {
     const s = arrange(skipOpening(newGame({ players: 6 })), (g) => finishBorders(g, [0]))
     const border = s.game.borders[0]
     expect(border.finished).toBe(true)
-    expect(isEdgeVertex(border.path[border.path.length - 1], radiusOf(s.game))).toBe(true)
-    expect(border.builtBy).toHaveLength(6)
-    expect(fenceMoves(s.game.borders, 0, radiusOf(s.game))).toEqual([])
-    expect(reject(s, { type: 'BUILD_FENCE', playerId: 'p1', border: 0, from: border.path[6], to: border.path[5] })).toMatch(/already reaches the edge/)
+    expect(isEdgeVertex(border.path[border.path.length - 1])).toBe(true)
+    expect(border.builtBy).toHaveLength(7)
+    expect(fenceMoves(s.game.borders, 0)).toEqual([])
+    expect(reject(s, { type: 'BUILD_FENCE', playerId: 'p1', border: 0, from: border.path[7], to: border.path[6] })).toMatch(/already reaches the edge/)
   })
 
   it('R-FENCE-07: no fences left, no building', () => {
     const s = arrange(skipOpening(newGame({ players: 6 })), (g) => (g.farms.p1.fencesLeft = 0))
-    expect(reject(s, { type: 'BUILD_FENCE', playerId: 'p1', ...fenceMoves(s.game.borders, 0, radiusOf(s.game))[0] })).toMatch(/no fences left/)
+    expect(reject(s, { type: 'BUILD_FENCE', playerId: 'p1', ...fenceMoves(s.game.borders, 0)[0] })).toMatch(/no fences left/)
   })
 })
 
@@ -341,8 +281,8 @@ describe('§8 the end and scoring', () => {
       g.sheep = g.sheep.map(() => null)
       finishBorders(g, [0, 1])
     })
-    const mine = farmFields(s.game.borders, s.game.farms.p1.position, radiusOf(s.game))
-    const theirs = farmFields(s.game.borders, s.game.farms.p2.position, radiusOf(s.game))
+    const mine = farmFields(s.game.borders, s.game.farms.p1.position)
+    const theirs = farmFields(s.game.borders, s.game.farms.p2.position)
     expect(mine.length + theirs.length).toBe(54)
     const last = mine[mine.length - 1]
     const plain = theirs.find((c) => !BONUS_FIELDS.has(c))!
@@ -370,7 +310,7 @@ describe('§8 the end and scoring', () => {
         g.sheep = g.sheep.map(() => null)
         finishBorders(g, [2, 0])
       })
-      const mine = farmFields(s.game.borders, s.game.farms.p1.position, radiusOf(s.game))
+      const mine = farmFields(s.game.borders, s.game.farms.p1.position)
       s = arrange(s, (g) => {
         for (const cell of mine.slice(0, -1)) g.sheep[cell] = { sheep: { value: BONUS_FIELDS.has(cell) ? 0 : 1, black: false }, faceUp: true, placedBy: 'p2' }
       })

@@ -1,8 +1,7 @@
 # Bauernschlau — Implementation Rules Spec
 
 > This file is the source of truth for the Bauernschlau rules engine in
-> `packages/bauernschlau`, as of **rules version 3**. §11 lists what versions
-> 1 and 2, still registered for games started under them, did differently. Rule ids
+> `packages/bauernschlau`, as of **rules version 1**. Rule ids
 > (`R-FENCE-03` and so on) are cited in the code and the tests. `[AMBIG-n]` marks a point
 > the rules sheet leaves open; §10 lists the behaviour chosen for each.
 > Changing any of them changes how existing games replay, so it ships with a
@@ -17,7 +16,7 @@ much of the geometry below is this implementation's own.
 
 | Component | Count | Model |
 | --- | --- | --- |
-| Board | a hexagon of hexes, radius 4 [AMBIG-1] | `CELLS` (board.ts), axial coordinates: 91 hexes of a radius-5 grid numbered row by row, of which the board uses the 61 within its radius (`GameData.radius`) |
+| Board | a hexagon of hexes, radius 4 [AMBIG-1] | `CELLS` (board.ts), axial coordinates, 61 hexes numbered row by row |
 | Farmhouses | six, one per colour | the six hexes around the centre |
 | Sheepdog | one | `dog`: a cell, or null for the centre |
 | Sheep counters | 90 [AMBIG-3] | `bag`, `hand`, `sheep[cell]` |
@@ -117,24 +116,29 @@ neighbouring farm — with two players, the two farms share both.
 
 - **R-FENCE-01** On your turn you may build one fence extending either of
   your farm's borders. Your neighbour may extend the same border on theirs.
-- **R-FENCE-02** A border's first fence starts at a **junction**: the corner
-  where two neighbouring farmhouses meet the fields. With six players there
-  is one junction per border; with fewer, a border may start at any junction
-  between its two farms' farmhouses, and the first fence decides which.
+- **R-FENCE-02** A border's first fence is built **between two neighbouring
+  farmhouses**, on the hexside they share — whatever the number of players.
+  It runs from the **gate**, the corner where those two farmhouses meet the
+  centre hex, out to their **junction**, the corner where they meet the
+  fields. With six players each border has one pair of farmhouses to start
+  between; with fewer, a border may start between any two neighbouring
+  farmhouses from one of its farms to the other, used or not, and the first
+  fence decides which.
 - **R-FENCE-03** Fences may not be built back towards the farmhouses: a fence
   may run along a boundary between two rings of hexes, or out to the next
-  one, never in to an earlier one [AMBIG-6]. After its first fence a line
-  never runs along a farmhouse — only between two fields.
+  one, never in to an earlier one [AMBIG-6]. The second fence runs from the
+  junction along one of the two farmhouses; every later one runs only
+  between two fields.
 - **R-FENCE-04** A line may not touch another line, nor itself: no
   branching, forking or joining.
 - **R-FENCE-05** A fence may not cut off any border's last remaining path
   to the edge of the board (its own included).
 - **R-FENCE-06** A border is **finished** when its line reaches the outer
-  edge of the board. It takes at least six fences.
+  edge of the board. It takes at least seven fences.
 - **R-FENCE-07** A player with no fences left can't build.
 - A farm is **enclosed** when both its borders are finished. Its fields are
   everything reachable from its farmhouse without crossing a fence line (each
-  line counts as reaching all the way in to the centre).
+  line starts at the centre hex, so it splits the ring of farmhouses too).
 
 ### Sheep special
 
@@ -177,32 +181,29 @@ neighbouring farm — with two players, the two farms share both.
 
 ## 10. Decisions beyond the rules sheet
 
-- **AMBIG-1 Board.** The sheet shows no board. Radius 4 (54 fields, borders
-  of 6+ fences) was given after version 2, which played on radius 5 (84
-  fields, borders of 8+ fences, §11). The fence counts (16/12/10 per player
-  over 2–6 shared borders) leave room to bend.
+- **AMBIG-1 Board.** The sheet shows no board. Radius 4 — five hexes from
+  the centre to the edge — gives 54 fields and borders of 7+ fences; the fence
+  counts (16/12/10 per player over 2–6 shared borders) leave room to bend.
 - **AMBIG-2 Farms with fewer than six players.** Farmhouses are spread as
   evenly as six positions allow; the unused ones stay unplayable.
 - **AMBIG-3 Sheep counters.** The sheet gives no mix. 90 counters (more than
-  the 54 fields — and the 84 of the older radius-5 board — so the bag never
-  runs dry before the board is full),
+  the 54 fields, so the bag never runs dry before the board is full),
   weighted positive, with 10 black sheep.
 - **AMBIG-4 Bonus fields.** The sheet's "geese fields multiply the sum of all
-  sheep within them" gives no layout; the layout and multipliers of R-BOARD-03
-  were given after version 1 (which had six ×2 geese fields, §11). Each field
-  holds one sheep, so a multiplier applies to that sheep.
+  sheep within them" gives no layout; R-BOARD-03's layout and multipliers are
+  a ruling given with this implementation. Each field holds one sheep, so a
+  multiplier applies to that sheep.
 - **AMBIG-5 Where the dog ends up.** It stays on the field it was set down
-  on, where the sheep was (a ruling given after version 1). The sheet's "the
-  sheepdog can be returned to the centre of the board, or any other empty
-  space" is read as describing where the dog stands before it is used —
-  in the centre at the start, or wherever the last herd left it — not as a
-  move of its own. Version 1 read it as a choice after herding (§11).
+  on, where the sheep was (a ruling). The sheet's "the sheepdog can be
+  returned to the centre of the board, or any other empty space" is read as
+  describing where the dog stands before it is used — in the centre at the
+  start, or wherever the last herd left it — not as a move of its own.
 - **AMBIG-6 "Towards the farmhouses".** Measured by ring boundary: sideways
   along a boundary is allowed, inward is not. (Requiring every fence to lead
-  strictly outward would make every border exactly six fences long, and the
+  strictly outward would make every border exactly seven fences long, and the
   fence counts meaningless.) A line may run along a farmhouse only as its
-  first fence, so a border can't wrap round a farmhouse and cut it off from
-  its own fields.
+  second fence (its first runs between two), so a border can't wrap round a
+  farmhouse and cut it off from its own fields.
 - **AMBIG-7 Sheep special timing.** "At the beginning of your turn" is read
   as "whenever you choose an action", extra actions included. It is one of
   the five actions, not a compulsory extra.
@@ -213,31 +214,3 @@ neighbouring farm — with two players, the two farms share both.
 - **AMBIG-10 Ending mid-special.** The game ends the moment a farm fills,
   even with sheep of a special still to place.
 
-## 11. Older rules versions
-
-Games replay under the version they started with. Versions 1 and 2 are kept
-registered (`gameDefinitionV1`, `gameDefinitionV2`) and run from the same
-code, branching on `rulesVersion` (`boardRadius`, `dogStays`,
-`herdingBlackGivesBonus`, `bonusFields`) or on the board radius stored on the
-game (`radiusOf`).
-
-### Version 2
-
-- **Radius 5.** The board had rings 0–5: 91 hexes, 84 fields, cells labelled
-  A–K with the centre F6, and borders of at least eight fences. Such games
-  carry no `radius` on their state, which `radiusOf` reads as 5. The bonus
-  fields were the same; ring 4's stood one ring in from the edge.
-
-### Version 1
-
-As version 2 (radius 5), except in three ways:
-
-- **Where the dog ends up.** After herding, the player chose: the dog stayed
-  on the sheep's old field, went back to the centre (`dog: null`), or went
-  to any other empty field. The `HERD` action had to say which (`dog`).
-- **No first-edition rule.** A black sheep turned over with the dog always
-  gave the two extra actions. The `firstEdition` option, which such games'
-  options now read as on, is ignored.
-- **Geese fields, not bonus fields.** Six fields, the ring-3 hex straight
-  out from each farmhouse (where version 2 has its ×3 fields), each doubled
-  its sheep (`GEESE`). `bonusFields(rulesVersion)` picks the layout.

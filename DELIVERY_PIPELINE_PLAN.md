@@ -33,7 +33,7 @@ deferred), §3 (branch topology, recommended, not yet acted on) and §7
 | --- | --- | --- |
 | Lint / test / build | `.github/workflows/ci.yml` | every PR, and push to `main` |
 | Claude implements a change | `.github/workflows/claude.yml` | `@claude` on an issue or comment |
-| Claude reviews a PR | `.github/workflows/claude-code-review.yml` | every PR |
+| Claude reviews a PR | `.github/workflows/claude-code-review.yml` | disabled for now (its `pull_request` trigger is commented out; re-enable it there) |
 | Supabase migrations + functions deploy | `.github/workflows/deploy-supabase.yml` | push to `main` (Preview) or `production` (production), touching `supabase/migrations/**`, `supabase/functions/**`, `src/lib/**` |
 | Frontend deploy | Vercel | push to `production` (production), `main` and other branches (preview) |
 | Real games replayed against the deployed backend | `.github/workflows/smoke.yml` | after a successful Supabase deploy, and nightly |
@@ -239,7 +239,8 @@ workflows refuse to run without it (§8).
 
 **1. Develop.** An issue mentioning `@claude` starts `claude.yml`. Claude
 implements on a branch and opens a PR against `main`. `ci.yml` runs lint,
-test and build; `claude-code-review.yml` reviews the diff.
+test and build; `claude-code-review.yml` reviews the diff (currently
+disabled — see §1).
 
 **2. Deploy to pre-production and test there.** On green CI the PR
 auto-merges (rules in §7). The push to `main` deploys migrations and Edge

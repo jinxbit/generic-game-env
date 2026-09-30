@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { GameViewProps } from '@game-platform/sdk/ui'
-import { actionChoices, bonusFields, cellLabel, dogStays, emptyFields, faceDownCells, fenceMovesFor, isOpeningRound, specialCount, STEP_LABELS, type FenceMove, type GameState } from './rules.ts'
+import { actionChoices, bonusFields, cellLabel, dogStays, radiusOf, emptyFields, faceDownCells, fenceMovesFor, isOpeningRound, specialCount, STEP_LABELS, type FenceMove, type GameState } from './rules.ts'
 import type { GameAction, GameData, GameOptions } from './types.ts'
 import { Board } from './view/Board.tsx'
 import { BTN, BTN_PRIMARY, nameOf } from './view/helpers.ts'
@@ -52,7 +52,7 @@ export function GameView({ state, players, myPlayerId, submitting, onAction }: G
       const from = mode.from
       selected = [from]
       targets = new Set(free)
-      prompt = `Where does the sheep from ${cellLabel(from)} go? Click an empty field.${dogStays(state.rulesVersion) ? ' The dog stays on ' + cellLabel(from) + '.' : ''}`
+      prompt = `Where does the sheep from ${cellLabel(from, radiusOf(g))} go? Click an empty field.${dogStays(state.rulesVersion) ? ' The dog stays on ' + cellLabel(from, radiusOf(g)) + '.' : ''}`
       // R-DOG-04: from rules version 2 the dog stays put, so this click finishes the move.
       onCell = (to) => (dogStays(state.rulesVersion) ? onAction({ type: 'HERD', playerId: me, from, to }) : setMode({ ...mode, to }))
     } else {
@@ -60,7 +60,7 @@ export function GameView({ state, players, myPlayerId, submitting, onAction }: G
       selected = [from, to]
       targets = new Set([from, ...free.filter((c) => c !== to)])
       centreTarget = true
-      prompt = `Where does the dog end up? Click ${cellLabel(from)} to leave it there, the centre, or another empty field.`
+      prompt = `Where does the dog end up? Click ${cellLabel(from, radiusOf(g))} to leave it there, the centre, or another empty field.`
       onCell = (dog) => onAction({ type: 'HERD', playerId: me, from, to, dog })
     }
   } else if (mode?.kind === 'fence') {

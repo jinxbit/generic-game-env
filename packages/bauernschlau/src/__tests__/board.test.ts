@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  BOARD_RADIUS,
   borderStarts,
   canStillFinish,
   CELLS,
@@ -10,6 +11,10 @@ import {
   farmFields,
   fenceMoves,
   FIELDS,
+  fieldsOf,
+  GRID_RADIUS,
+  isOnBoard,
+  cellOf,
   BONUS_FIELDS,
   DIRECTIONS,
   GEESE,
@@ -30,36 +35,50 @@ function bordersFor(players: number): Border[] {
   return pos.map((p, i) => ({ between: ['a', 'b'], starts: borderStarts(p, pos[(i + 1) % players]), path: [], builtBy: [], finished: false }))
 }
 
-function extend(borders: Border[], b: number, from: string, to: string): Border[] {
-  return borders.map((x, i) => (i === b ? { ...x, path: x.path.length > 0 ? [...x.path, to] : [from, to], builtBy: [...x.builtBy, 'a'], finished: isEdgeVertex(to) } : x))
+/** The current board's radius (rules version 3). */
+const R = BOARD_RADIUS
+
+function extend(borders: Border[], b: number, from: string, to: string, radius = R): Border[] {
+  return borders.map((x, i) => (i === b ? { ...x, path: x.path.length > 0 ? [...x.path, to] : [from, to], builtBy: [...x.builtBy, 'a'], finished: isEdgeVertex(to, radius) } : x))
 }
 
 /** Random legal fences until every border is finished. */
-function randomBorders(players: number, seed: number): Border[] {
+function randomBorders(players: number, seed: number, radius = R): Border[] {
   const next = testRandom(seed)
   let borders = bordersFor(players)
   for (let guard = 0; guard < 500 && borders.some((b) => !b.finished); guard++) {
     const b = next() % players
-    const moves = fenceMoves(borders, b)
+    const moves = fenceMoves(borders, b, radius)
     if (moves.length === 0) continue
     const m = moves[next() % moves.length]
-    borders = extend(borders, b, m.from, m.to)
+    borders = extend(borders, b, m.from, m.to, radius)
   }
   return borders
 }
 
 describe('§2 the board', () => {
-  it('R-BOARD-01..03: 91 hexes, 84 fields, the centre, six farmhouses and six geese fields', () => {
+  it('R-BOARD-01/02: radius 4 — 61 hexes, 54 fields, the centre and six farmhouses — numbered on the radius-5 grid', () => {
     expect(CELLS).toHaveLength(91)
-    expect(FIELDS).toHaveLength(84)
+    expect(CELLS.filter((_, c) => isOnBoard(c, R))).toHaveLength(61)
+    expect(FIELDS).toHaveLength(54)
+    expect(FIELDS).toEqual(fieldsOf(R))
+    expect(FIELDS.every((c) => hexDistance(CELLS[c]) >= 2 && hexDistance(CELLS[c]) <= 4)).toBe(true)
     expect(hexDistance(CELLS[CENTRE])).toBe(0)
     expect(FARMHOUSES.map((c) => hexDistance(CELLS[c]))).toEqual([1, 1, 1, 1, 1, 1])
-    // Rules version 1's geese fields.
-    expect([...GEESE].every((c) => FIELDS.includes(c) && hexDistance(CELLS[c]) === 3)).toBe(true)
+    // Labels count rows and columns on the board itself.
+    expect(cellLabel(cellOf({ q: 0, r: -4 }), R)).toBe('A1')
+    expect(cellLabel(CENTRE, R)).toBe('E5')
+    expect(cellLabel(cellOf({ q: 0, r: 4 }), R)).toBe('I5')
+  })
+
+  it('rules versions 1 and 2: radius 5 — 91 hexes, 84 fields, and version 1’s six geese fields', () => {
+    expect(fieldsOf(GRID_RADIUS)).toHaveLength(84)
+    expect(CELLS.every((_, c) => isOnBoard(c, GRID_RADIUS))).toBe(true)
+    expect([...GEESE].every((c) => fieldsOf(GRID_RADIUS).includes(c) && hexDistance(CELLS[c]) === 3)).toBe(true)
     expect(GEESE.size).toBe(6)
-    expect(cellLabel(0)).toBe('A1')
-    expect(cellLabel(CENTRE)).toBe('F6')
-    expect(cellLabel(90)).toBe('K6')
+    expect(cellLabel(0, GRID_RADIUS)).toBe('A1')
+    expect(cellLabel(CENTRE, GRID_RADIUS)).toBe('F6')
+    expect(cellLabel(90, GRID_RADIUS)).toBe('K6')
   })
 
   it('R-BOARD-03: bonus fields — ring 2 between the diagonals ×2, ring 3 on them ×3, ring 4 midway between them ×3', () => {
@@ -111,16 +130,20 @@ describe('§6 fence lines', () => {
     expect(isOutwardStep(j, inward, true)).toBe(false)
   })
 
-  it('R-FENCE-06: the shortest border is eight fences; every finished set of borders splits the 84 fields between the farms', () => {
-    const straight = (from: string): number => (isEdgeVertex(from) ? 0 : 1 + Math.min(...vertexNeighbours(from).filter((v) => vertexDepth(v) > vertexDepth(from) && isOutwardStep(from, v, vertexDepth(from) === 4)).map(straight)))
-    expect(straight(junction(0))).toBe(8)
-    for (const players of [2, 3, 4, 5, 6]) {
-      for (const seed of [1, 2, 3]) {
-        const borders = randomBorders(players, seed * 7 + players)
-        expect(borders.every((b) => b.finished)).toBe(true)
-        const farms = FARM_POSITIONS[players].map((p) => farmFields(borders, p))
-        expect(farms.reduce((n, f) => n + f.length, 0)).toBe(84)
-        expect(new Set(farms.flat()).size).toBe(84)
+  it('R-FENCE-06: the shortest border is six fences (eight on the old radius-5 board); every finished set of borders splits the fields between the farms', () => {
+    const straight = (from: string, radius: number): number =>
+      isEdgeVertex(from, radius) ? 0 : 1 + Math.min(...vertexNeighbours(from).filter((v) => vertexDepth(v) > vertexDepth(from) && isOutwardStep(from, v, vertexDepth(from) === 4)).map((v) => straight(v, radius)))
+    expect(straight(junction(0), R)).toBe(6)
+    expect(straight(junction(0), GRID_RADIUS)).toBe(8)
+    for (const [radius, fields] of [[R, 54], [GRID_RADIUS, 84]]) {
+      for (const players of [2, 3, 4, 5, 6]) {
+        for (const seed of [1, 2, 3]) {
+          const borders = randomBorders(players, seed * 7 + players, radius)
+          expect(borders.every((b) => b.finished)).toBe(true)
+          const farms = FARM_POSITIONS[players].map((p) => farmFields(borders, p, radius))
+          expect(farms.reduce((n, f) => n + f.length, 0)).toBe(fields)
+          expect(new Set(farms.flat()).size).toBe(fields)
+        }
       }
     }
   })
@@ -133,7 +156,7 @@ describe('§6 fence lines', () => {
       let borders = bordersFor(6)
       for (let guard = 0; guard < 300 && borders.some((b) => !b.finished); guard++) {
         const b = next() % 6
-        const legal = fenceMoves(borders, b)
+        const legal = fenceMoves(borders, b, R)
         const border = borders[b]
         const blocked = occupiedVertices(borders)
         const froms = border.path.length > 0 ? [border.path[border.path.length - 1]] : border.starts
@@ -142,7 +165,7 @@ describe('§6 fence lines', () => {
           for (const to of vertexNeighbours(from)) {
             if (blocked.has(to) || !isOutwardStep(from, to, border.path.length === 0) || legal.some((m) => m.to === to)) continue
             const after = extend(borders, b, from, to)
-            expect(after.some((x) => !canStillFinish(x, occupiedVertices(after)))).toBe(true)
+            expect(after.some((x) => !canStillFinish(x, occupiedVertices(after), R))).toBe(true)
             cutOffs++
           }
         }

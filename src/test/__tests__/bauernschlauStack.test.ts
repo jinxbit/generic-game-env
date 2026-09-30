@@ -31,7 +31,7 @@ async function startRoom(stack: ProductionStack): Promise<void> {
     playerCount: PLAYERS.length,
     status: 'lobby',
     gameType: 'bauernschlau',
-    settings: testGameSettings({ rulesVersion: 2, hiddenInformationEnabled: true, gameOptions: { multiRoundScoring: true } }),
+    settings: testGameSettings({ rulesVersion: 3, hiddenInformationEnabled: true, gameOptions: { multiRoundScoring: true } }),
   })
   for (const userId of USERS) stack.addUser(userId)
   stack.db.seed('games', game as unknown as Record<string, unknown>)

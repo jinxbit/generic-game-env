@@ -45,6 +45,10 @@ export type Keyword =
   | 'attacksEachCombat'
   /** Juggernaut: can't be blocked by Walls (R-BLK-02). */
   | 'unblockableByWalls'
+  /** R-CREA-02: may attack and use {T} abilities the turn it comes under its controller's control. */
+  | 'haste'
+  /** Phantom Warrior: can't be blocked (R-BLK-02). */
+  | 'unblockable'
 
 /** What a spell or ability can target. */
 export type TargetKind =
@@ -72,6 +76,8 @@ export type TargetFilter =
   | 'black'
   /** Raise Dead. */
   | 'creatureCard'
+  /** Remove Soul: a creature spell. */
+  | 'creatureSpell'
 
 export interface TargetSpec {
   kind: TargetKind
@@ -106,6 +112,10 @@ export type Effect =
   | { kind: 'returnToHand' }
   /** Fog: prevent all combat damage this turn. */
   | { kind: 'fog' }
+  /** Pyroclasm / Earthquake / Hurricane: damage to each creature (all, only with flying, or only without) and, if `players`, each player. */
+  | { kind: 'damageEach'; amount: Amount; creatures: 'all' | 'flying' | 'nonflying'; players: boolean }
+  /** Warrior's Honor / Overrun / Trumpet Blast: creatures you control (or, with `attacking`, attacking creatures) get +power/+toughness and maybe a keyword until end of turn. */
+  | { kind: 'pumpAll'; power: number; toughness: number; keyword?: Keyword; attacking?: boolean }
 
 export interface ActivatedAbility {
   /** Mana to pay (none when omitted). */
@@ -120,6 +130,8 @@ export interface ActivatedAbility {
    * (Birds of Paradise).
    */
   produces?: ManaType | 'any'
+  /** How much of `produces` a mana ability adds (Sol Ring: 2); 1 when omitted. */
+  amount?: number
   text: string
 }
 
@@ -157,6 +169,8 @@ export interface CardDef {
   aura?: AuraSpec
   /** Hypnotic Specter (AMBIG-5). */
   trigger?: 'discardRandomOnDamageToPlayer'
+  /** Can be a commander (R-CMD-01). */
+  legendary?: boolean
   /** Rules text, for the view. */
   text: string
 }
@@ -205,8 +219,19 @@ export interface Combat {
   blocked: boolean
 }
 
+/** R-CMD-02..05: a player's commander, in a Commander game. */
+export interface CommanderState {
+  /** Its card id (`<owner>-cmd`), stable in every zone. */
+  id: string
+  def: string
+  /** Where it is right now: the command zone, or out (on the stack or the battlefield). */
+  inCommandZone: boolean
+  /** R-CMD-03: times it has been cast from the command zone (the tax is {2} for each). */
+  casts: number
+}
+
 export interface PlayerData {
-  /** One of DECKS, once chosen (R-SETUP-02). Redacted while the other player is still choosing. */
+  /** One of DECKS (COMMANDER_DECKS in a Commander game), once chosen (R-SETUP-02). Redacted while the other player is still choosing. */
   deck: string | null
   life: number
   /** R-MULL-01. */
@@ -224,6 +249,14 @@ export interface PlayerData {
   /** R-SBA-01: tried to draw from an empty library. */
   drewFromEmpty: boolean
   lost: boolean
+  /**
+   * Commander games only (R-CMD-02): null until the decks are chosen. Absent
+   * in a standard game, so a standard game's state is exactly what it was
+   * before Commander existed.
+   */
+  commander?: CommanderState | null
+  /** Commander games only (R-CMD-05): combat damage taken from each commander, by its card id. */
+  commanderDamage?: Record<string, number>
 }
 
 /**
@@ -235,9 +268,17 @@ export type Step = 'chooseDeck' | 'mulligan' | 'main1' | 'attack' | 'block' | 'c
 
 export interface GameOptions {
   startingLife: number
+  /**
+   * RULES.md §10: play Commander. Present only when true, so the options a
+   * standard game stores (and its genesis) are unchanged from before the
+   * format existed.
+   */
+  commander?: true
 }
 
 export interface GameData {
+  /** RULES.md §10: set (to 'commander') only in a Commander game. */
+  format?: 'commander'
   seatOrder: PlayerId[]
   players: Record<PlayerId, PlayerData>
   step: Step
@@ -261,7 +302,7 @@ export interface GameData {
   nextAbilityId: number
   /** What happened this action, beyond the headline — narrated as extra log lines. */
   journal: string[]
-  endReason: 'life' | 'library' | 'draw' | null
+  endReason: 'life' | 'library' | 'commander' | 'draw' | null
 }
 
 export type GameAction =
@@ -269,6 +310,7 @@ export type GameAction =
   | { type: 'MULLIGAN'; playerId: PlayerId }
   | { type: 'KEEP'; playerId: PlayerId; bottom: string[] }
   | { type: 'PLAY_LAND'; playerId: PlayerId; cardId: string }
+  /** `cardId` is a card in hand, or the caster's commander in the command zone (R-CMD-03). */
   | { type: 'CAST'; playerId: PlayerId; cardId: string; targets: Target[]; x?: number }
   | { type: 'ACTIVATE'; playerId: PlayerId; permanentId: string; ability: number; targets: Target[]; x?: number; color?: Color }
   | { type: 'PASS'; playerId: PlayerId }

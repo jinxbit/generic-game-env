@@ -6,13 +6,15 @@ import {
   canAttack,
   canPlayLand,
   castableNow,
+  castCost,
   cardDef,
   colorsOf,
-  DECKS,
+  decksFor,
   findPayment,
   gameDefinition,
   handOf,
   HAND_SIZE,
+  isCommanderGame,
   isPriorityStep,
   legalTargets,
   maxX,
@@ -59,6 +61,11 @@ export function startedGame(decks: [string, string] = ['red', 'green'], seed = 1
   s = play(s, { type: 'CHOOSE_DECK', playerId: 'p2', deck: decks[1] }, seed + 1)
   s = play(s, { type: 'KEEP', playerId: 'p1', bottom: [] }, seed + 2)
   return play(s, { type: 'KEEP', playerId: 'p2', bottom: [] }, seed + 3)
+}
+
+/** A Commander game past deck choice and mulligans: p1 plays `decks[0]`, p2 `decks[1]`, both keep seven. */
+export function commanderGame(decks: [string, string] = ['tobias', 'jerrard'], seed = 1, options: Partial<GameOptions> = {}): GameState {
+  return startedGame(decks, seed, { commander: true, startingLife: 40, ...options })
 }
 
 /**
@@ -130,14 +137,16 @@ function preferredTarget(game: GameData, me: PlayerId, targets: Target[], effect
   return targets.find((t) => mine(t) !== harmful) ?? null
 }
 
-/** The first spell in hand the bot would cast right now, with its targets and X. */
+/** The first spell in hand (or a commander in the command zone) the bot would cast right now, with its targets and X. */
 export function castCandidate(state: GameState, me: PlayerId): GameAction | null {
   const g = state.game
-  for (const c of handOf(g, me)) {
+  const commander = g.players[me].commander
+  const castable = [...handOf(g, me), ...(commander?.inCommandZone ? [{ id: commander.id, def: commander.def }] : [])]
+  for (const c of castable) {
     const def = cardDef(c.def)
     if (!castableNow(g, me, c.def)) continue
     const x = def.cost?.x ? maxX(g, me, def.cost) : 0
-    if (x < 0 || !findPayment(g, me, def.cost!, x)) continue
+    if (x < 0 || !findPayment(g, me, castCost(g, me, c.id, c.def), x)) continue
     if (def.cost?.x && x === 0) continue
     let targets: Target[] = []
     if (def.target) {
@@ -160,7 +169,8 @@ export function simplestMove(state: GameState): GameAction {
   const g = state.game
   if (g.step === 'chooseDeck') {
     const playerId = state.pendingPlayerIds[0]
-    return { type: 'CHOOSE_DECK', playerId, deck: DECKS[g.seatOrder.indexOf(playerId) % DECKS.length].id }
+    const decks = decksFor(isCommanderGame(g))
+    return { type: 'CHOOSE_DECK', playerId, deck: decks[g.seatOrder.indexOf(playerId) % decks.length].id }
   }
   if (g.step === 'mulligan') {
     const playerId = state.pendingPlayerIds[0]

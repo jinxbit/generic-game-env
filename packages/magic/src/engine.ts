@@ -9,11 +9,18 @@
 // Pure and deterministic; the only randomness is the `Random` the framework
 // passes in, used for draws (RULES.md AMBIG-1), the starting player and
 // Hypnotic Specter's discard.
+//
+// Commander (RULES.md §10) is the same engine with a few hooks, every one of
+// them behind `game.format === 'commander'` (or a card only the Commander
+// decks contain), so a standard game plays exactly as it always has: the
+// command zone and the commander tax in casting, the trip back to the
+// command zone wherever a card leaves the battlefield or the stack, and
+// commander damage in combat and the state-based actions.
 
 import type { Random } from '@game-platform/sdk'
-import { cardDef, cardName, colorsOf, deckList, findDeck } from './cards.ts'
+import { cardDef, cardName, colorsOf, deckList, findDeck, isCommanderDeck } from './cards.ts'
 import { canTap, COLORS, emptyPool, findPayment, payCost } from './mana.ts'
-import type { ActivatedAbility, CardRef, Color, Effect, GameData, Keyword, Permanent, PlayerId, StackItem, Target, TargetSpec } from './types.ts'
+import type { ActivatedAbility, CardRef, Color, Effect, GameData, Keyword, ManaCost, Permanent, PlayerData, PlayerId, StackItem, Target, TargetSpec } from './types.ts'
 
 export class RuleError extends Error {}
 
@@ -37,11 +44,17 @@ export const KEYWORD_LABELS: Record<Keyword, string> = {
   plainswalk: 'Plainswalk',
   attacksEachCombat: 'Attacks each combat',
   unblockableByWalls: "Can't be blocked by Walls",
+  haste: 'Haste',
+  unblockable: "Can't be blocked",
 }
 
 export const HAND_SIZE = 7
 export const OPENING_HAND = 7
 export const MAX_MULLIGANS = 7
+/** R-CMD-05. */
+export const COMMANDER_DAMAGE = 21
+/** R-CMD-03: the commander tax per earlier cast from the command zone. */
+export const COMMANDER_TAX = 2
 
 /** Display names by player id — the engine's only view of the envelope. */
 export type Names = Record<PlayerId, string>
@@ -77,8 +90,46 @@ export function findCard(game: GameData, id: string): CardRef | null {
       const card = zone.find((c) => c?.id === id)
       if (card) return card
     }
+    if (p.commander?.id === id) return { id, def: p.commander.def }
   }
   return game.exile.find((c) => c.id === id) ?? null
+}
+
+// --- Commander (RULES.md §10) --------------------------------------------------
+
+export function isCommanderGame(game: GameData): boolean {
+  return game.format === 'commander'
+}
+
+/** The player whose commander the card `cardId` is, or null (always null outside a Commander game). */
+export function commanderOwner(game: GameData, cardId: string): PlayerId | null {
+  if (!isCommanderGame(game)) return null
+  return game.seatOrder.find((pid) => game.players[pid].commander?.id === cardId) ?? null
+}
+
+/** R-CMD-03: the extra generic mana `player`'s commander costs from the command zone now. */
+export function commanderTax(player: PlayerData): number {
+  return COMMANDER_TAX * (player.commander?.casts ?? 0)
+}
+
+/** Whether `cardId` is `playerId`'s commander, waiting in the command zone. */
+export function inCommandZone(game: GameData, playerId: PlayerId, cardId: string): boolean {
+  const c = game.players[playerId].commander
+  return isCommanderGame(game) && !!c && c.inCommandZone && c.id === cardId
+}
+
+/** What casting `cardId` costs `playerId` right now: its mana cost, plus the commander tax from the command zone (R-CMD-03). */
+export function castCost(game: GameData, playerId: PlayerId, cardId: string, def: string): ManaCost {
+  const base = cardDef(def).cost!
+  if (!inCommandZone(game, playerId, cardId)) return base
+  return { ...base, generic: base.generic + commanderTax(game.players[playerId]) }
+}
+
+/** R-CMD-03: could `playerId` cast their commander from the command zone right now (timing and mana)? */
+export function commanderCastable(game: GameData, playerId: PlayerId): boolean {
+  const c = game.players[playerId].commander
+  if (!c || !inCommandZone(game, playerId, c.id) || !castableNow(game, playerId, c.def)) return false
+  return !!findPayment(game, playerId, castCost(game, playerId, c.id, c.def))
 }
 
 function landsOfType(game: GameData, playerId: PlayerId, subtype: string): number {
@@ -159,7 +210,9 @@ export function isLegalTarget(game: GameData, controller: PlayerId, spec: Target
     return (spec.kind === 'player' || spec.kind === 'any') && game.seatOrder.includes(target.id) && !game.players[target.id].lost
   }
   if (target.kind === 'spell') {
-    return spec.kind === 'spell' && target.id !== selfId && game.stack.some((s) => s.id === target.id && s.card !== null)
+    if (spec.kind !== 'spell' || target.id === selfId) return false
+    const item = game.stack.find((s) => s.id === target.id && s.card !== null)
+    return !!item && (spec.filter !== 'creatureSpell' || isType(item.card!.def, 'Creature'))
   }
   if (target.kind === 'card') {
     if (spec.kind !== 'cardInYourGraveyard') return false
@@ -242,17 +295,19 @@ export function activationProblem(game: GameData, playerId: PlayerId, p: Permane
 
 /**
  * RULES.md AMBIG-4: could `playerId` possibly do anything with priority —
- * judged only from public information: cards in hand, or a non-mana
- * activated ability they could pay for.
+ * judged only from public information: cards in hand, a non-mana activated
+ * ability they could pay for, or (R-CMD-03) a commander in the command zone
+ * they could cast.
  */
 export function mightAct(game: GameData, playerId: PlayerId): boolean {
   if (game.players[playerId].hand.length > 0) return true
+  if (commanderCastable(game, playerId)) return true
   return game.battlefield.some((p) => (cardDef(p.def).abilities ?? []).some((a, i) => a.produces === undefined && activationProblem(game, playerId, p, i) === null))
 }
 
 /** R-CREA-02 / R-ATK-01: could `p` attack this turn? */
 export function canAttack(game: GameData, p: Permanent): boolean {
-  return p.controller === game.activeId && isCreature(p) && !p.tapped && !p.sick && !hasKeyword(game, p, 'defender')
+  return p.controller === game.activeId && isCreature(p) && !p.tapped && (!p.sick || hasKeyword(game, p, 'haste')) && !hasKeyword(game, p, 'defender')
 }
 
 const LANDWALK: Partial<Record<Keyword, string>> = { swampwalk: 'Swamp', islandwalk: 'Island', forestwalk: 'Forest', mountainwalk: 'Mountain', plainswalk: 'Plains' }
@@ -261,6 +316,7 @@ const LANDWALK: Partial<Record<Keyword, string>> = { swampwalk: 'Swamp', islandw
 export function canBlock(game: GameData, blocker: Permanent, attacker: Permanent): boolean {
   if (!isCreature(blocker) || blocker.tapped || blocker.controller === attacker.controller) return false
   const keywords = keywordsOf(game, attacker)
+  if (keywords.includes('unblockable')) return false
   if (keywords.includes('flying') && !hasKeyword(game, blocker, 'flying') && !hasKeyword(game, blocker, 'reach')) return false
   for (const k of keywords) {
     const land = LANDWALK[k]
@@ -312,11 +368,12 @@ export function drawCards(game: GameData, playerId: PlayerId, count: number, ran
   say(game, `${names[playerId]} draws ${count === 1 ? 'a card' : `${count} cards`}.`)
 }
 
-/** R-SETUP-02/04: builds a library from the chosen deck and draws the opening hand. */
+/** R-SETUP-02/04: builds a library from the chosen deck; a Commander deck's commander goes to the command zone (R-CMD-02). */
 export function buildLibrary(game: GameData, playerId: PlayerId, deckId: string): void {
   const deck = findDeck(deckId)!
   const cards = deckList(deck).map((def, i): CardRef => ({ id: `${playerId}-${String(i).padStart(2, '0')}`, def }))
   game.players[playerId].library = sortCards(cards)
+  if (isCommanderDeck(deck)) game.players[playerId].commander = { id: `${playerId}-cmd`, def: deck.commander, inCommandZone: true, casts: 0 }
 }
 
 /** R-MULL-01: the hand goes back and seven new cards are drawn. */
@@ -339,11 +396,28 @@ function removeFromBattlefield(game: GameData, id: string): Permanent | null {
   return p
 }
 
-/** Moves a permanent to its owner's graveyard, hand or exile (R-ZONE-02). */
+/** R-CMD-04: a commander going anywhere but the battlefield or the stack goes to the command zone instead. Returns whether it did. */
+function toCommandZone(game: GameData, cardId: string): boolean {
+  const owner = commanderOwner(game, cardId)
+  if (!owner) return false
+  const c = game.players[owner].commander!
+  c.inCommandZone = true
+  say(game, `${cardName(c.def)} goes to the command zone.`)
+  return true
+}
+
+/** A spell card that's done (resolved, countered, fizzled) goes to its owner's graveyard — a commander to the command zone (R-CMD-04). */
+function spellToGraveyard(game: GameData, card: CardRef): void {
+  if (toCommandZone(game, card.id)) return
+  game.players[ownerOf(card.id, game)].graveyard.push(card)
+}
+
+/** Moves a permanent to its owner's graveyard, hand or exile (R-ZONE-02) — or a commander to the command zone (R-CMD-04). */
 function leaveBattlefield(game: GameData, id: string, to: 'graveyard' | 'hand' | 'exile'): Permanent | null {
   const p = removeFromBattlefield(game, id)
   if (!p) return null
   const card: CardRef = { id: p.id, def: p.def }
+  if (toCommandZone(game, p.id)) return p
   if (to === 'exile') game.exile.push(card)
   else if (to === 'hand') game.players[p.owner].hand.push(card)
   else game.players[p.owner].graveyard.push(card)
@@ -382,16 +456,28 @@ function dealDamage(game: GameData, colors: readonly Color[], target: Target, am
   return amount
 }
 
-/** R-SBA-01..04, repeated until nothing changes. Returns true if the game is over. */
+/** R-CMD-05: has `p` taken lethal combat damage from a single commander? */
+export function commanderDamageLethal(p: PlayerData): boolean {
+  return Object.values(p.commanderDamage ?? {}).some((n) => n >= COMMANDER_DAMAGE)
+}
+
+/** R-SBA-01..04 (and R-CMD-05), repeated until nothing changes. Returns true if the game is over. */
 export function checkStateBasedActions(game: GameData, names: Names): boolean {
   for (let guard = 0; guard < 100; guard++) {
     let changed = false
     for (const pid of game.seatOrder) {
       const p = game.players[pid]
-      if (!p.lost && (p.life <= 0 || p.drewFromEmpty)) {
+      if (!p.lost && (p.life <= 0 || p.drewFromEmpty || commanderDamageLethal(p))) {
         p.lost = true
         changed = true
-        say(game, p.drewFromEmpty ? `${names[pid]} can't draw from an empty library and loses.` : `${names[pid]} is at ${p.life} life and loses.`)
+        say(
+          game,
+          p.drewFromEmpty
+            ? `${names[pid]} can't draw from an empty library and loses.`
+            : p.life <= 0
+              ? `${names[pid]} is at ${p.life} life and loses.`
+              : `${names[pid]} has taken ${COMMANDER_DAMAGE} combat damage from one commander and loses.`,
+        )
       }
     }
     const dying: string[] = []
@@ -405,15 +491,17 @@ export function checkStateBasedActions(game: GameData, names: Names): boolean {
       }
     }
     for (const id of dying) {
-      const p = leaveBattlefield(game, id, 'graveyard')
+      const p = permanentById(game, id)
       if (p) say(game, `${cardName(p.def)} ${isCreature(p) ? 'dies' : 'is put into the graveyard'}.`)
+      leaveBattlefield(game, id, 'graveyard')
       changed = true
     }
     if (!changed) break
   }
   const losers = game.seatOrder.filter((pid) => game.players[pid].lost)
   if (losers.length === 0) return false
-  const reason = losers.length > 1 ? 'draw' : game.players[losers[0]].drewFromEmpty ? 'library' : 'life'
+  const loser = game.players[losers[0]]
+  const reason = losers.length > 1 ? 'draw' : loser.drewFromEmpty ? 'library' : loser.life <= 0 ? 'life' : commanderDamageLethal(loser) ? 'commander' : 'life'
   endGame(game, reason)
   return true
 }
@@ -469,19 +557,25 @@ export function playLand(game: GameData, playerId: PlayerId, cardId: string): Ca
   return card
 }
 
+/** Casts a card from `playerId`'s hand — or, in a Commander game, their commander from the command zone, paying the tax (R-CMD-03). */
 export function castSpell(game: GameData, playerId: PlayerId, cardId: string, targets: unknown, xRaw: unknown): void {
   const p = game.players[playerId]
   const index = p.hand.findIndex((c) => c?.id === cardId)
-  if (index < 0) fail("That card isn't in your hand.")
-  const card = p.hand[index]!
+  const fromCommandZone = index < 0 && inCommandZone(game, playerId, cardId)
+  if (index < 0 && !fromCommandZone) fail("That card isn't in your hand.")
+  const card = fromCommandZone ? { id: cardId, def: p.commander!.def } : p.hand[index]!
   const def = cardDef(card.def)
   if (def.types.includes('Land')) fail('Play a land instead of casting it.')
   if (game.priorityId !== playerId || !isPriorityStep(game)) fail("You don't have priority.")
   if (!castableNow(game, playerId, card.def)) fail(`${def.name} can be cast only in a main phase of your turn, with the stack empty.`)
   const x = validateX(def.cost?.x, xRaw)
   const chosen = validateTargets(game, playerId, def.target, targets, colorsOf(card.def), card.id)
-  if (!payCost(game, playerId, def.cost!, x)) fail(`You can't pay ${def.name}'s cost.`)
-  p.hand.splice(index, 1)
+  const tax = fromCommandZone ? commanderTax(p) : 0
+  if (!payCost(game, playerId, castCost(game, playerId, card.id, card.def), x)) fail(`You can't pay ${def.name}'s cost${tax > 0 ? ` plus {${tax}} commander tax` : ''}.`)
+  if (fromCommandZone) {
+    p.commander!.inCommandZone = false
+    p.commander!.casts++
+  } else p.hand.splice(index, 1)
   game.stack.push({ id: card.id, controller: playerId, card, source: null, targets: chosen, x, enchanted: null })
   passAfterPutting(game, playerId)
 }
@@ -502,7 +596,7 @@ export function activateAbility(game: GameData, playerId: PlayerId, permanentId:
       mana = color as Color
     }
     p.tapped = true
-    game.players[playerId].manaPool[mana]++
+    game.players[playerId].manaPool[mana] += ability.amount ?? 1
     return { ability, mana }
   }
   const chosen = validateTargets(game, playerId, ability.target, targets, colorsOf(p.def), null)
@@ -534,30 +628,30 @@ function runEffect(game: GameData, item: StackItem, effect: Effect, random: Rand
     }
     case 'destroy':
       if (perm) {
-        leaveBattlefield(game, perm.id, 'graveyard')
         say(game, `${cardName(perm.def)} is destroyed.`)
+        leaveBattlefield(game, perm.id, 'graveyard')
       }
       break
     case 'exileGainLife':
       if (perm) {
         const power = Math.max(0, creatureStats(game, perm).power)
+        say(game, `${cardName(perm.def)} is exiled; ${names[perm.controller]} gains ${power} life.`)
         leaveBattlefield(game, perm.id, 'exile')
         game.players[perm.controller].life += power
-        say(game, `${cardName(perm.def)} is exiled; ${names[perm.controller]} gains ${power} life.`)
       }
       break
     case 'bounce':
       if (perm) {
+        if (!commanderOwner(game, perm.id)) say(game, `${cardName(perm.def)} returns to ${names[perm.owner]}'s hand.`)
         leaveBattlefield(game, perm.id, 'hand')
-        say(game, `${cardName(perm.def)} returns to ${names[perm.owner]}'s hand.`)
       }
       break
     case 'counter': {
       const index = game.stack.findIndex((s) => s.id === target.id)
       if (index >= 0) {
         const [countered] = game.stack.splice(index, 1)
-        if (countered.card) game.players[ownerOf(countered.card.id, game)].graveyard.push(countered.card)
         say(game, `${countered.card ? cardName(countered.card.def) : 'The ability'} is countered.`)
+        if (countered.card) spellToGraveyard(game, countered.card)
       }
       break
     }
@@ -596,8 +690,28 @@ function runEffect(game: GameData, item: StackItem, effect: Effect, random: Rand
       break
     case 'destroyAll': {
       const doomed = game.battlefield.filter(isCreature)
-      for (const p of doomed) leaveBattlefield(game, p.id, 'graveyard')
       say(game, doomed.length > 0 ? `${doomed.map((p) => cardName(p.def)).join(', ')} ${doomed.length === 1 ? 'is' : 'are'} destroyed.` : 'No creatures are destroyed.')
+      for (const p of doomed) leaveBattlefield(game, p.id, 'graveyard')
+      break
+    }
+    case 'damageEach': {
+      const n = amountOf(effect.amount, item)
+      const struck = game.battlefield.filter((p) => isCreature(p) && (effect.creatures === 'all' || (effect.creatures === 'flying') === hasKeyword(game, p, 'flying')))
+      const hurt: string[] = []
+      for (const p of struck) if (dealDamage(game, colors, { kind: 'permanent', id: p.id }, n) > 0) hurt.push(cardName(p.def))
+      if (effect.players) for (const pid of livingPlayers(game)) if (dealDamage(game, colors, { kind: 'player', id: pid }, n) > 0) hurt.push(names[pid])
+      say(game, hurt.length > 0 ? `${label} deals ${n} damage to ${hurt.join(', ')}.` : `${label} deals no damage.`)
+      break
+    }
+    case 'pumpAll': {
+      const affected = game.battlefield.filter((p) => isCreature(p) && (effect.attacking ? !!game.combat?.attackers.includes(p.id) : p.controller === item.controller))
+      for (const p of affected) {
+        p.eot.power += effect.power
+        p.eot.toughness += effect.toughness
+        if (effect.keyword && !p.eot.keywords.includes(effect.keyword)) p.eot.keywords.push(effect.keyword)
+      }
+      const bonus = `+${effect.power}/+${effect.toughness}${effect.keyword ? ` and ${KEYWORD_LABELS[effect.keyword].toLowerCase()}` : ''}`
+      say(game, affected.length > 0 ? `${affected.map((p) => cardName(p.def)).join(', ')} ${affected.length === 1 ? 'gets' : 'get'} ${bonus} until end of turn.` : `${label} affects no creatures.`)
       break
     }
     case 'returnToHand': {
@@ -626,8 +740,8 @@ function resolveTop(game: GameData, random: Random, names: Names): void {
   const spec = def ? def.target : ability!.target
   const colors = sourceColors(item)
   if (spec && !item.targets.every((t) => isLegalTarget(game, item.controller, spec, t, colors, item.id))) {
-    if (card) game.players[ownerOf(card.id, game)].graveyard.push(card)
     say(game, `${cardName(card?.def ?? item.source!.def)}${card ? '' : "'s ability"} has no legal target and doesn't resolve.`)
+    if (card) spellToGraveyard(game, card)
     return
   }
   if (card && def) {
@@ -638,7 +752,7 @@ function resolveTop(game: GameData, random: Random, names: Names): void {
       return
     }
     for (const effect of def.effects ?? []) runEffect(game, item, effect, random, names)
-    game.players[ownerOf(card.id, game)].graveyard.push(card)
+    spellToGraveyard(game, card)
     return
   }
   for (const effect of ability!.effects) runEffect(game, item, effect, random, names)
@@ -866,6 +980,11 @@ function applyHits(game: GameData, hits: Hit[], random: Random, names: Names): v
     if (dealt <= 0) continue
     if (hit.target.kind === 'player') {
       toPlayer[hit.source.id] = (toPlayer[hit.source.id] ?? 0) + dealt
+      // R-CMD-05.
+      if (commanderOwner(game, hit.source.id)) {
+        const taken = (game.players[hit.target.id].commanderDamage ??= {})
+        taken[hit.source.id] = (taken[hit.source.id] ?? 0) + dealt
+      }
       say(game, `${cardName(hit.source.def)} deals ${dealt} damage to ${names[hit.target.id]}.`)
     } else {
       say(game, `${cardName(hit.source.def)} deals ${dealt} damage to ${describeTarget(game, hit.target, names)}.`)

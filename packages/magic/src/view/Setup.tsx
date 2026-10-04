@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import type { SeatInfo } from '@game-platform/sdk/ui'
-import { cardDef, DECKS, handOf, type GameAction, type GameState } from '../rules.ts'
+import { cardDef, decksFor, handOf, isCommanderDeck, isCommanderGame, type GameAction, type GameState } from '../rules.ts'
 import { CardTile } from './CardTile.tsx'
 import { BTN, BTN_PRIMARY, nameOf } from './helpers.ts'
 
-/** R-SETUP-02: each player picks a deck; the other's pick stays hidden until both have. */
+/** R-SETUP-02 / R-CMD-01: each player picks a deck; the other's pick stays hidden until both have. */
 export function DeckChoice({ state, players, myPlayerId, submitting, onAction }: { state: GameState; players: SeatInfo[]; myPlayerId: string | null; submitting: boolean; onAction: (a: GameAction) => void }) {
   const mine = myPlayerId !== null && state.pendingPlayerIds.includes(myPlayerId)
   return (
@@ -13,16 +13,35 @@ export function DeckChoice({ state, players, myPlayerId, submitting, onAction }:
         {mine ? 'Choose your deck.' : `Waiting for ${state.pendingPlayerIds.map((id) => nameOf(players, id)).join(' & ')} to choose a deck.`}
       </p>
       <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-label="Decks">
-        {DECKS.map((deck) => (
+        {decksFor(isCommanderGame(state.game)).map((deck) => (
           <li key={deck.id} className="flex flex-col gap-2 rounded-lg border border-neutral-800 p-3">
             <h3 className="font-semibold">{deck.name}</h3>
-            <ul className="text-xs text-neutral-400">
-              {deck.cards.map(([def, n]) => (
-                <li key={def}>
-                  {n}× {cardDef(def).name}
-                </li>
-              ))}
-            </ul>
+            {isCommanderDeck(deck) ? (
+              <>
+                <div className="flex items-center gap-3">
+                  <CardTile def={deck.commander} />
+                  <p className="text-xs text-neutral-400">Commander: {cardDef(deck.commander).name}, plus 99 cards.</p>
+                </div>
+                <details className="text-xs text-neutral-400">
+                  <summary className="cursor-pointer">Decklist</summary>
+                  <ul className="mt-1 columns-2">
+                    {deck.cards.map(([def, n]) => (
+                      <li key={def}>
+                        {n}× {cardDef(def).name}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              </>
+            ) : (
+              <ul className="text-xs text-neutral-400">
+                {deck.cards.map(([def, n]) => (
+                  <li key={def}>
+                    {n}× {cardDef(def).name}
+                  </li>
+                ))}
+              </ul>
+            )}
             {mine && (
               <button type="button" className={BTN_PRIMARY} disabled={submitting} onClick={() => onAction({ type: 'CHOOSE_DECK', playerId: myPlayerId!, deck: deck.id })}>
                 Play {deck.name}

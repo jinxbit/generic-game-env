@@ -10,7 +10,7 @@ export { GameOptionsEditor, GameView }
 
 export const ui: GameUi<GameData, GameOptions, GameAction> = {
   id: 'magic',
-  tagline: 'The original trading card game, two players, with preconstructed decks from the base set.',
+  tagline: 'The original trading card game, two players, with preconstructed decks from the base set — or Commander.',
   View: GameView,
   OptionsEditor: GameOptionsEditor,
 }

@@ -8,9 +8,14 @@ import {
   cardDef,
   cardName,
   castableNow,
+  castCost,
   colorsOf,
   COLORS,
+  COMMANDER_DAMAGE,
+  commanderCastable,
+  commanderTax,
   describeTarget,
+  findCard,
   findPayment,
   HAND_SIZE,
   isPriorityStep,
@@ -123,7 +128,7 @@ export function Table({ state, players, myPlayerId, submitting, onAction }: Prop
     if (!priority) return false
     const def = cardDef(c.def)
     if (def.types.includes('Land')) return canPlayLand(g, me)
-    if (!castableNow(g, me, c.def) || !findPayment(g, me, def.cost!, 0)) return false
+    if (!castableNow(g, me, c.def) || !findPayment(g, me, castCost(g, me, c.id, c.def), 0)) return false
     return !def.target || legalTargets(g, me, def.target, colorsOf(c.def), c.id).length > 0
   }
 
@@ -240,7 +245,34 @@ export function Table({ state, players, myPlayerId, submitting, onAction }: Prop
           </button>
         )}
         <Graveyard cards={p.graveyard} targetable={(id) => !!intent && targetable({ kind: 'card', id })} onTarget={(id) => pickTarget({ kind: 'card', id })} />
+        {Object.entries(p.commanderDamage ?? {}).map(([id, n]) => (
+          <span key={id} className="text-xs text-orange-300" title={`${COMMANDER_DAMAGE} combat damage from one commander loses the game`}>
+            ⚔ {cardName(findCard(g, id)?.def ?? '')} {n}/{COMMANDER_DAMAGE}
+          </span>
+        ))}
+        {commandZone(pid)}
       </div>
+    )
+  }
+
+  /** R-CMD-02/03: the commander, while it waits in the command zone — click it to cast it, paying the tax. */
+  function commandZone(pid: PlayerId) {
+    const p = g.players[pid]
+    const c = p.commander
+    if (!c) return null
+    const tax = commanderTax(p)
+    const castable = pid === me && priority && !intent && handPlayable({ id: c.id, def: c.def }) && commanderCastable(g, me)
+    return (
+      <span className="flex items-center gap-2" aria-label={`${nameOf(players, pid)}'s command zone`}>
+        <span className="text-xs text-neutral-400">
+          Command zone{tax > 0 && <span className="text-amber-200"> · tax {`{${tax}}`}</span>}
+        </span>
+        {c.inCommandZone ? (
+          <CardTile def={c.def} selected={intent?.kind === 'cast' && intent.card.id === c.id} onClick={castable ? () => clickHandCard({ id: c.id, def: c.def }) : undefined} />
+        ) : (
+          <span className="text-xs text-neutral-500">{cardName(c.def)} is out</span>
+        )}
+      </span>
     )
   }
 

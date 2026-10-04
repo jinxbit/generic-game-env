@@ -5,7 +5,7 @@ import { nameOf } from './view/helpers.ts'
 import { DeckChoice, Mulligan } from './view/Setup.tsx'
 import { Table } from './view/Table.tsx'
 
-const END_REASONS = { life: 'ran out of life', library: 'had to draw from an empty library', draw: 'both lost at once — a draw' }
+const END_REASONS = { life: 'ran out of life', library: 'had to draw from an empty library', commander: 'took 21 combat damage from one commander', draw: 'both lost at once — a draw' }
 
 /**
  * Magic: The Gathering: deck choice, mulligans, then the table. Only the

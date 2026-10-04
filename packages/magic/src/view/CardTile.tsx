@@ -52,6 +52,7 @@ export function CardTile({
         {d.cost && <span className="shrink-0 font-mono text-[10px] text-neutral-300">{manaText(costLabel(d.cost))}</span>}
       </span>
       <span className="text-[10px] text-neutral-400">
+        {d.legendary && 'Legendary '}
         {d.types.join(' ')}
         {d.subtypes.length > 0 && ` — ${d.subtypes.join(' ')}`}
       </span>

@@ -23,7 +23,7 @@ exercise every platform feature and is the test fixture, **Incorporated**
 (`packages/texas-holdem`, rules spec in its `RULES.md`), **Bauernschlau**
 (`packages/bauernschlau`, rules spec in its `RULES.md`), **Magna Grecia**
 (`packages/magna-grecia`, rules spec in its `RULES.md`), **Magic: The
-Gathering** (base set; `packages/magic`, rules spec in its `RULES.md`) and **Rise & Fall**
+Gathering** (base set, plus a Commander option; `packages/magic`, rules spec in its `RULES.md`) and **Rise & Fall**
 (`packages/rise-and-fall`, the platform's original game, moved here from its
 standalone app — its engine runs behind an adapter; see its `README.md`). A game can live in
 its own repo and be installed. One deployment hosts whichever games

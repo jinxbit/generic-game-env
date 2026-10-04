@@ -82,6 +82,8 @@ export default defineConfig({
       },
     }),
   ],
+  // Listen on all interfaces so the dev server is reachable from other devices on the LAN.
+  server: { host: true },
   define: {
     __BUILD_ID__: JSON.stringify(buildId),
     __GIT_COMMIT_REF__: JSON.stringify(gitCommitRef),

@@ -26,29 +26,36 @@ export function manaAbilityIndex(permanent: Permanent): number {
   return (cardDef(permanent.def).abilities ?? []).findIndex((a) => a.produces !== undefined)
 }
 
-/** R-CREA-02: may `permanent` pay a {T} cost right now? */
+/** R-CREA-02: may `permanent` pay a {T} cost right now? (Haste is only ever printed, so the card says.) */
 export function canTap(permanent: Permanent): boolean {
   if (permanent.tapped) return false
-  return !(permanent.sick && cardDef(permanent.def).types.includes('Creature'))
+  const def = cardDef(permanent.def)
+  return !(permanent.sick && def.types.includes('Creature') && !def.keywords?.includes('haste'))
 }
 
-/** What each untapped mana source `playerId` controls could add, lands first (R-PRIO-03). */
-export function manaSources(game: GameData, playerId: PlayerId, exclude: string | null = null): { id: string; colors: ManaType[] }[] {
-  const sources: { id: string; colors: ManaType[]; land: boolean }[] = []
+/** How much mana `permanent`'s mana ability adds in one activation (Sol Ring: 2). */
+function manaAmount(permanent: Permanent): number {
+  const index = manaAbilityIndex(permanent)
+  return index < 0 ? 0 : (cardDef(permanent.def).abilities![index].amount ?? 1)
+}
+
+/** What each untapped mana source `playerId` controls could add, lands first (R-PRIO-03); `count` is how much mana one activation makes. */
+export function manaSources(game: GameData, playerId: PlayerId, exclude: string | null = null): { id: string; colors: ManaType[]; count: number }[] {
+  const sources: { id: string; colors: ManaType[]; count: number; land: boolean }[] = []
   for (const p of game.battlefield) {
     if (p.controller !== playerId || p.id === exclude || !canTap(p)) continue
     const index = manaAbilityIndex(p)
     if (index < 0) continue
     const produces = cardDef(p.def).abilities![index].produces!
-    sources.push({ id: p.id, colors: produces === 'any' ? [...COLORS] : [produces], land: cardDef(p.def).types.includes('Land') })
+    sources.push({ id: p.id, colors: produces === 'any' ? [...COLORS] : [produces], count: manaAmount(p), land: cardDef(p.def).types.includes('Land') })
   }
-  return [...sources.filter((s) => s.land), ...sources.filter((s) => !s.land)].map(({ id, colors }) => ({ id, colors }))
+  return [...sources.filter((s) => s.land), ...sources.filter((s) => !s.land)].map(({ id, colors, count }) => ({ id, colors, count }))
 }
 
 export interface Payment {
   /** Mana taken from the pool. */
   fromPool: ManaPool
-  /** Sources tapped, and the mana each added. */
+  /** Sources tapped, and the mana spent from each — once per unit, so a source that makes two (Sol Ring) may appear twice. */
   tapped: { id: string; mana: ManaType }[]
 }
 
@@ -64,7 +71,7 @@ export function findPayment(game: GameData, playerId: PlayerId, cost: ManaCost, 
   type Unit = { pool: ManaType } | { source: string; colors: ManaType[] }
   const units: Unit[] = []
   for (const k of MANA_TYPES) for (let i = 0; i < pool[k]; i++) units.push({ pool: k })
-  for (const s of manaSources(game, playerId, exclude)) units.push({ source: s.id, colors: s.colors })
+  for (const s of manaSources(game, playerId, exclude)) for (let i = 0; i < s.count; i++) units.push({ source: s.id, colors: s.colors })
   const canMake = (u: Unit, color: ManaType) => ('pool' in u ? u.pool === color : u.colors.includes(color))
 
   const slots: Color[] = COLORS.flatMap((k) => Array.from({ length: cost[k] ?? 0 }, () => k))
@@ -115,7 +122,12 @@ export function payCost(game: GameData, playerId: PlayerId, cost: ManaCost, x = 
   for (const k of MANA_TYPES) pool[k] -= payment.fromPool[k]
   for (const t of payment.tapped) {
     const p = game.battlefield.find((q) => q.id === t.id)!
+    if (p.tapped) continue
     p.tapped = true
+    // A source that made more than was spent (Sol Ring tapped for one generic) leaves the rest in the pool.
+    const spent = payment.tapped.filter((u) => u.id === p.id).length
+    const left = manaAmount(p) - spent
+    if (left > 0) pool[t.mana] += left
   }
   return true
 }

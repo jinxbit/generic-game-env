@@ -23,11 +23,18 @@
 // and a deck choice while the other player is still choosing, which
 // `isActionSecret` hides from the opponent.
 //
+// Commander (RULES.md §10) is an option, not another game: `options.commander`
+// sets `GameData.format`, which the engine's few Commander hooks read. Both
+// stay absent in a standard game, so a standard game — genesis included — is
+// exactly what it was before the format existed and needs no new
+// `rulesVersion`. The command zone is public, and a commander is set aside
+// only once both decks are chosen, so it never gives a pick away early.
+//
 // Pure and deterministic, like everything the framework runs — imported by
 // the Edge Functions too, so keep the `.ts` extensions on relative imports.
 
 import type { ActionDescription, ActionResult, GameDefinition, GameState as PlatformGameState, LobbyState, Random } from '@game-platform/sdk'
-import { cardDef, cardName, findDeck } from './cards.ts'
+import { cardDef, cardName, decksFor, findDeck, isCommanderDeck } from './cards.ts'
 import {
   activateAbility,
   afterDiscard,
@@ -42,6 +49,8 @@ import {
   endGame,
   fail,
   findCard,
+  inCommandZone,
+  isCommanderGame,
   MAX_MULLIGANS,
   mulligan,
   OPENING_HAND,
@@ -67,6 +76,9 @@ export const DEFAULT_GAME_OPTIONS: GameOptions = { startingLife: 20 }
 
 export const LIFE_RANGE = { min: 1, max: 100 }
 
+/** R-CMD-01: the starting life the options editor proposes for Commander. */
+export const COMMANDER_LIFE = 40
+
 export const STEP_LABELS: Record<Step, string> = {
   chooseDeck: 'Choosing decks',
   mulligan: 'Mulligans',
@@ -83,8 +95,10 @@ export const STEP_LABELS: Record<Step, string> = {
 /** RULES.md §9: fills in and clamps possibly-missing/out-of-range options from a stored settings row. */
 export function normalizeGameOptions(raw: unknown): GameOptions {
   const o = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
-  const life = typeof o.startingLife === 'number' && Number.isFinite(o.startingLife) ? Math.round(o.startingLife) : DEFAULT_GAME_OPTIONS.startingLife
-  return { startingLife: Math.max(LIFE_RANGE.min, Math.min(LIFE_RANGE.max, life)) }
+  const commander = o.commander === true
+  const life = typeof o.startingLife === 'number' && Number.isFinite(o.startingLife) ? Math.round(o.startingLife) : commander ? COMMANDER_LIFE : DEFAULT_GAME_OPTIONS.startingLife
+  // `commander` only when on: a standard game's options stay `{ startingLife }`, as they always were.
+  return { startingLife: Math.max(LIFE_RANGE.min, Math.min(LIFE_RANGE.max, life)), ...(commander ? { commander: true as const } : {}) }
 }
 
 function namesOf(state: { players: { id: string; displayName: string }[] }): Names {
@@ -112,15 +126,20 @@ export function withEnvelope(state: GameState, game: GameData): GameState {
 function onChooseDeck(game: GameData, playerId: PlayerId, deck: unknown, random: Random, names: Names): void {
   if (game.step !== 'chooseDeck') fail('Decks have already been chosen.')
   if (game.players[playerId].deck !== null) fail("You've already chosen a deck.")
-  if (typeof deck !== 'string' || !findDeck(deck)) fail('Choose one of the decks.')
+  // R-SETUP-02 / R-CMD-01: a Commander game picks from the Commander decks, any other from the base-set ones.
+  if (typeof deck !== 'string' || !decksFor(isCommanderGame(game)).some((d) => d.id === deck)) fail('Choose one of the decks.')
   game.players[playerId].deck = deck
   if (game.seatOrder.some((id) => game.players[id].deck === null)) return
-  // R-SETUP-04.
+  // R-SETUP-04 (and R-CMD-02: each commander to its command zone).
   for (const id of game.seatOrder) {
     buildLibrary(game, id, game.players[id].deck!)
     for (let i = 0; i < OPENING_HAND; i++) drawCard(game, id, random)
   }
-  game.journal.push(game.seatOrder.map((id) => `${names[id]} plays ${findDeck(game.players[id].deck!)!.name}`).join('; ') + '.')
+  const deckLabel = (id: PlayerId) => {
+    const d = findDeck(game.players[id].deck!)!
+    return isCommanderDeck(d) ? `${d.name}, led by ${cardName(d.commander)}` : d.name
+  }
+  game.journal.push(game.seatOrder.map((id) => `${names[id]} plays ${deckLabel(id)}`).join('; ') + '.')
   game.journal.push(`${names[game.startingPlayerId]} goes first. Each player draws seven cards.`)
   game.step = 'mulligan'
 }
@@ -234,13 +253,14 @@ function headline(action: GameAction, before: GameData, names: Names): string {
       const card = findCard(before, action.cardId)
       const def = card ? cardDef(card.def) : null
       const x = def?.cost?.x ? ` with X = ${action.x ?? 0}` : ''
-      return `{player} casts ${def?.name ?? 'a spell'}${x}${targetsLabel(before, action.targets, names)}.`
+      const from = inCommandZone(before, action.playerId, action.cardId) ? ' from the command zone' : ''
+      return `{player} casts ${def?.name ?? 'a spell'}${from}${x}${targetsLabel(before, action.targets, names)}.`
     }
     case 'ACTIVATE': {
       const p = permanentById(before, action.permanentId)
       const name = p ? cardName(p.def) : 'a permanent'
       const ability = p ? cardDef(p.def).abilities?.[action.ability] : undefined
-      if (ability?.produces !== undefined) return `{player} taps ${name} for {${ability.produces === 'any' ? action.color : ability.produces}}.`
+      if (ability?.produces !== undefined) return `{player} taps ${name} for ${`{${ability.produces === 'any' ? action.color : ability.produces}}`.repeat(ability.amount ?? 1)}.`
       return `{player} activates ${name}${targetsLabel(before, action.targets, names)}.`
     }
     case 'PASS':
@@ -269,12 +289,15 @@ export const gameDefinition: GameDefinition<GameData, GameOptions, GameAction> =
   defaultOptions: DEFAULT_GAME_OPTIONS,
   normalizeOptions: normalizeGameOptions,
   describeOptions(options) {
-    return `Base set · ${options.startingLife} life`
+    return `${options.commander ? 'Commander' : 'Base set'} · ${options.startingLife} life`
   },
 
   setup(lobby: LobbyState<GameOptions>, random) {
     const seatOrder = [...lobby.turnOrder]
+    const commander = lobby.options.commander === true
     const seat = (): PlayerData => ({
+      // R-CMD-02/05: only a Commander game carries these, so a standard genesis is unchanged.
+      ...(commander ? { commander: null, commanderDamage: {} } : {}),
       deck: null,
       life: lobby.options.startingLife,
       mulligans: 0,
@@ -291,6 +314,7 @@ export const gameDefinition: GameDefinition<GameData, GameOptions, GameAction> =
     // R-SETUP-03.
     const startingPlayerId = random.pick(seatOrder)
     const game: GameData = {
+      ...(commander ? { format: 'commander' as const } : {}),
       seatOrder,
       players: Object.fromEntries(seatOrder.map((id) => [id, seat()])),
       step: 'chooseDeck',

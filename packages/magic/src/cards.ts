@@ -1,5 +1,8 @@
-// The card pool and the preconstructed decks (RULES.md R-SETUP-02) — pure
-// data plus the few helpers that read it. Every card here has all of its
+// The card pool, the preconstructed decks (RULES.md R-SETUP-02) and the
+// Commander decks (R-CMD-01) — pure data plus the few helpers that read it.
+// The base-set decks use only base-set cards; the Commander decks add cards
+// from later sets (and their two legendary commanders, from Legends) to
+// reach 100 singletons, which a standard game can never see. Every card here has all of its
 // abilities implemented by ./engine.ts; a base-set card whose abilities the
 // engine doesn't model is left out of the pool rather than shipped with some
 // missing (RULES.md, preamble).
@@ -40,6 +43,9 @@ export function manaValue(c: ManaCost | null | undefined): number {
 }
 
 const BASICS: Record<BasicLandType, ManaType> = { Plains: 'W', Island: 'U', Swamp: 'B', Mountain: 'R', Forest: 'G' }
+
+/** The basic lands' card ids — the only cards a Commander deck may hold more than one of (R-CMD-01). */
+export const BASIC_LAND_IDS: readonly string[] = ['plains', 'island', 'swamp', 'mountain', 'forest']
 
 function basic(name: BasicLandType): CardDef {
   const mana = BASICS[name]
@@ -175,7 +181,167 @@ const LIST: CardDef[] = [
   { id: 'stream-of-life', name: 'Stream of Life', cost: cost('XG'), types: ['Sorcery'], subtypes: [], target: { kind: 'player' }, effects: [{ kind: 'gainLife', who: 'target', amount: 'X' }], text: 'Target player gains X life.' },
   { id: 'regrowth', name: 'Regrowth', cost: cost('1G'), types: ['Sorcery'], subtypes: [], target: { kind: 'cardInYourGraveyard' }, effects: [{ kind: 'returnToHand' }], text: 'Return target card from your graveyard to your hand.' },
 
+  // --- Cards from later sets, for the Commander decks (R-CMD-01) ---
+
+  // Commanders (Legends)
+  creature('tobias-andrion', 'Tobias Andrion', '3WU', ['Human', 'Advisor'], 4, 4, '', { legendary: true }),
+  creature('jerrard-of-the-closed-fist', 'Jerrard of the Closed Fist', '3RGG', ['Human', 'Knight'], 6, 5, '', { legendary: true }),
+
+  // White
+  creature('tundra-wolves', 'Tundra Wolves', 'W', ['Wolf'], 1, 1, 'First strike', kw('firstStrike')),
+  creature('elite-vanguard', 'Elite Vanguard', 'W', ['Human', 'Soldier'], 2, 1),
+  creature('suntail-hawk', 'Suntail Hawk', 'W', ['Bird'], 1, 1, 'Flying', kw('flying')),
+  creature('youthful-knight', 'Youthful Knight', '1W', ['Human', 'Knight'], 2, 1, 'First strike', kw('firstStrike')),
+  creature('silvercoat-lion', 'Silvercoat Lion', '1W', ['Cat'], 2, 2),
+  creature('standing-troops', 'Standing Troops', '2W', ['Human', 'Soldier'], 1, 4, 'Vigilance', kw('vigilance')),
+  creature('skyhunter-patrol', 'Skyhunter Patrol', '2WW', ['Cat', 'Knight'], 2, 3, 'Flying, first strike', kw('flying', 'firstStrike')),
+  creature('pillarfield-ox', 'Pillarfield Ox', '3W', ['Ox'], 2, 4),
+  creature('razorfoot-griffin', 'Razorfoot Griffin', '3W', ['Griffin'], 2, 2, 'Flying, first strike', kw('flying', 'firstStrike')),
+  creature('wall-of-swords', 'Wall of Swords', '3W', ['Wall'], 3, 5, 'Defender, flying', kw('defender', 'flying')),
+  creature('ardent-militia', 'Ardent Militia', '4W', ['Human', 'Soldier'], 2, 5, 'Vigilance', kw('vigilance')),
+  {
+    id: 'holy-armor',
+    name: 'Holy Armor',
+    cost: cost('W'),
+    types: ['Enchantment'],
+    subtypes: ['Aura'],
+    target: { kind: 'creature' },
+    aura: { power: 0, toughness: 2, keywords: [] },
+    abilities: [{ mana: cost('W'), effects: [{ kind: 'pump', who: 'enchanted', power: 0, toughness: 1 }], text: '{W}: Enchanted creature gets +0/+1 until end of turn.' }],
+    text: 'Enchant creature. Enchanted creature gets +0/+2. {W}: Enchanted creature gets +0/+1 until end of turn.',
+  },
+  {
+    id: 'blessing',
+    name: 'Blessing',
+    cost: cost('WW'),
+    types: ['Enchantment'],
+    subtypes: ['Aura'],
+    target: { kind: 'creature' },
+    aura: { power: 0, toughness: 0, keywords: [] },
+    abilities: [{ mana: cost('W'), effects: [{ kind: 'pump', who: 'enchanted', power: 1, toughness: 1 }], text: '{W}: Enchanted creature gets +1/+1 until end of turn.' }],
+    text: 'Enchant creature. {W}: Enchanted creature gets +1/+1 until end of turn.',
+  },
+  { id: 'warriors-honor', name: "Warrior's Honor", cost: cost('2W'), types: ['Instant'], subtypes: [], effects: [{ kind: 'pumpAll', power: 1, toughness: 1 }], text: 'Creatures you control get +1/+1 until end of turn.' },
+
+  // Blue
+  creature('storm-crow', 'Storm Crow', '1U', ['Bird'], 1, 2, 'Flying', kw('flying')),
+  creature('wind-drake', 'Wind Drake', '2U', ['Drake'], 2, 2, 'Flying', kw('flying')),
+  creature('horned-turtle', 'Horned Turtle', '2U', ['Turtle'], 1, 4),
+  creature('phantom-warrior', 'Phantom Warrior', '1UU', ['Illusion', 'Warrior'], 2, 2, 'Phantom Warrior can’t be blocked.', kw('unblockable')),
+  creature('wall-of-water', 'Wall of Water', '1UU', ['Wall'], 0, 5, 'Defender. {U}: Wall of Water gets +1/+0 until end of turn.', {
+    keywords: ['defender'],
+    abilities: [{ mana: cost('U'), effects: [{ kind: 'pump', who: 'self', power: 1, toughness: 0 }], text: '{U}: +1/+0 until end of turn.' }],
+  }),
+  creature('azure-drake', 'Azure Drake', '3U', ['Drake'], 2, 4, 'Flying', kw('flying')),
+  creature('snapping-drake', 'Snapping Drake', '3U', ['Drake'], 3, 2, 'Flying', kw('flying')),
+  { id: 'remove-soul', name: 'Remove Soul', cost: cost('1U'), types: ['Instant'], subtypes: [], target: { kind: 'spell', filter: 'creatureSpell' }, effects: [{ kind: 'counter' }], text: 'Counter target creature spell.' },
+  { id: 'cancel', name: 'Cancel', cost: cost('1UU'), types: ['Instant'], subtypes: [], target: { kind: 'spell' }, effects: [{ kind: 'counter' }], text: 'Counter target spell.' },
+  { id: 'boomerang', name: 'Boomerang', cost: cost('UU'), types: ['Instant'], subtypes: [], target: { kind: 'permanent' }, effects: [{ kind: 'bounce' }], text: "Return target permanent to its owner's hand." },
+  { id: 'divination', name: 'Divination', cost: cost('2U'), types: ['Sorcery'], subtypes: [], effects: [{ kind: 'draw', who: 'you', amount: 2 }], text: 'Draw two cards.' },
+  { id: 'inspiration', name: 'Inspiration', cost: cost('3U'), types: ['Instant'], subtypes: [], target: { kind: 'player' }, effects: [{ kind: 'draw', who: 'target', amount: 2 }], text: 'Target player draws two cards.' },
+
+  // Red
+  creature('raging-goblin', 'Raging Goblin', 'R', ['Goblin', 'Berserker'], 1, 1, 'Haste', kw('haste')),
+  creature('goblin-hero', 'Goblin Hero', '2R', ['Goblin'], 2, 2),
+  creature('bloodrock-cyclops', 'Bloodrock Cyclops', '2R', ['Cyclops'], 3, 3, 'Bloodrock Cyclops attacks each combat if able.', kw('attacksEachCombat')),
+  creature('granite-gargoyle', 'Granite Gargoyle', '2R', ['Gargoyle'], 2, 2, 'Flying. {R}: Granite Gargoyle gets +0/+1 until end of turn.', {
+    keywords: ['flying'],
+    abilities: [{ mana: cost('R'), effects: [{ kind: 'pump', who: 'self', power: 0, toughness: 1 }], text: '{R}: +0/+1 until end of turn.' }],
+  }),
+  creature('furnace-whelp', 'Furnace Whelp', '2RR', ['Dragon'], 2, 2, 'Flying. {R}: Furnace Whelp gets +1/+0 until end of turn.', {
+    keywords: ['flying'],
+    abilities: [{ mana: cost('R'), effects: [{ kind: 'pump', who: 'self', power: 1, toughness: 0 }], text: '{R}: +1/+0 until end of turn.' }],
+  }),
+  creature('lightning-elemental', 'Lightning Elemental', '3R', ['Elemental'], 4, 1, 'Haste', kw('haste')),
+  creature('fire-elemental', 'Fire Elemental', '3RR', ['Elemental'], 5, 4),
+  { id: 'shock', name: 'Shock', cost: cost('R'), types: ['Instant'], subtypes: [], target: { kind: 'any' }, effects: [{ kind: 'damage', amount: 2 }], text: 'Shock deals 2 damage to any target.' },
+  { id: 'volcanic-hammer', name: 'Volcanic Hammer', cost: cost('1R'), types: ['Sorcery'], subtypes: [], target: { kind: 'any' }, effects: [{ kind: 'damage', amount: 3 }], text: 'Volcanic Hammer deals 3 damage to any target.' },
+  { id: 'lava-axe', name: 'Lava Axe', cost: cost('4R'), types: ['Sorcery'], subtypes: [], target: { kind: 'player' }, effects: [{ kind: 'damage', amount: 5 }], text: 'Lava Axe deals 5 damage to target player.' },
+  { id: 'trumpet-blast', name: 'Trumpet Blast', cost: cost('2R'), types: ['Instant'], subtypes: [], effects: [{ kind: 'pumpAll', power: 2, toughness: 0, attacking: true }], text: 'Attacking creatures get +2/+0 until end of turn.' },
+  { id: 'pyroclasm', name: 'Pyroclasm', cost: cost('1R'), types: ['Sorcery'], subtypes: [], effects: [{ kind: 'damageEach', amount: 2, creatures: 'all', players: false }], text: 'Pyroclasm deals 2 damage to each creature.' },
+  {
+    id: 'earthquake',
+    name: 'Earthquake',
+    cost: cost('XR'),
+    types: ['Sorcery'],
+    subtypes: [],
+    effects: [{ kind: 'damageEach', amount: 'X', creatures: 'nonflying', players: true }],
+    text: 'Earthquake deals X damage to each creature without flying and each player.',
+  },
+
+  // Green
+  creature('fyndhorn-elves', 'Fyndhorn Elves', 'G', ['Elf', 'Druid'], 1, 1, '{T}: Add {G}.', { abilities: [{ tap: true, produces: 'G', effects: [], text: '{T}: Add {G}.' }] }),
+  creature('elvish-mystic', 'Elvish Mystic', 'G', ['Elf', 'Druid'], 1, 1, '{T}: Add {G}.', { abilities: [{ tap: true, produces: 'G', effects: [], text: '{T}: Add {G}.' }] }),
+  creature('shanodin-dryads', 'Shanodin Dryads', 'G', ['Nymph', 'Dryad'], 1, 1, 'Forestwalk', kw('forestwalk')),
+  creature('canopy-spider', 'Canopy Spider', '1G', ['Spider'], 1, 3, 'Reach', kw('reach')),
+  creature('elvish-warrior', 'Elvish Warrior', 'GG', ['Elf', 'Warrior'], 2, 3),
+  creature('trained-armodon', 'Trained Armodon', '1GG', ['Elephant'], 3, 3),
+  creature('durkwood-boars', 'Durkwood Boars', '4G', ['Boar'], 4, 4),
+  creature('spined-wurm', 'Spined Wurm', '4G', ['Wurm'], 5, 4),
+  { id: 'titanic-growth', name: 'Titanic Growth', cost: cost('1G'), types: ['Instant'], subtypes: [], target: { kind: 'creature' }, effects: [{ kind: 'pump', who: 'target', power: 4, toughness: 4 }], text: 'Target creature gets +4/+4 until end of turn.' },
+  { id: 'monstrous-growth', name: 'Monstrous Growth', cost: cost('1G'), types: ['Sorcery'], subtypes: [], target: { kind: 'creature' }, effects: [{ kind: 'pump', who: 'target', power: 4, toughness: 4 }], text: 'Target creature gets +4/+4 until end of turn.' },
+  {
+    id: 'overrun',
+    name: 'Overrun',
+    cost: cost('2GGG'),
+    types: ['Sorcery'],
+    subtypes: [],
+    effects: [{ kind: 'pumpAll', power: 3, toughness: 3, keyword: 'trample' }],
+    text: 'Creatures you control get +3/+3 and gain trample until end of turn.',
+  },
+  {
+    id: 'hurricane',
+    name: 'Hurricane',
+    cost: cost('XG'),
+    types: ['Sorcery'],
+    subtypes: [],
+    effects: [{ kind: 'damageEach', amount: 'X', creatures: 'flying', players: true }],
+    text: 'Hurricane deals X damage to each creature with flying and each player.',
+  },
+
   // Artifacts
+  creature('ornithopter', 'Ornithopter', '0', ['Thopter'], 0, 2, 'Flying', kw('flying')),
+  creature('phyrexian-walker', 'Phyrexian Walker', '0', ['Phyrexian', 'Construct'], 0, 3),
+  creature('wall-of-spears', 'Wall of Spears', '3', ['Wall'], 2, 3, 'Defender, first strike', kw('defender', 'firstStrike')),
+  creature('yotian-soldier', 'Yotian Soldier', '3', ['Soldier'], 1, 4, 'Vigilance', kw('vigilance')),
+  creature('dragon-engine', 'Dragon Engine', '3', ['Construct'], 1, 3, '{2}: Dragon Engine gets +1/+0 until end of turn.', {
+    abilities: [{ mana: cost('2'), effects: [{ kind: 'pump', who: 'self', power: 1, toughness: 0 }], text: '{2}: +1/+0 until end of turn.' }],
+  }),
+  creature('patagia-golem', 'Patagia Golem', '4', ['Golem'], 2, 3, '{3}: Patagia Golem gains flying until end of turn.', {
+    abilities: [{ mana: cost('3'), effects: [{ kind: 'grant', who: 'self', keyword: 'flying' }], text: '{3}: Gains flying until end of turn.' }],
+  }),
+  creature('dancing-scimitar', 'Dancing Scimitar', '4', ['Spirit'], 1, 5, 'Flying', kw('flying')),
+  { id: 'sol-ring', name: 'Sol Ring', cost: cost('1'), types: ['Artifact'], subtypes: [], abilities: [{ tap: true, produces: 'C', amount: 2, effects: [], text: '{T}: Add {C}{C}.' }], text: '{T}: Add {C}{C}.' },
+  { id: 'manalith', name: 'Manalith', cost: cost('3'), types: ['Artifact'], subtypes: [], abilities: [{ tap: true, produces: 'any', effects: [], text: '{T}: Add one mana of any color.' }], text: '{T}: Add one mana of any color.' },
+  {
+    id: 'fountain-of-youth',
+    name: 'Fountain of Youth',
+    cost: cost('0'),
+    types: ['Artifact'],
+    subtypes: [],
+    abilities: [{ mana: cost('2'), tap: true, effects: [{ kind: 'gainLife', who: 'you', amount: 1 }], text: '{2}, {T}: You gain 1 life.' }],
+    text: '{2}, {T}: You gain 1 life.',
+  },
+  {
+    id: 'rod-of-ruin',
+    name: 'Rod of Ruin',
+    cost: cost('4'),
+    types: ['Artifact'],
+    subtypes: [],
+    abilities: [{ mana: cost('3'), tap: true, target: { kind: 'any' }, effects: [{ kind: 'damage', amount: 1 }], text: '{3}, {T}: 1 damage to any target.' }],
+    text: '{3}, {T}: Rod of Ruin deals 1 damage to any target.',
+  },
+  {
+    id: 'jayemdae-tome',
+    name: 'Jayemdae Tome',
+    cost: cost('4'),
+    types: ['Artifact'],
+    subtypes: [],
+    abilities: [{ mana: cost('4'), tap: true, effects: [{ kind: 'draw', who: 'you', amount: 1 }], text: '{4}, {T}: Draw a card.' }],
+    text: '{4}, {T}: Draw a card.',
+  },
+
+  // Artifacts (base set)
   creature('juggernaut', 'Juggernaut', '4', ['Juggernaut'], 5, 3, 'Juggernaut attacks each combat if able. Juggernaut can’t be blocked by Walls.', kw('attacksEachCombat', 'unblockableByWalls')),
   creature('obsianus-golem', 'Obsianus Golem', '6', ['Golem'], 4, 6),
 ]
@@ -310,11 +476,187 @@ export const DECKS: Deck[] = [
   },
 ]
 
-export function findDeck(id: string): Deck | undefined {
-  return DECKS.find((d) => d.id === id)
+/** R-CMD-01: a Commander deck — a legendary creature and 99 more cards, one of each but basic lands, within its colours. */
+export interface CommanderDeck {
+  id: string
+  name: string
+  /** The commander's card id; it starts in the command zone, not the library. */
+  commander: string
+  /** Card id → copies; 99 cards in all. */
+  cards: [string, number][]
 }
 
-/** Every card in `deck` as a flat list of card ids, in list order. */
-export function deckList(deck: Deck): string[] {
+const SHARED_ARTIFACTS: [string, number][] = [
+  ['sol-ring', 1],
+  ['manalith', 1],
+  ['fountain-of-youth', 1],
+  ['ornithopter', 1],
+  ['phyrexian-walker', 1],
+  ['wall-of-spears', 1],
+  ['yotian-soldier', 1],
+  ['dragon-engine', 1],
+  ['patagia-golem', 1],
+  ['dancing-scimitar', 1],
+  ['rod-of-ruin', 1],
+  ['jayemdae-tome', 1],
+  ['juggernaut', 1],
+  ['obsianus-golem', 1],
+]
+
+/** R-CMD-01: the two Commander decks. */
+export const COMMANDER_DECKS: CommanderDeck[] = [
+  {
+    id: 'tobias',
+    name: "Tobias's Skies",
+    commander: 'tobias-andrion',
+    cards: [
+      ['plains', 19],
+      ['island', 18],
+      // White
+      ['savannah-lions', 1],
+      ['tundra-wolves', 1],
+      ['elite-vanguard', 1],
+      ['suntail-hawk', 1],
+      ['white-knight', 1],
+      ['youthful-knight', 1],
+      ['silvercoat-lion', 1],
+      ['pearled-unicorn', 1],
+      ['standing-troops', 1],
+      ['northern-paladin', 1],
+      ['skyhunter-patrol', 1],
+      ['pillarfield-ox', 1],
+      ['razorfoot-griffin', 1],
+      ['wall-of-swords', 1],
+      ['ardent-militia', 1],
+      ['serra-angel', 1],
+      ['swords-to-plowshares', 1],
+      ['righteousness', 1],
+      ['disenchant', 1],
+      ['warriors-honor', 1],
+      ['wrath-of-god', 1],
+      ['holy-strength', 1],
+      ['holy-armor', 1],
+      ['blessing', 1],
+      ['crusade', 1],
+      // Blue
+      ['merfolk-of-the-pearl-trident', 1],
+      ['storm-crow', 1],
+      ['wind-drake', 1],
+      ['horned-turtle', 1],
+      ['prodigal-sorcerer', 1],
+      ['wall-of-air', 1],
+      ['phantom-warrior', 1],
+      ['wall-of-water', 1],
+      ['phantom-monster', 1],
+      ['azure-drake', 1],
+      ['snapping-drake', 1],
+      ['air-elemental', 1],
+      ['mahamoti-djinn', 1],
+      ['ancestral-recall', 1],
+      ['unsummon', 1],
+      ['flight', 1],
+      ['remove-soul', 1],
+      ['counterspell', 1],
+      ['boomerang', 1],
+      ['cancel', 1],
+      ['divination', 1],
+      ['inspiration', 1],
+      ['braingeyser', 1],
+      ...SHARED_ARTIFACTS,
+    ],
+  },
+  {
+    id: 'jerrard',
+    name: "Jerrard's Stampede",
+    commander: 'jerrard-of-the-closed-fist',
+    cards: [
+      ['mountain', 18],
+      ['forest', 19],
+      // Red
+      ['mons-goblin-raiders', 1],
+      ['goblin-balloon-brigade', 1],
+      ['raging-goblin', 1],
+      ['gray-ogre', 1],
+      ['goblin-hero', 1],
+      ['bloodrock-cyclops', 1],
+      ['granite-gargoyle', 1],
+      ['hill-giant', 1],
+      ['lightning-elemental', 1],
+      ['furnace-whelp', 1],
+      ['earth-elemental', 1],
+      ['fire-elemental', 1],
+      ['shivan-dragon', 1],
+      ['lightning-bolt', 1],
+      ['shock', 1],
+      ['shatter', 1],
+      ['volcanic-hammer', 1],
+      ['pyroclasm', 1],
+      ['trumpet-blast', 1],
+      ['stone-rain', 1],
+      ['lava-axe', 1],
+      ['fireball', 1],
+      ['earthquake', 1],
+      ['firebreathing', 1],
+      // Green
+      ['llanowar-elves', 1],
+      ['fyndhorn-elves', 1],
+      ['elvish-mystic', 1],
+      ['birds-of-paradise', 1],
+      ['scryb-sprites', 1],
+      ['shanodin-dryads', 1],
+      ['grizzly-bears', 1],
+      ['canopy-spider', 1],
+      ['elvish-warrior', 1],
+      ['trained-armodon', 1],
+      ['giant-spider', 1],
+      ['ironroot-treefolk', 1],
+      ['durkwood-boars', 1],
+      ['spined-wurm', 1],
+      ['war-mammoth', 1],
+      ['craw-wurm', 1],
+      ['giant-growth', 1],
+      ['fog', 1],
+      ['titanic-growth', 1],
+      ['monstrous-growth', 1],
+      ['regrowth', 1],
+      ['stream-of-life', 1],
+      ['hurricane', 1],
+      ['overrun', 1],
+      ...SHARED_ARTIFACTS,
+    ],
+  },
+]
+
+/** The decks a game may choose from: COMMANDER_DECKS in a Commander game, DECKS otherwise (R-SETUP-02, R-CMD-01). */
+export function decksFor(commander: boolean): readonly (Deck | CommanderDeck)[] {
+  return commander ? COMMANDER_DECKS : DECKS
+}
+
+/** A deck of either kind by id (the ids don't overlap). */
+export function findDeck(id: string): Deck | CommanderDeck | undefined {
+  return DECKS.find((d) => d.id === id) ?? COMMANDER_DECKS.find((d) => d.id === id)
+}
+
+export function isCommanderDeck(deck: Deck | CommanderDeck): deck is CommanderDeck {
+  return 'commander' in deck
+}
+
+/** Every card in `deck`'s library as a flat list of card ids, in list order (a commander is not part of it). */
+export function deckList(deck: Deck | CommanderDeck): string[] {
   return deck.cards.flatMap(([def, n]) => Array.from({ length: n }, () => def))
+}
+
+/**
+ * R-CMD-01: a card's colour identity — the colours of the mana symbols in
+ * its cost and its rules text. For this pool that's its colours plus, for a
+ * land or a mana source of one colour, the colour of the mana it makes.
+ */
+export function colorIdentity(def: string): Color[] {
+  const d = cardDef(def)
+  const out = new Set<Color>(colorsOf(def))
+  for (const a of d.abilities ?? []) {
+    if (a.produces && a.produces !== 'any' && a.produces !== 'C') out.add(a.produces)
+    for (const k of COLORS) if ((a.mana?.[k] ?? 0) > 0) out.add(k)
+  }
+  return COLORS.filter((k) => out.has(k))
 }

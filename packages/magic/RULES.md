@@ -8,7 +8,9 @@ simplifies the real rules is an `AMBIG-n` with the behaviour picked.
 
 Card text is written for this package (modern Oracle wording, paraphrased);
 the pool is a selection of cards from the original base set (Alpha/Beta/
-Unlimited/Revised) whose abilities the engine implements in full. Cards
+Unlimited/Revised) whose abilities the engine implements in full — plus, for
+the Commander decks only (§10), two legendary commanders from Legends and a
+selection of simple cards from later sets. Cards
 whose abilities the engine doesn't model (banding, regeneration, damage
 prevention shields, upkeep costs, …) are left out rather than shipped with
 abilities missing.
@@ -77,7 +79,8 @@ abilities missing.
   Dark Ritual is a spell) don't use the stack and resolve immediately. Costs
   are paid automatically from the mana pool first, then by tapping mana
   sources (lands before creatures); a player may tap sources by hand first
-  to choose.
+  to choose. A source that makes more than one mana (Sol Ring) and is tapped
+  for less leaves the rest in its controller's pool.
 - **R-PRIO-04** A spell or ability whose targets are all illegal when it
   would resolve doesn't resolve ("fizzles"); a spell goes to its owner's
   graveyard.
@@ -99,8 +102,8 @@ abilities missing.
   passes priority to the opponent: the caster can't respond to their own
   spell before the opponent has had the chance to.
 - **AMBIG-4 (automatic passes)** A player who holds priority with no cards
-  in hand and no non-mana activated ability they could pay for passes
-  automatically. That is judged only from public information (hand size,
+  in hand, no non-mana activated ability they could pay for and (§10) no
+  commander in the command zone they could cast passes automatically. That is judged only from public information (hand size,
   permanents, untapped mana sources), so it gives nothing away.
 - **AMBIG-5 (triggers)** The pool's one triggered ability (Hypnotic Specter)
   resolves immediately when it triggers instead of going on the stack.
@@ -145,7 +148,8 @@ abilities missing.
   from is prevented.
 - **R-KW-01** Keywords: flying, reach, first strike, trample, vigilance,
   defender, protection from a colour (can't be blocked by, targeted by,
-  dealt damage by, or enchanted by that colour), landwalk.
+  dealt damage by, or enchanted by that colour), landwalk, haste (ignores
+  R-CREA-02), "can't be blocked".
 
 ## 6. State-based actions
 
@@ -159,6 +163,8 @@ after each action.
 - **R-SBA-03** A creature with lethal damage marked on it is destroyed.
 - **R-SBA-04** An aura not attached to a legal object (gone, or protected
   from the aura's colour) goes to its owner's graveyard.
+- **R-SBA-05** Commander only: a player who has taken 21 or more combat
+  damage from a single commander loses (R-CMD-05).
 - **R-END-01** When a player loses, the other wins. If both lose at once the
   game is a draw (no winner).
 
@@ -180,4 +186,44 @@ after each action.
 
 ## 9. Options
 
-- `startingLife` — 20 by default, clamped to 1–100.
+- `startingLife` — 20 by default, clamped to 1–100 (40 by default when
+  `commander` is set and no life is given; the options editor proposes 40
+  when Commander is picked, and 20 when it's unpicked).
+- `commander` — play Commander (§10). Stored only when on, so a standard
+  game's options and genesis are exactly what they were before the format
+  existed (no new `rulesVersion` was needed: nothing a standard game can
+  reach changed).
+
+## 10. Commander
+
+- **R-CMD-01** With the `commander` option, each player picks one of the
+  Commander decks (`COMMANDER_DECKS`, `src/cards.ts`) instead of a base-set
+  one: a legendary creature — the **commander** — and 99 other cards, at
+  most one of each card but basic lands, every one of them within the
+  commander's **colour identity** (the colours of the mana symbols in its
+  cost and rules text). The two decks are Tobias Andrion's white-blue
+  *Tobias's Skies* and Jerrard of the Closed Fist's red-green *Jerrard's
+  Stampede* (37 basic lands each). Both may pick the same deck.
+- **R-CMD-02** Once both have picked, each commander is set aside in its
+  owner's **command zone**, which is public; the other 99 cards are the
+  library. Opening hands and mulligans follow R-SETUP-04 and R-MULL-01 (the
+  first mulligan isn't free: that's a multiplayer rule).
+- **R-CMD-03** A player may cast their commander from the command zone
+  whenever they could cast it from their hand (a creature: R-PRIO-02),
+  paying an additional {2} for each time they've already cast it from the
+  command zone (the **commander tax**).
+- **R-CMD-04** A commander that would leave the battlefield for anywhere
+  (graveyard, exile, hand), and a commander spell that would go to the
+  graveyard (countered), goes to the command zone instead. Auras that were
+  on it still go to their owners' graveyards (R-SBA-04).
+- **R-CMD-05** Each player's combat damage taken from each commander is
+  tracked over the whole game; 21 or more from one commander loses the game
+  (R-SBA-05), whatever their life total. Only combat damage counts.
+- **AMBIG-9 (two players)** Commander is usually played by more; this
+  engine is two-player, so it plays the one-on-one game, under the
+  multiplayer format's rules otherwise (40 life proposed, 21 commander
+  damage).
+- **AMBIG-10 (automatic command zone)** The real rules let the owner choose
+  whether a commander goes to the command zone; here it always does (it's
+  almost always the better choice, and it saves a prompt). That includes a
+  commander returned to its owner's hand.

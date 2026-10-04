@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { GameOptionsEditor } from '../GameOptionsEditor'
 import { GameView } from '../GameView'
 import { DEFAULT_GAME_OPTIONS, gameDefinition, handOf, type GameState } from '../rules'
-import { arrange, blankBoard, give, newGame, play, put, simplestMove } from '../testing'
+import { arrange, blankBoard, commanderGame, give, newGame, play, put, simplestMove } from '../testing'
 
 function seats(state: GameState): SeatInfo[] {
   return state.players.map((p) => ({ id: p.id, display_name: p.displayName, color: '#888888' }))
@@ -114,5 +114,54 @@ describe('Magic view', () => {
     render(<GameOptionsEditor value={DEFAULT_GAME_OPTIONS} onChange={onChange} />)
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '30' } })
     expect(onChange).toHaveBeenCalledWith({ startingLife: 30 })
+  })
+
+  it('switches the options editor to Commander, proposing 40 life, and back', () => {
+    const onChange = vi.fn()
+    const { rerender } = render(<GameOptionsEditor value={DEFAULT_GAME_OPTIONS} onChange={onChange} />)
+    fireEvent.click(screen.getByRole('radio', { name: /Commander/ }))
+    expect(onChange).toHaveBeenLastCalledWith({ startingLife: 40, commander: true })
+    rerender(<GameOptionsEditor value={{ startingLife: 40, commander: true }} onChange={onChange} />)
+    fireEvent.click(screen.getByRole('radio', { name: /Base set/ }))
+    expect(onChange).toHaveBeenLastCalledWith({ startingLife: 20 })
+  })
+
+  it('offers the Commander decks in a Commander game', () => {
+    const { onAction } = view(newGame({ options: { commander: true, startingLife: 40 } }), 'p1')
+    expect(screen.queryByRole('button', { name: 'Play Red Fire' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: "Play Jerrard's Stampede" }))
+    expect(onAction).toHaveBeenCalledWith({ type: 'CHOOSE_DECK', playerId: 'p1', deck: 'jerrard' })
+  })
+
+  it('casts the commander from the command zone with a click, and shows commander damage', () => {
+    const state = arrange(commanderGame(), (g) => {
+      g.battlefield = []
+      for (let i = 0; i < 3; i++) put(g, 'p1', 'plains')
+      for (let i = 0; i < 2; i++) put(g, 'p1', 'island')
+      g.activeId = 'p1'
+      g.priorityId = 'p1'
+      g.step = 'main1'
+      g.passed = []
+      g.players.p1.commanderDamage = { 'p2-cmd': 6 }
+    })
+    const { onAction } = view(state, 'p1')
+    fireEvent.click(within(screen.getByLabelText("Alice's command zone")).getByRole('button', { name: 'Tobias Andrion' }))
+    expect(onAction).toHaveBeenLastCalledWith({ type: 'CAST', playerId: 'p1', cardId: 'p1-cmd', targets: [] })
+    expect(within(screen.getByLabelText("Bob's command zone")).queryByRole('button')).toBeNull()
+    expect(screen.getByText(/Jerrard of the Closed Fist 6\/21/)).toBeInTheDocument()
+  })
+
+  it('plays a whole Commander game through the view without crashing', () => {
+    let state = newGame({ seed: 2, options: { commander: true, startingLife: 40 } })
+    for (let i = 0; i < 6000 && state.status === 'active'; i++) {
+      if (i % 25 === 0) {
+        const { unmount } = view(state, state.pendingPlayerIds[0] ?? null)
+        unmount()
+      }
+      state = play(state, simplestMove(state), i)
+    }
+    expect(state.status).toBe('completed')
+    view(state, null)
+    expect(screen.getByText(/Game over/)).toBeInTheDocument()
   })
 })

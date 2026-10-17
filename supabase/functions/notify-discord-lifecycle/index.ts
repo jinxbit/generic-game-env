@@ -29,11 +29,13 @@
 // the Edge Function runtime, same as notify-discord-turn — the service-role
 // key is what lets this read any player's `profiles.discord_webhook_url`
 // regardless of RLS.
+//
+// Delivery: bot DM first, personal webhook as fallback — see
+// _shared/discordSend.ts.
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import { gameLabels } from '../_shared/games.ts'
-
-const WEBHOOK_URL_PATTERN = /^https:\/\/(?:discord\.com|discordapp\.com)\/api\/webhooks\/\d+\/[\w-]+$/
+import { hasDestination, resolveDiscordUserId, sendDiscordToPlayer } from '../_shared/discordSend.ts'
 
 interface GameRow {
   id: string
@@ -75,18 +77,6 @@ function roomText(name: string, roomCode: string, url: string | null): string {
   return url ? `[${name}](${url})` : `**${name}** (room \`${roomCode}\`)`
 }
 
-async function sendDiscordNotification(webhookUrl: string, content: string): Promise<void> {
-  try {
-    await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-    })
-  } catch {
-    // Best-effort — a bad/deleted webhook or network hiccup shouldn't fail the request.
-  }
-}
-
 async function notifyPlayers(
   supabase: SupabaseClient,
   players: PlayerRow[],
@@ -102,10 +92,11 @@ async function notifyPlayers(
     )
   const webhookByUserId = new Map((profiles ?? []).map((p: { user_id: string; discord_webhook_url: string | null }) => [p.user_id, p.discord_webhook_url]))
   await Promise.allSettled(
-    players.map((player) => {
+    players.map(async (player) => {
       const webhookUrl = webhookByUserId.get(player.user_id)
-      if (!webhookUrl || !WEBHOOK_URL_PATTERN.test(webhookUrl)) return Promise.resolve()
-      return sendDiscordNotification(webhookUrl, message)
+      if (!hasDestination(webhookUrl)) return
+      const discordUserId = await resolveDiscordUserId(supabase, player.user_id)
+      await sendDiscordToPlayer({ discordUserId, webhookUrl, content: message })
     }),
   )
 }

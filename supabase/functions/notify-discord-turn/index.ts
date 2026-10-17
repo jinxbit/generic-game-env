@@ -31,10 +31,15 @@
 // `auth.admin.getUserById` to resolve each player's Discord snowflake ID
 // (from their Discord OAuth identity) so the ping can `@mention` them —
 // a plain name in a webhook message doesn't actually notify anyone.
+//
+// Delivery: a DM from the notification bot (`DISCORD_BOT_TOKEN` secret) when
+// the player signed in with Discord, falling back to their personal webhook
+// URL — see _shared/discordSend.ts.
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import { gameLabels } from '../_shared/games.ts'
-import { discordUserIdFromIdentities, turnNotificationMessage } from '../../../src/lib/discordNotify.ts'
+import { turnNotificationMessage } from '../../../src/lib/discordNotify.ts'
+import { hasDestination, resolveDiscordUserId, sendDiscordToPlayer } from '../_shared/discordSend.ts'
 import { type GameStateRow, justFinished, newlyPendingActorIds, phaseLabel, turnNumber } from '../_shared/turnNotify.ts'
 
 // --- Discord ---
@@ -55,11 +60,9 @@ function gameUrlFor(roomCode: string): string | null {
   }
 }
 
-const WEBHOOK_URL_PATTERN = /^https:\/\/(?:discord\.com|discordapp\.com)\/api\/webhooks\/\d+\/[\w-]+$/
-
-// The message itself (turnNotificationMessage) and the Discord-ID lookup
-// (discordUserIdFromIdentities) come from src/lib/discordNotify.ts, shared
-// with the "Send test" button, so the two can't drift apart.
+// The message itself (turnNotificationMessage) comes from
+// src/lib/discordNotify.ts, shared with the "Send test" button, so the two
+// can't drift apart.
 
 // --- Logging ---
 //
@@ -75,7 +78,7 @@ const WEBHOOK_URL_PATTERN = /^https:\/\/(?:discord\.com|discordapp\.com)\/api\/w
 interface SendOutcome {
   playerId?: string
   userId: string
-  /** Discord's HTTP status, 'no-webhook', 'invalid-webhook', or 'fetch-error'. */
+  /** Discord's HTTP status, 'no-webhook', 'no-destination', 'invalid-webhook', or 'fetch-error'. */
   result: number | string
   /** Discord's error body on a non-2xx, trimmed — it names the reason (e.g. unknown webhook, rate limited). */
   detail?: string
@@ -89,28 +92,15 @@ interface InvocationLog {
   sends?: SendOutcome[]
 }
 
-// Best-effort — a bad/deleted webhook or network hiccup shouldn't fail the
-// request — but the outcome is returned so it can be logged.
-async function sendDiscordNotification(webhookUrl: string, content: string): Promise<Pick<SendOutcome, 'result' | 'detail'>> {
-  try {
-    const res = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-    })
-    if (res.ok) return { result: res.status }
-    return { result: res.status, detail: (await res.text().catch(() => '')).slice(0, 200) }
-  } catch (err) {
-    return { result: 'fetch-error', detail: String(err).slice(0, 200) }
-  }
-}
-
-// Resolves the outcome for a player with no (or a malformed) webhook without
-// calling Discord, so the log still shows they were due a ping.
-async function sendIfConfigured(webhookUrl: string | null | undefined, content: string): Promise<Pick<SendOutcome, 'result' | 'detail'>> {
-  if (!webhookUrl) return { result: 'no-webhook' }
-  if (!WEBHOOK_URL_PATTERN.test(webhookUrl)) return { result: 'invalid-webhook' }
-  return sendDiscordNotification(webhookUrl, content)
+// Delivery (bot DM first, personal webhook as fallback) lives in
+// _shared/discordSend.ts and is best-effort; the outcome is returned so it can
+// be logged. A player with no bot and no webhook resolves without calling
+// Discord, so the log still shows they were due a ping.
+async function sendIfConfigured(supabase: SupabaseClient, userId: string, webhookUrl: string | null | undefined, content: string): Promise<Pick<SendOutcome, 'result' | 'detail'>> {
+  if (!hasDestination(webhookUrl)) return { result: 'no-webhook' }
+  const discordUserId = await resolveDiscordUserId(supabase, userId)
+  const { result, detail } = await sendDiscordToPlayer({ discordUserId, webhookUrl, content })
+  return { result, detail }
 }
 
 // Identical wording to the version this replaces in notify-discord-lifecycle,
@@ -141,7 +131,7 @@ async function handleGameFinished(supabase: SupabaseClient, gameId: string, log:
   log.sends = await Promise.all(
     (players as { user_id: string }[]).map(async (player) => ({
       userId: player.user_id,
-      ...(await sendIfConfigured(webhookByUserId.get(player.user_id), message)),
+      ...(await sendIfConfigured(supabase, player.user_id, webhookByUserId.get(player.user_id), message)),
     })),
   )
   return new Response('ok', { status: 200 })
@@ -233,19 +223,18 @@ async function handle(req: Request, log: InvocationLog): Promise<Response> {
   log.sends = await Promise.all(
     players.map(async (player): Promise<SendOutcome> => {
       const webhookUrl = webhookByUserId.get(player.user_id)
-      if (!webhookUrl) return { playerId: player.id, userId: player.user_id, result: 'no-webhook' }
-      if (!WEBHOOK_URL_PATTERN.test(webhookUrl)) return { playerId: player.id, userId: player.user_id, result: 'invalid-webhook' }
+      if (!hasDestination(webhookUrl)) return { playerId: player.id, userId: player.user_id, result: 'no-webhook' }
 
-      // Look up the player's Discord snowflake ID so the ping can @mention them
-      // (a plain name in a webhook message doesn't notify anyone) — falls back
-      // to the bold display name if the lookup fails or they never signed in
-      // with Discord (e.g. the guest auth bypass).
-      const { data: authUser } = await supabase.auth.admin.getUserById(player.user_id)
-      const discordUserId = discordUserIdFromIdentities(authUser?.user?.identities ?? null)
+      // Look up the player's Discord snowflake ID: it addresses the bot DM and
+      // lets the ping @mention them (a plain name in a webhook message doesn't
+      // notify anyone) — falls back to the bold display name if the lookup
+      // fails or they never signed in with Discord (e.g. the guest auth bypass).
+      const discordUserId = await resolveDiscordUserId(supabase, player.user_id)
 
-      const outcome = await sendDiscordNotification(
+      const outcome = await sendDiscordToPlayer({
+        discordUserId,
         webhookUrl,
-        turnNotificationMessage({
+        content: turnNotificationMessage({
           title: labels.title,
           turnLabel: labels.turnLabel,
           displayName: player.display_name,
@@ -256,7 +245,7 @@ async function handle(req: Request, log: InvocationLog): Promise<Response> {
           round,
           gameUrl,
         }),
-      )
+      })
       return { playerId: player.id, userId: player.user_id, ...outcome }
     }),
   )

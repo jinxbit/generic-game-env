@@ -1,6 +1,7 @@
-// Discord "your turn" notifications. Each player pastes in their own
-// webhook URL (src/components/DiscordWebhookSettings.tsx) — no bot install
-// required. The actual "it's your turn" ping is sent server-side by the
+// Discord "your turn" notifications. Each player either gets a DM from the
+// optional notification bot (`DISCORD_BOT_TOKEN`, when they signed in with
+// Discord — supabase/functions/_shared/discordSend.ts) or pastes in their own
+// webhook URL (src/components/DiscordWebhookSettings.tsx) as the fallback. The actual "it's your turn" ping is sent server-side by the
 // supabase/functions/notify-discord-turn Edge Function (triggered by a
 // Database Webhook on game_state UPDATE, see that function's doc comment),
 // using the service-role key to read the target player's webhook URL —
